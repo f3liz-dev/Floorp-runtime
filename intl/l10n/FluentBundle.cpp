@@ -226,6 +226,9 @@ void FluentBundle::FormatPattern(JSContext* aCx, const FluentPattern& aPattern,
         "pattern could not be retrieved from the bundle.");
   }
 
+  aRetVal.ReplaceSubstring("Firefox"_ns, "Floorp"_ns);
+  aRetVal.ReplaceSubstring("firefox"_ns, "floorp"_ns);
+
   if (aErrors.WasPassed()) {
     if (!extendJSArrayWithErrors(aCx, aErrors.Value(), errors)) {
       aRv.ThrowUnknownError("Failed to add errors to an error array.");
