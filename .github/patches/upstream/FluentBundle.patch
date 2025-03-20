@@ -1,0 +1,14 @@
+diff --git a/intl/l10n/FluentBundle.cpp b/intl/l10n/FluentBundle.cpp
+index a20fca5564..0d6342a305 100644
+--- a/intl/l10n/FluentBundle.cpp
++++ b/intl/l10n/FluentBundle.cpp
+@@ -226,6 +226,9 @@ void FluentBundle::FormatPattern(JSContext* aCx, const FluentPattern& aPattern,
+         "pattern could not be retrieved from the bundle.");
+   }
+ 
++  aRetVal.ReplaceSubstring("Firefox"_ns, "Floorp"_ns);
++  aRetVal.ReplaceSubstring("firefox"_ns, "floorp"_ns);
++
+   if (aErrors.WasPassed()) {
+     if (!extendJSArrayWithErrors(aCx, aErrors.Value(), errors)) {
+       aRv.ThrowUnknownError("Failed to add errors to an error array.");
