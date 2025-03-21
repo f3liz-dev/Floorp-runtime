@@ -1,0 +1,184 @@
+diff --git a/.github/patches/upstream/FluentBundle.patch b/.github/patches/upstream/FluentBundle.patch
+deleted file mode 100644
+index 7d44060560..0000000000
+--- a/.github/patches/upstream/FluentBundle.patch
++++ /dev/null
+@@ -1,14 +0,0 @@
+-diff --git a/intl/l10n/FluentBundle.cpp b/intl/l10n/FluentBundle.cpp
+-index a20fca5564..0d6342a305 100644
+---- a/intl/l10n/FluentBundle.cpp
+-+++ b/intl/l10n/FluentBundle.cpp
+-@@ -226,6 +226,9 @@ void FluentBundle::FormatPattern(JSContext* aCx, const FluentPattern& aPattern,
+-         "pattern could not be retrieved from the bundle.");
+-   }
+- 
+-+  aRetVal.ReplaceSubstring("Firefox"_ns, "Floorp"_ns);
+-+  aRetVal.ReplaceSubstring("firefox"_ns, "floorp"_ns);
+-+
+-   if (aErrors.WasPassed()) {
+-     if (!extendJSArrayWithErrors(aCx, aErrors.Value(), errors)) {
+-       aRv.ThrowUnknownError("Failed to add errors to an error array.");
+diff --git a/dom/l10n/L10nOverlays.cpp b/dom/l10n/L10nOverlays.cpp
+index 5c3e3b64fa..1aed6c3941 100644
+--- a/dom/l10n/L10nOverlays.cpp
++++ b/dom/l10n/L10nOverlays.cpp
+@@ -459,6 +459,79 @@ void L10nOverlays::TranslateElement(
+   }
+ }
+ 
++// Helper function to replace "Firefox" with "Floorp" in translation strings
++static void ReplaceFirefoxWithFloorp(nsACString& aText) {
++  // Simple text replacement - replace all variants of "Firefox" with "Floorp"
++  // while preserving the case pattern
++  nsAutoCString origText(aText);
++  nsAutoCString newText;
++
++  // Case insensitive search but case-preserving replacement
++  const char* curPos = origText.BeginReading();
++  const char* endPos = origText.EndReading();
++
++  static const char kFirefoxLower[] = "firefox";
++  const size_t firefoxLen = strlen(kFirefoxLower);
++
++  while (curPos < endPos) {
++    // Find next potential "firefox" match (case insensitive)
++    const char* nextFirefox = curPos;
++    bool found = false;
++
++    // Search for the next occurrence of any case variant of "firefox"
++    while (nextFirefox + firefoxLen <= endPos && !found) {
++      // Case insensitive comparison
++      if (strncasecmp(nextFirefox, kFirefoxLower, firefoxLen) == 0) {
++        found = true;
++      } else {
++        nextFirefox++;
++      }
++    }
++
++    if (!found) {
++      // No more occurrences found, append the rest and exit
++      newText.Append(curPos, endPos - curPos);
++      break;
++    }
++
++    // Append everything up to the "firefox" occurrence
++    newText.Append(curPos, nextFirefox - curPos);
++
++    // Create Floorp with the same case pattern as the found Firefox
++    for (size_t i = 0; i < 6; i++) { // "Floorp" has 6 characters
++      if (i < firefoxLen) {
++        char c = nextFirefox[i];
++        if (i == 0) {
++          // First character - if Firefox was capitalized, so should Floorp be
++          newText.Append(c >= 'A' && c <= 'Z' ? 'F' : 'f');
++        } else if (i == 1) {
++          // Second character - 'l' instead of 'i'
++          newText.Append(nextFirefox[i] >= 'A' && nextFirefox[i] <= 'Z' ? 'L' : 'l');
++        } else if (i == 2) {
++          // Third character - 'o' instead of 'r'
++          newText.Append(nextFirefox[i] >= 'A' && nextFirefox[i] <= 'Z' ? 'O' : 'o');
++        } else if (i == 3) {
++          // Fourth character - 'o' instead of 'e'
++          newText.Append(nextFirefox[i] >= 'A' && nextFirefox[i] <= 'Z' ? 'O' : 'o');
++        } else if (i == 4) {
++          // Fifth character - 'r' instead of 'f'
++          newText.Append(nextFirefox[i] >= 'A' && nextFirefox[i] <= 'Z' ? 'R' : 'r');
++        } else if (i == 5) {
++          // Sixth character - 'p' instead of 'o'
++          newText.Append(nextFirefox[i] >= 'A' && nextFirefox[i] <= 'Z' ? 'P' : 'p');
++        }
++      }
++    }
++    
++    // Move past this occurrence
++    curPos = nextFirefox + firefoxLen;
++  }
++
++  if (!newText.IsEmpty()) {
++    aText = newText;
++  }
++}
++
+ bool L10nOverlays::ContainsMarkup(const nsACString& aStr) {
+   // We use our custom ContainsMarkup rather than the
+   // one from FragmentOrElement.cpp, because we don't
+@@ -492,15 +565,19 @@ void L10nOverlays::TranslateElement(Element& aElement,
+                                     nsTArray<L10nOverlaysError>& aErrors,
+                                     ErrorResult& aRv) {
+   if (!aTranslation.mValue.IsVoid()) {
++    // Apply our Firefox -> Floorp replacement on the translation value
++    nsAutoCString modifiedValue(aTranslation.mValue);
++    ReplaceFirefoxWithFloorp(modifiedValue);
++
+     NodeInfo* nodeInfo = aElement.NodeInfo();
+     if (nodeInfo->NameAtom() == nsGkAtoms::title &&
+         nodeInfo->NamespaceID() == kNameSpaceID_XHTML) {
+       // A special case for the HTML title element whose content must be text.
+-      aElement.SetTextContent(NS_ConvertUTF8toUTF16(aTranslation.mValue), aRv);
++      aElement.SetTextContent(NS_ConvertUTF8toUTF16(modifiedValue), aRv);
+       if (NS_WARN_IF(aRv.Failed())) {
+         return;
+       }
+-    } else if (!ContainsMarkup(aTranslation.mValue)) {
++    } else if (!ContainsMarkup(modifiedValue)) {
+ #ifdef DEBUG
+       if (aElement.ChildElementCount() > 0) {
+         L10nOverlaysError error;
+@@ -515,7 +592,7 @@ void L10nOverlays::TranslateElement(Element& aElement,
+       }
+ #endif
+       // If the translation doesn't contain any markup skip the overlay logic.
+-      aElement.SetTextContent(NS_ConvertUTF8toUTF16(aTranslation.mValue), aRv);
++      aElement.SetTextContent(NS_ConvertUTF8toUTF16(modifiedValue), aRv);
+       if (NS_WARN_IF(aRv.Failed())) {
+         return;
+       }
+@@ -532,7 +609,7 @@ void L10nOverlays::TranslateElement(Element& aElement,
+       auto sanitizationFlags = nsIParserUtils::SanitizerDropForms |
+                                nsIParserUtils::SanitizerLogRemovals;
+       nsContentUtils::ParseFragmentHTML(
+-          NS_ConvertUTF8toUTF16(aTranslation.mValue), fragment,
++          NS_ConvertUTF8toUTF16(modifiedValue), fragment,
+           nsGkAtoms::_template, kNameSpaceID_XHTML, false, true,
+           sanitizationFlags);
+       if (NS_WARN_IF(aRv.Failed())) {
+@@ -549,7 +626,38 @@ void L10nOverlays::TranslateElement(Element& aElement,
+   // Even if the translation doesn't define any localizable attributes, run
+   // overlayAttributes to remove any localizable attributes set by previous
+   // translations.
+-  OverlayAttributes(aTranslation.mAttributes, &aElement, aRv);
++
++  // Check if we need to process attributes
++  if (!aTranslation.mAttributes.IsNull()) {
++    // Create a copy of the attributes and modify them
++    Nullable<Sequence<AttributeNameValue>> modifiedAttributes;
++    Sequence<AttributeNameValue> sequence;
++
++    for (const auto& attr : aTranslation.mAttributes.Value()) {
++      AttributeNameValue* newAttr = sequence.AppendElement(fallible);
++      if (!newAttr) {
++        aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
++        return;
++      }
++
++      newAttr->mName = attr.mName;
++      newAttr->mValue = attr.mValue;
++
++      // Replace Firefox with Floorp in attribute values
++      ReplaceFirefoxWithFloorp(newAttr->mValue);
++    }
++
++    if (!sequence.IsEmpty()) {
++      modifiedAttributes.SetValue(sequence);
++    } else {
++      modifiedAttributes.SetNull();
++    }
++
++    OverlayAttributes(modifiedAttributes, &aElement, aRv);
++  } else {
++    OverlayAttributes(aTranslation.mAttributes, &aElement, aRv);
++  }
++
+   if (NS_WARN_IF(aRv.Failed())) {
+     return;
+   }
