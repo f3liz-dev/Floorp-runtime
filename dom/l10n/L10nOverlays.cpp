@@ -459,79 +459,6 @@ void L10nOverlays::TranslateElement(
   }
 }
 
-// Helper function to replace "Firefox" with "Floorp" in translation strings
-static void ReplaceFirefoxWithFloorp(nsACString& aText) {
-  // Simple text replacement - replace all variants of "Firefox" with "Floorp"
-  // while preserving the case pattern
-  nsAutoCString origText(aText);
-  nsAutoCString newText;
-
-  // Case insensitive search but case-preserving replacement
-  const char* curPos = origText.BeginReading();
-  const char* endPos = origText.EndReading();
-
-  static const char kFirefoxLower[] = "firefox";
-  const size_t firefoxLen = strlen(kFirefoxLower);
-
-  while (curPos < endPos) {
-    // Find next potential "firefox" match (case insensitive)
-    const char* nextFirefox = curPos;
-    bool found = false;
-
-    // Search for the next occurrence of any case variant of "firefox"
-    while (nextFirefox + firefoxLen <= endPos && !found) {
-      // Case insensitive comparison
-      if (strncasecmp(nextFirefox, kFirefoxLower, firefoxLen) == 0) {
-        found = true;
-      } else {
-        nextFirefox++;
-      }
-    }
-
-    if (!found) {
-      // No more occurrences found, append the rest and exit
-      newText.Append(curPos, endPos - curPos);
-      break;
-    }
-
-    // Append everything up to the "firefox" occurrence
-    newText.Append(curPos, nextFirefox - curPos);
-
-    // Create Floorp with the same case pattern as the found Firefox
-    for (size_t i = 0; i < 6; i++) { // "Floorp" has 6 characters
-      if (i < firefoxLen) {
-        char c = nextFirefox[i];
-        if (i == 0) {
-          // First character - if Firefox was capitalized, so should Floorp be
-          newText.Append(c >= 'A' && c <= 'Z' ? 'F' : 'f');
-        } else if (i == 1) {
-          // Second character - 'l' instead of 'i'
-          newText.Append(nextFirefox[i] >= 'A' && nextFirefox[i] <= 'Z' ? 'L' : 'l');
-        } else if (i == 2) {
-          // Third character - 'o' instead of 'r'
-          newText.Append(nextFirefox[i] >= 'A' && nextFirefox[i] <= 'Z' ? 'O' : 'o');
-        } else if (i == 3) {
-          // Fourth character - 'o' instead of 'e'
-          newText.Append(nextFirefox[i] >= 'A' && nextFirefox[i] <= 'Z' ? 'O' : 'o');
-        } else if (i == 4) {
-          // Fifth character - 'r' instead of 'f'
-          newText.Append(nextFirefox[i] >= 'A' && nextFirefox[i] <= 'Z' ? 'R' : 'r');
-        } else if (i == 5) {
-          // Sixth character - 'p' instead of 'o'
-          newText.Append(nextFirefox[i] >= 'A' && nextFirefox[i] <= 'Z' ? 'P' : 'p');
-        }
-      }
-    }
-    
-    // Move past this occurrence
-    curPos = nextFirefox + firefoxLen;
-  }
-
-  if (!newText.IsEmpty()) {
-    aText = newText;
-  }
-}
-
 bool L10nOverlays::ContainsMarkup(const nsACString& aStr) {
   // We use our custom ContainsMarkup rather than the
   // one from FragmentOrElement.cpp, because we don't
@@ -565,19 +492,15 @@ void L10nOverlays::TranslateElement(Element& aElement,
                                     nsTArray<L10nOverlaysError>& aErrors,
                                     ErrorResult& aRv) {
   if (!aTranslation.mValue.IsVoid()) {
-    // Apply our Firefox -> Floorp replacement on the translation value
-    nsAutoCString modifiedValue(aTranslation.mValue);
-    ReplaceFirefoxWithFloorp(modifiedValue);
-
     NodeInfo* nodeInfo = aElement.NodeInfo();
     if (nodeInfo->NameAtom() == nsGkAtoms::title &&
         nodeInfo->NamespaceID() == kNameSpaceID_XHTML) {
       // A special case for the HTML title element whose content must be text.
-      aElement.SetTextContent(NS_ConvertUTF8toUTF16(modifiedValue), aRv);
+      aElement.SetTextContent(NS_ConvertUTF8toUTF16(aTranslation.mValue), aRv);
       if (NS_WARN_IF(aRv.Failed())) {
         return;
       }
-    } else if (!ContainsMarkup(modifiedValue)) {
+    } else if (!ContainsMarkup(aTranslation.mValue)) {
 #ifdef DEBUG
       if (aElement.ChildElementCount() > 0) {
         L10nOverlaysError error;
@@ -592,7 +515,7 @@ void L10nOverlays::TranslateElement(Element& aElement,
       }
 #endif
       // If the translation doesn't contain any markup skip the overlay logic.
-      aElement.SetTextContent(NS_ConvertUTF8toUTF16(modifiedValue), aRv);
+      aElement.SetTextContent(NS_ConvertUTF8toUTF16(aTranslation.mValue), aRv);
       if (NS_WARN_IF(aRv.Failed())) {
         return;
       }
@@ -609,7 +532,7 @@ void L10nOverlays::TranslateElement(Element& aElement,
       auto sanitizationFlags = nsIParserUtils::SanitizerDropForms |
                                nsIParserUtils::SanitizerLogRemovals;
       nsContentUtils::ParseFragmentHTML(
-          NS_ConvertUTF8toUTF16(modifiedValue), fragment,
+          NS_ConvertUTF8toUTF16(aTranslation.mValue), fragment,
           nsGkAtoms::_template, kNameSpaceID_XHTML, false, true,
           sanitizationFlags);
       if (NS_WARN_IF(aRv.Failed())) {
@@ -626,38 +549,7 @@ void L10nOverlays::TranslateElement(Element& aElement,
   // Even if the translation doesn't define any localizable attributes, run
   // overlayAttributes to remove any localizable attributes set by previous
   // translations.
-
-  // Check if we need to process attributes
-  if (!aTranslation.mAttributes.IsNull()) {
-    // Create a copy of the attributes and modify them
-    Nullable<Sequence<AttributeNameValue>> modifiedAttributes;
-    Sequence<AttributeNameValue> sequence;
-
-    for (const auto& attr : aTranslation.mAttributes.Value()) {
-      AttributeNameValue* newAttr = sequence.AppendElement(fallible);
-      if (!newAttr) {
-        aRv.Throw(NS_ERROR_OUT_OF_MEMORY);
-        return;
-      }
-
-      newAttr->mName = attr.mName;
-      newAttr->mValue = attr.mValue;
-
-      // Replace Firefox with Floorp in attribute values
-      ReplaceFirefoxWithFloorp(newAttr->mValue);
-    }
-
-    if (!sequence.IsEmpty()) {
-      modifiedAttributes.SetValue(sequence);
-    } else {
-      modifiedAttributes.SetNull();
-    }
-
-    OverlayAttributes(modifiedAttributes, &aElement, aRv);
-  } else {
-    OverlayAttributes(aTranslation.mAttributes, &aElement, aRv);
-  }
-
+  OverlayAttributes(aTranslation.mAttributes, &aElement, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return;
   }
