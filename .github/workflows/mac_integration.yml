@@ -73,10 +73,6 @@ jobs:
             echo -e "ac_add_options --enable-bootstrap" >> mozconfig
             ./mach configure
 
-        - name: Install apple-codesign 🍎
-          run: |
-            cargo install apple-codesign
-
         - name: Extract .app from dmg 📦
           run: |
             rm -rf "./obj-x86_64-apple-darwin/dist/floorp/*.app"
