@@ -1,13 +1,14 @@
 diff --git a/intl/l10n/Localization.cpp b/intl/l10n/Localization.cpp
-index eaf21909e4..789d8db6e2 100644
+index eaf21909e4..e741783bbb 100644
 --- a/intl/l10n/Localization.cpp
 +++ b/intl/l10n/Localization.cpp
-@@ -76,13 +76,22 @@ static nsTArray<ffi::L10nKey> ConvertFromL10nKeys(
+@@ -76,13 +76,24 @@ static nsTArray<ffi::L10nKey> ConvertFromL10nKeys(
  
      L10nMessage& m = msg->SetValue();
      if (!entry.message.value.IsVoid()) {
 -      m.mValue = entry.message.value;
-+      nsCString value = entry.message.value;
++      nsCString value;
++      value.Assign(entry.message.value);
 +      value.ReplaceSubstring("Firefox"_ns, "Floorp"_ns);
 +      value.ReplaceSubstring("Mozilla"_ns, "Ablaze"_ns);
 +      m.mValue = value;
@@ -18,7 +19,8 @@ index eaf21909e4..789d8db6e2 100644
          return false;
        }
 +      for (auto& attr : value) {
-+        nsCString attrValue = attr.mValue;
++        nsCString attrValue;
++        attrValue.Assign(attr.mValue);
 +        attrValue.ReplaceSubstring("Firefox"_ns, "Floorp"_ns);
 +        attrValue.ReplaceSubstring("Mozilla"_ns, "Ablaze"_ns);
 +        attr.mValue = attrValue;
@@ -26,19 +28,20 @@ index eaf21909e4..789d8db6e2 100644
      }
    }
  
-@@ -287,7 +296,10 @@ already_AddRefed<Promise> Localization::FormatValue(
+@@ -287,7 +298,11 @@ already_AddRefed<Promise> Localization::FormatValue(
                                       promise->GetParentObject())) {
            promise->MaybeReject(std::move(rv));
          } else {
 -          promise->MaybeResolve(aValue);
-+          nsCString value = *aValue;
++          nsCString value;
++          value.Assign(*aValue);
 +          value.ReplaceSubstring("Firefox"_ns, "Floorp"_ns);
 +          value.ReplaceSubstring("Mozilla"_ns, "Ablaze"_ns);
 +          promise->MaybeResolve(value);
          }
        });
  
-@@ -316,7 +328,17 @@ already_AddRefed<Promise> Localization::FormatValues(
+@@ -316,7 +331,18 @@ already_AddRefed<Promise> Localization::FormatValues(
                                       promise->GetParentObject())) {
            promise->MaybeReject(std::move(rv));
          } else {
@@ -47,7 +50,8 @@ index eaf21909e4..789d8db6e2 100644
 +          modifiedValues.SetCapacity(aValues->Length());
 +
 +          for (const auto& value : *aValues) {
-+            nsCString modifiedValue = value;
++            nsCString modifiedValue;
++            modifiedValue.Assign(value);
 +            modifiedValue.ReplaceSubstring("Firefox"_ns, "Floorp"_ns);
 +            modifiedValue.ReplaceSubstring("Mozilla"_ns, "Ablaze"_ns);
 +            modifiedValues.AppendElement(modifiedValue);
@@ -57,7 +61,7 @@ index eaf21909e4..789d8db6e2 100644
          }
        });
  
-@@ -373,6 +395,8 @@ void Localization::FormatValueSync(const nsACString& aId,
+@@ -373,6 +399,8 @@ void Localization::FormatValueSync(const nsACString& aId,
                                                  &aRetVal, &errors);
  
    if (rv) {
@@ -66,7 +70,7 @@ index eaf21909e4..789d8db6e2 100644
      MaybeReportErrorsToGecko(errors, aRv, GetParentObject());
    } else {
      aRv.ThrowInvalidStateError(
-@@ -407,6 +431,10 @@ void Localization::FormatValuesSync(
+@@ -407,6 +435,10 @@ void Localization::FormatValuesSync(
                                                   &aRetVal, &errors);
  
    if (rv) {
