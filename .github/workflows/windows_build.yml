@@ -37,11 +37,11 @@ jobs:
 
     - name: setup Rust 🦀
       run: |
-        # Install Rust if pgo_artifact_name is not empty
-        if [[ -n $GHA_pgo_artifact_name ]]; then
-          rustup toolchain install 1.81.0
-          rustup default 1.81.0
-        fi
+        # # Install Rust if pgo_artifact_name is not empty
+        # if [[ -n $GHA_pgo_artifact_name ]]; then
+        #   rustup toolchain install 1.81.0
+        #   rustup default 1.81.0
+        # fi
 
         rustup target add x86_64-pc-windows-msvc
         rustc --version --verbose
