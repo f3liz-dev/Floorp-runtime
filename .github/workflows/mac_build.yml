@@ -197,8 +197,14 @@ jobs:
           export MOZ_BUILD_DATE=${{ inputs.MOZ_BUILD_DATE }}
         fi
 
-        export MOZ_NUM_JOBS=$(( $(nproc) * 3 / 4 ))
-        nice -n 10 ./mach build --jobs=$MOZ_NUM_JOBS
+        export MOZ_NUM_JOBS=$(echo "$(nproc) * 0.3" | bc | xargs printf "%.0f")
+        if [ "$MOZ_NUM_JOBS" -lt 1 ]; then
+          export MOZ_NUM_JOBS=1
+        fi
+        nice -n 19 ./mach build --jobs=$MOZ_NUM_JOBS
+
+    - name: Package 📦
+      run: |
         ./mach package
         rm -rf ~/.cargo
 
@@ -212,7 +218,7 @@ jobs:
         fi
 
         if [[ $GHA_profgen = 'true' ]];then
-        tar zcvf ${arch}-apple-darwin-output.tar.xz ./obj-${arch}-apple-darwin/dist/*.dmg
+        tar zcvf ${arch}-apple-darwin-output.tar.xz ./obj-${arch}-apple-darwin/dist/floorp
           mv ${arch}-apple-darwin-output.tar.xz ~/output/
         else
           tar -czf floorp-${arch}-apple-darwin-with-pgo.tar.gz ./obj-${arch}-apple-darwin/dist/

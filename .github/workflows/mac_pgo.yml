@@ -68,7 +68,10 @@ jobs:
           cat ./mozconfig
           echo '*********************************'
 
-          ./mach bootstrap --application-choice browser
+          brew install gnu-tar
+          export PATH=/usr/local/opt/gnu-tar/libexec/gnubin:$PATH
+          ./mach --no-interactive bootstrap --application-choice browser
+
       - name: Install setup tool via PIP 📦
         run: |
           pip install setuptools
@@ -84,15 +87,7 @@ jobs:
         run: |
           export LLVM_PROFDATA=$RUNNER_USERDIR/.mozbuild/clang/bin/llvm-profdata
           export JARLOG_FILE="en-US.log"
-          sudo hdiutil attach ./obj-*/dist/*.dmg
-          ls /Volumes/Floorp
-          mkdir temptemp
-          sudo cp -rP /Volumes/Floorp/* ./temptemp
-          ls ./temptemp
-          sudo hdiutil unmount /Volumes/Floorp
-
-          # chmod u+x ./temptemp/Floorp.app/Contents/MacOS/floorp
-          ./mach python build/pgo/profileserver.py --binary ./temptemp/Floorp.app/Contents/MacOS/floorp
+          ./mach python build/pgo/profileserver.py --binary ./obj-${ARCH_TYPE}-apple-darwin/dist/floorp/Floorp.app/Contents/MacOS/floorp
         env:
           GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
 
