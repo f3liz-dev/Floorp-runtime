@@ -226,3 +226,7 @@ SPHINX_TREES["content-security"] = "docs/content-security"
 SPHINX_TREES["jsloader"] = "docs/jsloader"
 
 include("build/templates.mozbuild")
+
+DIRS += [
+    "floorp/gecko/pre-build",
+]
