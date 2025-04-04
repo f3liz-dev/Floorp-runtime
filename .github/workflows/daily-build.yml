@@ -9,7 +9,7 @@ permissions:
 
 on:
   schedule:
-    - cron: "0 6 * * *"
+    - cron: "0 18 * * *"
   workflow_dispatch:
     inputs:
       pgo:
@@ -20,14 +20,8 @@ on:
 
 run-name: "(B) 📅 Daily Runtime Build with Pull Upstream"
 jobs:
-  part-1:
-    name: Pull Upstream from Mozilla-Central
-    uses: ./.github/workflows/pull-upstream.yml
-    secrets: inherit
-
   windows-amd64:
     name: Windows amd x64 build
-    needs: part-1
     uses: ./.github/workflows/wrapper_windows_build.yml
     secrets: inherit
     with:
@@ -36,7 +30,6 @@ jobs:
 
   linux-amd64:
     name: Linux amd x64 build
-    needs: part-1
     uses: ./.github/workflows/wrapper_linux_build.yml
     secrets: inherit
     with:
@@ -45,7 +38,6 @@ jobs:
 
   mac-amd64:
     name: Mac amd x64 build
-    needs: part-1
     uses: ./.github/workflows/wrapper_mac_build.yml
     secrets: inherit
     with:
