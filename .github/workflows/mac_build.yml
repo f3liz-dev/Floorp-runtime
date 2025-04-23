@@ -43,12 +43,12 @@ jobs:
       with:
         submodules: "recursive"
 
-    - name: Configure sccache
-      uses: actions/github-script@v7
-      with:
-        script: |
-          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+    # - name: Configure sccache
+    #   uses: actions/github-script@v7
+    #   with:
+    #     script: |
+    #       core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+    #       core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
     - name: setup Rust 🦀
       run: |
@@ -64,8 +64,8 @@ jobs:
             rustup target add aarch64-apple-darwin
         fi
 
-        #? https://github.com/mozilla/sccache#known-caveats
-        export CARGO_INCREMENTAL=0
+        # #? https://github.com/mozilla/sccache#known-caveats
+        # export CARGO_INCREMENTAL=0
       env:
         GHA_ARCH: ${{matrix.arch}}
         GHA_pgo_artifact_name: ${{inputs.build-with-profdata-and-jarlog}}
@@ -151,10 +151,10 @@ jobs:
         sudo apt install msitools -y
 
         # SCCACHE START
-        echo "mk_add_options 'export RUSTC_WRAPPER=/home/runner/.mozbuild/sccache/sccache'" >> mozconfig
-        echo "mk_add_options 'export CCACHE_CPP2=yes'" >> mozconfig
-        echo "ac_add_options --with-ccache=/home/runner/.mozbuild/sccache/sccache" >> mozconfig
-        echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'" >> mozconfig
+        # echo "mk_add_options 'export RUSTC_WRAPPER=/home/runner/.mozbuild/sccache/sccache'" >> mozconfig
+        # echo "mk_add_options 'export CCACHE_CPP2=yes'" >> mozconfig
+        # echo "ac_add_options --with-ccache=/home/runner/.mozbuild/sccache/sccache" >> mozconfig
+        # echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'" >> mozconfig
         # SCCACHE END
 
         # Debug

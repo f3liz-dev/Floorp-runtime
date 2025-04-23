@@ -26,12 +26,12 @@ jobs:
       with:
         submodules: "recursive"
 
-    - name: Configure sccache
-      uses: actions/github-script@v7
-      with:
-        script: |
-          core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-          core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+    # - name: Configure sccache
+    #   uses: actions/github-script@v7
+    #   with:
+    #     script: |
+    #       core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+    #       core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
     # - name: Setup Rust 🦀
     #   run: |
@@ -83,10 +83,10 @@ jobs:
         # Set Flat Chrome
         echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
 
-        echo "mk_add_options 'export RUSTC_WRAPPER=/home/runner/.mozbuild/sccache/sccache'" >> mozconfig
-        echo "mk_add_options 'export CCACHE_CPP2=yes'" >> mozconfig
-        echo "ac_add_options --with-ccache=/home/runner/.mozbuild/sccache/sccache" >> mozconfig
-        echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'" >> mozconfig
+        # echo "mk_add_options 'export RUSTC_WRAPPER=/home/runner/.mozbuild/sccache/sccache'" >> mozconfig
+        # echo "mk_add_options 'export CCACHE_CPP2=yes'" >> mozconfig
+        # echo "ac_add_options --with-ccache=/home/runner/.mozbuild/sccache/sccache" >> mozconfig
+        # echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'" >> mozconfig
 
         if [[ $GHA_debug == 'true' ]]; then
           echo "ac_add_options --enable-debug" >> mozconfig

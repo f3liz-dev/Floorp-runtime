@@ -122,10 +122,10 @@ jobs:
         echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
 
         # SCCACHE START
-        echo "mk_add_options 'export RUSTC_WRAPPER=/home/runner/.mozbuild/sccache/sccache'" >> mozconfig
-        echo "mk_add_options 'export CCACHE_CPP2=yes'" >> mozconfig
-        echo "ac_add_options --with-ccache=/home/runner/.mozbuild/sccache/sccache" >> mozconfig
-        echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'" >> mozconfig
+        # echo "mk_add_options 'export RUSTC_WRAPPER=/home/runner/.mozbuild/sccache/sccache'" >> mozconfig
+        # echo "mk_add_options 'export CCACHE_CPP2=yes'" >> mozconfig
+        # echo "ac_add_options --with-ccache=/home/runner/.mozbuild/sccache/sccache" >> mozconfig
+        # echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'" >> mozconfig
         # SCCACHE END
 
 
