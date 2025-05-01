@@ -80,12 +80,12 @@ jobs:
         - name: Create environment 🌲
           shell: bash
           run: |
-            ./mach --no-interactive bootstrap --application-choice browser
-    
+            sudo xcode-select -s /Applications/Xcode_16.2.app
             # Add macOS SDK path
             echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
             echo -e "ac_add_options --enable-bootstrap" >> mozconfig
 
+            ./mach --no-interactive bootstrap --application-choice browser
             ./mach configure
 
         - name: Extract .app from dmg 📦

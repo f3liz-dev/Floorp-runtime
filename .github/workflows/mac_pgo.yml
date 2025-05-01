@@ -73,7 +73,7 @@ jobs:
           python-version: '3.11'
       - name: setup environment 🌲
         run: |
-          echo -e "ac_add_options --enable-bootstrap" >> mozconfig
+          # echo -e "ac_add_options --enable-bootstrap" >> mozconfig
 
           # Add macOS SDK path
           echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
@@ -82,9 +82,13 @@ jobs:
           cat ./mozconfig
           echo '*********************************'
 
+          sudo xcode-select -s /Applications/Xcode_16.2.app
+
           brew install gnu-tar
           export PATH=/usr/local/opt/gnu-tar/libexec/gnubin:$PATH
           ./mach --no-interactive bootstrap --application-choice browser
+
+          echo -e "ac_add_options --enable-bootstrap" >> mozconfig
 
       - name: Install setup tool via PIP 📦
         run: |
