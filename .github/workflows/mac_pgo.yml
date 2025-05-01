@@ -72,8 +72,13 @@ jobs:
         with:
           python-version: '3.11'
       - name: setup environment 🌲
+        env:
+          GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
+          SDKROOT: ${{ env.RUNNER_USERDIR }}/macos-sdk
+          MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
+          MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
         run: |
-          # echo -e "ac_add_options --enable-bootstrap" >> mozconfig
+          echo "ac_add_options --disable-bootstrap" >> mozconfig
 
           # Add macOS SDK path
           echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
@@ -88,7 +93,9 @@ jobs:
           export PATH=/usr/local/opt/gnu-tar/libexec/gnubin:$PATH
           ./mach --no-interactive bootstrap --application-choice browser
 
-          echo -e "ac_add_options --enable-bootstrap" >> mozconfig
+          # Override mozconfig
+          echo -e "ac_add_options --enable-bootstrap" > mozconfig
+          echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
 
       - name: Install setup tool via PIP 📦
         run: |
@@ -102,12 +109,16 @@ jobs:
 
 ## ./mach python python/mozbuild/mozbuild/action/install.py $MOZ_FETCHES_DIR/target.dmg $MOZ_FETCHES_DIR
       - name: Generate Profdata 📊
+        env:
+          GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
+          SDKROOT: ${{ env.RUNNER_USERDIR }}/macos-sdk
+          MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
+          MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
+          GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
         run: |
           export LLVM_PROFDATA=$RUNNER_USERDIR/.mozbuild/clang/bin/llvm-profdata
           export JARLOG_FILE="en-US.log"
           ./mach python build/pgo/profileserver.py --binary ./obj-${ARCH_TYPE}-apple-darwin/dist/floorp/Floorp.app/Contents/MacOS/floorp
-        env:
-          GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
 
       - name: Publish 🎁
         uses: actions/upload-artifact@v4

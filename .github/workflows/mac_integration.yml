@@ -79,14 +79,22 @@ jobs:
 
         - name: Create environment 🌲
           shell: bash
+          env:
+            GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
+            SDKROOT: ${{ env.RUNNER_USERDIR }}/macos-sdk
+            MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
+            MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
           run: |
             sudo xcode-select -s /Applications/Xcode_16.2.app
+
             # Add macOS SDK path
             echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
-            echo -e "ac_add_options --enable-bootstrap" >> mozconfig
+            echo "ac_add_options --disable-bootstrap" >> mozconfig
 
             ./mach --no-interactive bootstrap --application-choice browser
-            ./mach configure
+
+            # Override mozconfig
+            echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
 
         - name: Extract .app from dmg 📦
           run: |
@@ -104,10 +112,20 @@ jobs:
             hdiutil detach /Volumes/Floorp/
 
         - name: Integration 🗃
+          env:
+            GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
+            SDKROOT: ${{ env.RUNNER_USERDIR }}/macos-sdk
+            MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
+            MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
           run: |
             ./mach python "./toolkit/mozapps/installer/unify.py" "./obj-x86_64-apple-darwin/dist/floorp/${{ env.APP_NAME }}.app" "./obj-aarch64-apple-darwin/dist/floorp/${{ env.APP_NAME }}.app"
 
         - name: Create DMG 📦
+          env:
+            GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
+            SDKROOT: ${{ env.RUNNER_USERDIR }}/macos-sdk
+            MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
+            MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
           run: |
             ./mach python -m mozbuild.action.make_dmg ./obj-x86_64-apple-darwin/dist/floorp floorp-macOS-universal-moz-artifact.dmg
 
