@@ -46,6 +46,17 @@ jobs:
           name: floorp-mac-${{ env.ARCH_TYPE }}-build-with-profgen
           path: ~/downloads/artifacts
 
+      - name: Download macOS SDK
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-sdk
+          path: ~/macos-sdk-artifact
+
+      - name: Extract macOS SDK
+        run: |
+          mkdir -p ~/macos-sdk
+          tar -xzf ~/macos-sdk-artifact/macos_sdk.tar.gz -C ~/macos-sdk --warning=no-unknown-keyword
+
       - name: force install python3.12
         continue-on-error: true
         run: |
@@ -63,6 +74,9 @@ jobs:
       - name: setup environment 🌲
         run: |
           echo -e "ac_add_options --enable-bootstrap" >> mozconfig
+
+          # Add macOS SDK path
+          echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
 
           echo 'mozconfig: **********************'
           cat ./mozconfig

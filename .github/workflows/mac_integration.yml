@@ -42,6 +42,17 @@ jobs:
             name: ${{ inputs.x86_64_artifact_name }}
             path: ./
 
+        - name: Download macOS SDK
+          uses: actions/download-artifact@v4
+          with:
+            name: macos-sdk
+            path: ~/macos-sdk-artifact
+
+        - name: Extract macOS SDK
+          run: |
+            mkdir -p ~/macos-sdk
+            tar -xzf ~/macos-sdk-artifact/macos_sdk.tar.gz -C ~/macos-sdk --warning=no-unknown-keyword
+
         - name: Extract 📦
           run: |
             brew install gnu-tar
@@ -70,7 +81,11 @@ jobs:
           shell: bash
           run: |
             ./mach --no-interactive bootstrap --application-choice browser
+    
+            # Add macOS SDK path
+            echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
             echo -e "ac_add_options --enable-bootstrap" >> mozconfig
+
             ./mach configure
 
         - name: Extract .app from dmg 📦
