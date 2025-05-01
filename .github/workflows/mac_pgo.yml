@@ -110,7 +110,6 @@ jobs:
 ## ./mach python python/mozbuild/mozbuild/action/install.py $MOZ_FETCHES_DIR/target.dmg $MOZ_FETCHES_DIR
       - name: Generate Profdata 📊
         env:
-          GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
           SDKROOT: ${{ env.RUNNER_USERDIR }}/macos-sdk
           MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
           MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
