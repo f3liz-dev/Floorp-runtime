@@ -87,8 +87,6 @@ jobs:
           cat ./mozconfig
           echo '*********************************'
 
-          sudo xcode-select -s /Applications/Xcode_16.2.app
-
           brew install gnu-tar
           export PATH=/usr/local/opt/gnu-tar/libexec/gnubin:$PATH
           ./mach --no-interactive bootstrap --application-choice browser

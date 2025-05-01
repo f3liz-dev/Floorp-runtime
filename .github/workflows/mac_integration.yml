@@ -85,8 +85,6 @@ jobs:
             MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
             MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
           run: |
-            sudo xcode-select -s /Applications/Xcode_16.2.app
-
             # Add macOS SDK path
             echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
             echo "ac_add_options --disable-bootstrap" >> mozconfig
