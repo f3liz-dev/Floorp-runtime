@@ -51,7 +51,7 @@ jobs:
         - name: Extract macOS SDK
           run: |
             mkdir -p ~/macos-sdk
-            tar -xzf ~/macos-sdk-artifact/macos_sdk.tar.gz -C ~/macos-sdk --warning=no-unknown-keyword
+            gtar -xzf ~/macos-sdk-artifact/macos_sdk.tar.gz -C ~/macos-sdk --warning=no-unknown-keyword || tar -xzf ~/macos-sdk-artifact/macos_sdk.tar.gz -C ~/macos-sdk
 
         - name: Extract 📦
           run: |
