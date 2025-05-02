@@ -25,6 +25,11 @@ jobs:
   Integration:
     runs-on: macos-latest
     steps:
+        - name: Init
+          run: |
+            export RUNNER_USERDIR=`echo ~`
+            echo "RUNNER_USERDIR=$RUNNER_USERDIR" >> $GITHUB_ENV
+            
         - name: Clone 📥
           uses: actions/checkout@v4
           with:
@@ -96,6 +101,10 @@ jobs:
             MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
             MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
           run: |
+            if [[ -n ${{ inputs.MOZ_BUILD_DATE }} ]]; then
+              export MOZ_BUILD_DATE=${{ inputs.MOZ_BUILD_DATE }}
+            fi
+
             echo "ac_add_options --disable-bootstrap" >> mozconfig
 
             # Add macOS SDK path
@@ -137,6 +146,10 @@ jobs:
             MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
             MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
           run: |
+            if [[ -n ${{ inputs.MOZ_BUILD_DATE }} ]]; then
+              export MOZ_BUILD_DATE=${{ inputs.MOZ_BUILD_DATE }}
+            fi
+
             ./mach python "./toolkit/mozapps/installer/unify.py" "./obj-x86_64-apple-darwin/dist/Floorp/${{ env.APP_NAME }}.app" "./obj-aarch64-apple-darwin/dist/Floorp/${{ env.APP_NAME }}.app"
 
         - name: Create DMG 📦
@@ -146,6 +159,10 @@ jobs:
             MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
             MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
           run: |
+            if [[ -n ${{ inputs.MOZ_BUILD_DATE }} ]]; then
+              export MOZ_BUILD_DATE=${{ inputs.MOZ_BUILD_DATE }}
+            fi
+
             ./mach python -m mozbuild.action.make_dmg ./obj-x86_64-apple-darwin/dist/Floorp floorp-macOS-universal-moz-artifact.dmg
 
             cp ./obj-x86_64-apple-darwin/dist/Floorp*update_framework_artifacts.zip ./floorp-macOS.update_framework_artifacts.zip
