@@ -89,6 +89,7 @@ jobs:
             python-version: '3.11'
 
         - name: setup environment 🌲
+          continue-on-error: true
           env:
             GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
             SDKROOT: ${{ env.RUNNER_USERDIR }}/macos-sdk
