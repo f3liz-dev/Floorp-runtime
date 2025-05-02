@@ -118,6 +118,8 @@ jobs:
             rm -rf "./obj-x86_64-apple-darwin/dist/Floorp/*.app"
             rm -rf "./obj-aarch64-apple-darwin/dist/Floorp/*.app"
 
+            ls ./obj-x86_64-apple-darwin/dist/
+
             hdiutil attach ./obj-x86_64-apple-darwin/dist/Floorp*.mac.dmg
             cp -r "/Volumes/Floorp/${{ env.APP_NAME }}.app" ./obj-x86_64-apple-darwin/dist/Floorp/
 
