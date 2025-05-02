@@ -60,10 +60,6 @@ jobs:
             tar -xf ./floorp-x86_64-apple-darwin-with-pgo.tar.gz
             tar -xf ./floorp-aarch64-apple-darwin-with-pgo.tar.gz
 
-        - uses: actions/setup-python@v5
-          with:
-            python-version: '3.11'
-
         - name: Check Branding Type
           shell: bash
           run: |
@@ -76,6 +72,21 @@ jobs:
             fi
           env:
             GHA_BETA: ${{ inputs.beta }}
+
+        - name: force install python3.12
+          continue-on-error: true
+          run: |
+            brew install python@3.12
+
+        - name: force link python3.12
+          continue-on-error: true
+          run: |
+            # due to "Error: The `brew link` step did not complete successfully" we need to force link python3.12
+            brew link --force --overwrite python@3.12
+
+        - uses: actions/setup-python@v5
+          with:
+            python-version: '3.11'
 
         - name: setup environment 🌲
           env:
