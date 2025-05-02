@@ -77,21 +77,28 @@ jobs:
           env:
             GHA_BETA: ${{ inputs.beta }}
 
-        - name: Create environment 🌲
-          shell: bash
+        - name: setup environment 🌲
           env:
             GHA_BUILD_MACHINE: ${{ matrix.runs-on }}
             SDKROOT: ${{ env.RUNNER_USERDIR }}/macos-sdk
             MACOS_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
             MOZ_SDK_DIR: ${{ env.RUNNER_USERDIR }}/macos-sdk
           run: |
-            # Add macOS SDK path
-            echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
             echo "ac_add_options --disable-bootstrap" >> mozconfig
 
+            # Add macOS SDK path
+            echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
+
+            echo 'mozconfig: **********************'
+            cat ./mozconfig
+            echo '*********************************'
+
+            brew install gnu-tar
+            export PATH=/usr/local/opt/gnu-tar/libexec/gnubin:$PATH
             ./mach --no-interactive bootstrap --application-choice browser
 
             # Override mozconfig
+            echo -e "ac_add_options --enable-bootstrap" > mozconfig
             echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
 
         - name: Extract .app from dmg 📦

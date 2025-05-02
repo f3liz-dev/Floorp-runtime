@@ -46,6 +46,7 @@ jobs:
           name: macos-sdk
           path: macos_sdk.tar.gz
           retention-days: 1
+          overwrite: true
 
   mac-build:
     runs-on: ${{ matrix.runs-on }}
