@@ -124,18 +124,18 @@ jobs:
 
         - name: Extract .app from dmg 📦
           run: |
-            rm -rf "./obj-x86_64-apple-darwin/dist/Floorp/*.app"
-            rm -rf "./obj-aarch64-apple-darwin/dist/Floorp/*.app"
+            rm -rf "./obj-x86_64-apple-darwin/dist/floorp/*.app"
+            rm -rf "./obj-aarch64-apple-darwin/dist/floorp/*.app"
 
             ls ./obj-x86_64-apple-darwin/dist/
 
-            hdiutil attach ./obj-x86_64-apple-darwin/dist/Floorp*.mac.dmg
-            cp -r "/Volumes/Floorp/${{ env.APP_NAME }}.app" ./obj-x86_64-apple-darwin/dist/Floorp/
+            hdiutil attach ./obj-x86_64-apple-darwin/dist/floorp*.mac.dmg
+            cp -r "/Volumes/Floorp/${{ env.APP_NAME }}.app" ./obj-x86_64-apple-darwin/dist/floorp/
 
             hdiutil detach /Volumes/Floorp/
 
-            hdiutil attach ./obj-aarch64-apple-darwin/dist/Floorp*.mac.dmg
-            cp -r "/Volumes/Floorp/${{ env.APP_NAME }}.app" ./obj-aarch64-apple-darwin/dist/Floorp/
+            hdiutil attach ./obj-aarch64-apple-darwin/dist/floorp*.mac.dmg
+            cp -r "/Volumes/Floorp/${{ env.APP_NAME }}.app" ./obj-aarch64-apple-darwin/dist/floorp/
 
             hdiutil detach /Volumes/Floorp/
 
@@ -150,7 +150,7 @@ jobs:
               export MOZ_BUILD_DATE=${{ inputs.MOZ_BUILD_DATE }}
             fi
 
-            ./mach python "./toolkit/mozapps/installer/unify.py" "./obj-x86_64-apple-darwin/dist/Floorp/${{ env.APP_NAME }}.app" "./obj-aarch64-apple-darwin/dist/Floorp/${{ env.APP_NAME }}.app"
+            ./mach python "./toolkit/mozapps/installer/unify.py" "./obj-x86_64-apple-darwin/dist/floorp/${{ env.APP_NAME }}.app" "./obj-aarch64-apple-darwin/dist/floorp/${{ env.APP_NAME }}.app"
 
         - name: Create DMG 📦
           env:
@@ -163,10 +163,10 @@ jobs:
               export MOZ_BUILD_DATE=${{ inputs.MOZ_BUILD_DATE }}
             fi
 
-            ./mach python -m mozbuild.action.make_dmg ./obj-x86_64-apple-darwin/dist/Floorp floorp-macOS-universal-moz-artifact.dmg
+            ./mach python -m mozbuild.action.make_dmg ./obj-x86_64-apple-darwin/dist/floorp floorp-macOS-universal-moz-artifact.dmg
 
-            cp ./obj-x86_64-apple-darwin/dist/Floorp*update_framework_artifacts.zip ./floorp-macOS.update_framework_artifacts.zip
-            cp ./obj-x86_64-apple-darwin/dist/Floorp/Floorp.app/Contents/Resources/application.ini ./nora-application.ini
+            cp ./obj-x86_64-apple-darwin/dist/floorp*update_framework_artifacts.zip ./floorp-macOS.update_framework_artifacts.zip
+            cp ./obj-x86_64-apple-darwin/dist/floorp/Floorp.app/Contents/Resources/application.ini ./nora-application.ini
 
         # Publish Start
         - name: Remove old uploaded artifacts

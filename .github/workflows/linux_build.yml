@@ -122,7 +122,7 @@ jobs:
     # Publish START
     - name: Extract Package 📦
       run: |
-        mv obj-x86_64-pc-linux-gnu/dist/Floorp-*.tar.xz ./floorp-linux-amd64-moz-artifact.tar.xz
+        mv obj-x86_64-pc-linux-gnu/dist/floorp-*.tar.xz ./floorp-linux-amd64-moz-artifact.tar.xz
         # Create nora-build-id.txt
         cp ./obj-x86_64-pc-linux-gnu/dist/bin/application.ini ./nora-application.ini
 

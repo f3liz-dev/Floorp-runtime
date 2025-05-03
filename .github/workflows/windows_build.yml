@@ -182,7 +182,7 @@ jobs:
     - name: extract moz-artifact
       run: |
         mkdir ~/artifact
-        unzip obj-x86_64-pc-windows-msvc/dist/Floorp-*win64.zip -d ~/artifact
+        unzip obj-x86_64-pc-windows-msvc/dist/floorp-*win64.zip -d ~/artifact
 
         # Create nora-build-id.txt
         cp ./obj-x86_64-pc-windows-msvc/dist/bin/application.ini ./nora-application.ini
