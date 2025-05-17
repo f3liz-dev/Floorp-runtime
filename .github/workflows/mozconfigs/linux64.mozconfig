@@ -20,3 +20,5 @@ ac_add_options --target=x86_64-pc-linux-gnu
 #ac_add_options --with-ccache
 #mk_add_options 'export SCCACHE_GHA_ENABLED=on'
 export SCCACHE_NO_DAEMON=1
+# Disable verified updates
+ac_add_options --enable-unverified-updates
