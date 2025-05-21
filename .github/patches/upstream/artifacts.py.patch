@@ -26,6 +26,5 @@ index 97974a7233..1037106f67 100644
      package_re = r"public/build/target\.(zip|tar\.gz)$"
 -    product = "firefox"
 +    product = "floorp"
- 
      _package_artifact_patterns = {
          "{product}/dependentlibs.list",
