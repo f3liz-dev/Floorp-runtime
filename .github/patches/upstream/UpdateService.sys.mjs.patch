@@ -456,3 +456,4 @@ index 26d633f4f4fe9..2e842bba0d2da 100644
  // On macOS, all browser windows can be closed without Firefox exiting. If it
  // is left in this state for a while and an update is pending, we should restart
  // Firefox on our own to apply the update. This class will do that
+ 
