@@ -27,13 +27,13 @@ on:
 
 jobs:
   download-macos-sdk:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - name: Get macOS SDK path
         id: get-sdk
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.2.app
-          
+          sudo xcode-select -s /Applications/Xcode_16.3.app
+
           SDK_PATH=$(xcrun --sdk macosx --show-sdk-path)
           echo "SDK_PATH=$SDK_PATH" >> $GITHUB_ENV
           echo "sdk_path=$SDK_PATH" >> $GITHUB_OUTPUT
