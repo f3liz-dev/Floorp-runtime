@@ -1,5 +1,6 @@
 <p align="center">
-<img src=".github/assets/readme/FloorpRuntime.svg" width="320px"></img>
+<img src=".github/assets/readme/FloorpRuntimeL.svg#gh-light-mode-only" width="320px"></img>
+<img src=".github/assets/readme/FloorpRuntimeD.svg#gh-dark-mode-only" width="320px"></img>
 </p>
 
 # Welcome to Noraneko Runtime Repository
