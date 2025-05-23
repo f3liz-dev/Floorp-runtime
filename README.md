@@ -1,3 +1,7 @@
+<p align="center">
+<img src=".github/assets/readme/FloorpRuntime.svg" width="320px"></img>
+</p>
+
 # Welcome to Noraneko Runtime Repository
 
 This is a repository for build Noraneko runtime from Firefox source.
