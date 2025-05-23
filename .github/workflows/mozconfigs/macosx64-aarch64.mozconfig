@@ -17,3 +17,6 @@ ac_add_options --target=aarch64-apple-darwin
 #mk_add_options 'export SCCACHE_GHA_ENABLED=on'
 # Disable verified updates
 ac_add_options --enable-unverified-updates
+
+# Disable telemetry reporting
+MOZ_TELEMETRY_REPORTING=

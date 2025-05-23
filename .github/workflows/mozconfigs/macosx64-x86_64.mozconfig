@@ -18,3 +18,6 @@ ac_add_options --target=x86_64-apple-darwin
 
 # Disable verified updates
 ac_add_options --enable-unverified-updates
+
+# Disable telemetry reporting
+MOZ_TELEMETRY_REPORTING=
