@@ -24,4 +24,3 @@ MOZ_TELEMETRY_REPORTING=
 
 # LLVMツールチェーンの設定を追加
 ac_add_options --enable-linker=lld
-ac_add_options --with-lld
