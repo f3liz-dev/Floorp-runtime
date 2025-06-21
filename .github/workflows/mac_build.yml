@@ -51,6 +51,7 @@ jobs:
   mac-build:
     runs-on: ${{ matrix.runs-on }}
     needs: download-macos-sdk
+    timeout-minutes: 360
     strategy:
       matrix:
         runs-on: ["ubuntu-latest"]
@@ -147,7 +148,7 @@ jobs:
 
         sudo swapoff /mnt/swapfile
         sudo rm /mnt/swapfile
-        sudo fallocate -l 10G /mnt/swapfile
+        sudo fallocate -l 20G /mnt/swapfile
         sudo chmod 600 /mnt/swapfile
         sudo mkswap /mnt/swapfile
         sudo swapon /mnt/swapfile
