@@ -104,6 +104,36 @@ jobs:
         GHA_ARCH: ${{matrix.arch}}
         GHA_pgo_artifact_name: ${{inputs.build-with-profdata-and-jarlog}}
 
+    - name: Set LLVM environment variables
+      run: |
+        echo "LLVM_VERSION=19" >> $GITHUB_ENV
+        echo "CC=clang" >> $GITHUB_ENV
+        echo "CXX=clang++" >> $GITHUB_ENV
+        echo "LDFLAGS=-fuse-ld=lld" >> $GITHUB_ENV
+
+        echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
+
+    - name: Check LLVM toolchain versions
+      run: |
+        echo "=== Checking LLVM Toolchain Versions ==="
+        echo "Clang version:"
+        clang --version
+
+        echo -e "\nLLD version:"
+        ld64.lld --version || lld --version
+
+        echo -e "\nmacOS SDK version:"
+        xcrun --show-sdk-version
+
+        echo -e "\nXcode version:"
+        xcodebuild -version
+
+        echo -e "\nEnvironment variables:"
+        echo "CC=$CC"
+        echo "CXX=$CXX"
+        echo "LDFLAGS=$LDFLAGS"
+        echo "PATH=$PATH"
+
     - name: Allocate swap
       run: |
         echo Before:
