@@ -107,11 +107,14 @@ jobs:
     - name: Set LLVM environment variables
       run: |
         echo "LLVM_VERSION=19" >> $GITHUB_ENV
-        echo "CC=clang" >> $GITHUB_ENV
-        echo "CXX=clang++" >> $GITHUB_ENV
-        echo "LDFLAGS=-fuse-ld=lld" >> $GITHUB_ENV
-
+        if [[ $GHA_ARCH == 'x86_64' ]];then
+            echo "TARGET_TRIPLE=x86_64-apple-darwin" >> $GITHUB_ENV
+        else
+            echo "TARGET_TRIPLE=aarch64-apple-darwin" >> $GITHUB_ENV
+        fi
         echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
+      env:
+        GHA_ARCH: ${{matrix.arch}}
 
     - name: Check LLVM toolchain versions
       run: |
@@ -119,19 +122,18 @@ jobs:
         echo "Clang version:"
         clang --version
 
-        echo -e "\nLLD version:"
-        ld64.lld --version || lld --version
+        echo -e "\nChecking for cross-compile tools:"
+        which clang || echo "clang not found"
+        which lld || echo "lld not found"
+        which ld || echo "ld not found"
 
-        echo -e "\nmacOS SDK version:"
-        xcrun --show-sdk-version
-
-        echo -e "\nXcode version:"
-        xcodebuild -version
+        echo -e "\nChecking cctools (macOS cross-compile tools):"
+        find /usr -name "*ld64*" 2>/dev/null || echo "ld64 tools not found"
+        find ~/macos-sdk -name "*ld*" 2>/dev/null || echo "No ld tools in SDK"
 
         echo -e "\nEnvironment variables:"
-        echo "CC=$CC"
-        echo "CXX=$CXX"
-        echo "LDFLAGS=$LDFLAGS"
+        echo "TARGET_TRIPLE=$TARGET_TRIPLE"
+        echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
         echo "PATH=$PATH"
 
     - name: Allocate swap
