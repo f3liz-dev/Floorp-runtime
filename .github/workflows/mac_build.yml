@@ -217,6 +217,10 @@ jobs:
           echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
         fi
 
+        # Enable Linker
+        echo "ac_add_options --enable-linker=lld" >> mozconfig
+
+        # Install msitools
         sudo apt install msitools -y
 
         # SCCACHE START
