@@ -195,9 +195,6 @@ jobs:
 
         cd $GITHUB_WORKSPACE
 
-        # update floorp to latest
-        git submodule update --remote
-
         if [[ $GHA_ARCH == 'x86_64' ]];then
           cp ./.github/workflows/mozconfigs/macosx64-x86_64.mozconfig mozconfig
         else

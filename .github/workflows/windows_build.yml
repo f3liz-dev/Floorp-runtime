@@ -105,9 +105,6 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE
 
-        # update floorp to latest
-        git submodule update --remote
-
         cp ./.github/workflows/mozconfigs/win64.mozconfig mozconfig
 
         # Copy Floorp Branding
