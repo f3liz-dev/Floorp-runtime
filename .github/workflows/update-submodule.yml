@@ -22,7 +22,9 @@ jobs:
 
     - name: Update Submodules
       run: |
-        git submodule update --remote
+        git submodule update --init --recursive
+        git submodule foreach git fetch origin
+        git submodule foreach git checkout origin/main
         git add .
 
         if git diff-index --quiet HEAD --; then
