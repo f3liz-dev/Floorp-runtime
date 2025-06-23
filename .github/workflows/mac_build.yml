@@ -107,38 +107,6 @@ jobs:
         GHA_ARCH: ${{matrix.arch}}
         GHA_pgo_artifact_name: ${{inputs.build-with-profdata-and-jarlog}}
 
-    - name: Set LLVM environment variables
-      run: |
-        echo "LLVM_VERSION=18" >> $GITHUB_ENV
-        if [[ $GHA_ARCH == 'x86_64' ]];then
-            echo "TARGET_TRIPLE=x86_64-apple-darwin" >> $GITHUB_ENV
-        else
-            echo "TARGET_TRIPLE=aarch64-apple-darwin" >> $GITHUB_ENV
-        fi
-        echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> $GITHUB_ENV
-      env:
-        GHA_ARCH: ${{matrix.arch}}
-
-    - name: Check LLVM toolchain versions
-      run: |
-        echo "=== Checking LLVM Toolchain Versions ==="
-        echo "Clang version:"
-        clang --version
-
-        echo -e "\nChecking for cross-compile tools:"
-        which clang || echo "clang not found"
-        which lld || echo "lld not found"
-        which ld || echo "ld not found"
-
-        echo -e "\nChecking cctools (macOS cross-compile tools):"
-        find /usr -name "*ld64*" 2>/dev/null || echo "ld64 tools not found"
-        find ~/macos-sdk -name "*ld*" 2>/dev/null || echo "No ld tools in SDK"
-
-        echo -e "\nEnvironment variables:"
-        echo "TARGET_TRIPLE=$TARGET_TRIPLE"
-        echo "MACOSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET"
-        echo "PATH=$PATH"
-
     - name: Allocate swap
       run: |
         echo Before:
@@ -290,18 +258,21 @@ jobs:
           export MOZ_BUILD_DATE=${{ inputs.MOZ_BUILD_DATE }}
         fi
 
-        # Set LLVM 19 toolchain paths
-        export CC=/usr/bin/clang-19
-        export CXX=/usr/bin/clang++-19
-        export LD=/usr/bin/ld.lld-19
-        export AR=/usr/bin/llvm-ar-19
-        export NM=/usr/bin/llvm-nm-19
-        export RANLIB=/usr/bin/llvm-ranlib-19
-
         echo "Build environment:"
         echo "CC=$CC"
         echo "CXX=$CXX"
         echo "LD=$LD"
+        echo "AR=$AR"
+        echo "NM=$NM"
+        echo "RANLIB=$RANLIB"
+        echo "STRIP=$STRIP"
+        echo "OBJCOPY=$OBJCOPY"
+        echo "OBJDUMP=$OBJDUMP"
+        echo "READELF=$READELF"
+        echo "PKG_CONFIG=$PKG_CONFIG"
+        echo "PYTHON=$PYTHON"
+        echo "RUSTC=$RUSTC"
+        echo "CARGO=$CARGO"
 
         export MOZ_NUM_JOBS=$(( $(nproc) * 3 / 4 ))
         nice -n 10 ./mach build --jobs=$MOZ_NUM_JOBS
