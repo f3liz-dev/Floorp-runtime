@@ -189,6 +189,24 @@ jobs:
         name: floorp-${{ matrix.arch }}-apple-darwin-profdata-and-jarlog
         path: ~/artifacts
 
+    - name: Install LLVM toolchain
+      run: |
+        # Install LLVM 19 toolchain for cross-compilation
+        wget https://apt.llvm.org/llvm.sh
+        chmod +x llvm.sh
+        sudo ./llvm.sh 19
+        sudo apt-get install -y lld-19
+
+        # Create symlinks for the tools
+        sudo ln -sf /usr/bin/ld.lld-19 /usr/bin/ld64.lld
+        sudo ln -sf /usr/bin/clang-19 /usr/bin/clang
+        sudo ln -sf /usr/bin/clang++-19 /usr/bin/clang++
+
+        # Verify versions
+        echo "Checking installed versions:"
+        clang --version
+        ld64.lld --version || ld.lld-19 --version
+
     - name: Setup 🪛
       run: |
         if [[ -n ${{ inputs.MOZ_BUILD_DATE }} ]];then
@@ -271,6 +289,19 @@ jobs:
         if [[ -n ${{ inputs.MOZ_BUILD_DATE }} ]];then
           export MOZ_BUILD_DATE=${{ inputs.MOZ_BUILD_DATE }}
         fi
+
+        # Set LLVM 19 toolchain paths
+        export CC=/usr/bin/clang-19
+        export CXX=/usr/bin/clang++-19
+        export LD=/usr/bin/ld.lld-19
+        export AR=/usr/bin/llvm-ar-19
+        export NM=/usr/bin/llvm-nm-19
+        export RANLIB=/usr/bin/llvm-ranlib-19
+
+        echo "Build environment:"
+        echo "CC=$CC"
+        echo "CXX=$CXX"
+        echo "LD=$LD"
 
         export MOZ_NUM_JOBS=$(( $(nproc) * 3 / 4 ))
         nice -n 10 ./mach build --jobs=$MOZ_NUM_JOBS
