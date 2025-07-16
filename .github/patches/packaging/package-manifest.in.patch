@@ -1,16 +1,16 @@
 diff --git a/browser/installer/package-manifest.in b/browser/installer/package-manifest.in
-index 6ebf2f62c4..f5980b840a 100644
+index 2b4d35e060..f7b511bd6a 100644
 --- a/browser/installer/package-manifest.in
 +++ b/browser/installer/package-manifest.in
-@@ -195,6 +195,11 @@
- ; [Extensions]
- @RESPATH@/components/extensions-toolkit.manifest
+@@ -166,6 +166,11 @@
+ @BINPATH@/@DLL_PREFIX@mozavutil@DLL_SUFFIX@
+ @BINPATH@/@DLL_PREFIX@mozavcodec@DLL_SUFFIX@
  
 +; [Noraneko Files]
 +@RESPATH@/chrome/noraneko.manifest
 +@RESPATH@/chrome/noraneko@JAREXT@
 +@RESPATH@/browser/buildid2
 +
- ; Modules
- @RESPATH@/browser/modules/*
- @RESPATH@/modules/*
+ ; [Components]
+ #ifdef ACCESSIBILITY
+ #ifdef XP_WIN
