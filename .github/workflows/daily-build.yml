@@ -36,6 +36,13 @@ jobs:
       debug: false
       pgo: ${{ github.event_name == 'workflow_dispatch' && inputs.pgo != false || github.event_name != 'workflow_dispatch' }}
 
+  linux-aarch64:
+    name: Linux aarch64 build
+    uses: ./.github/workflows/wrapper_linux_aarch64_build.yml
+    secrets: inherit
+    with:
+      debug: false
+
   mac-amd64:
     name: Mac amd x64 build
     uses: ./.github/workflows/wrapper_mac_build.yml
@@ -46,7 +53,7 @@ jobs:
 
   platform-tests:
     name: Platform Tests
-    needs: [windows-amd64, linux-amd64, mac-amd64]
+    needs: [windows-amd64, linux-amd64, mac-amd64, linux-aarch64]
     uses: ./.github/workflows/patch-test.yml
     with:
       platform: ubuntu
@@ -109,6 +116,12 @@ jobs:
           name: floorp-linux-amd64-moz-artifact
           path: ./artifact/linux
 
+      - name: Download Linux aarch64 Main Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: floorp-linux-aarch64-moz-artifact
+          path: ./artifact/linux-aarch64
+
       - name: Download Linux Dist-Host
         uses: actions/download-artifact@v4
         with:
@@ -130,6 +143,11 @@ jobs:
         run: |
           cd ./artifact/linux/ini
           zip -r ../Linux-x64-application-ini.zip .
+
+      - name: tar Linux aarch64 Main Artifact
+        run: |
+          cd ./artifact/linux-aarch64
+          tar -czvf ../floorp-linux-aarch64.tar.gz .
 
       # ───────── Mac Artifacts ─────────
       - name: Download Mac Main Artifact
@@ -183,6 +201,7 @@ jobs:
             ./artifact/win/Windows-x64-dist-host.zip
             ./artifact/win/Windows-x64-application-ini.zip
             ./artifact/linux/floorp-linux-amd64-moz-artifact.tar.xz
+            ./artifact/linux-aarch64/floorp-linux-aarch64.tar.gz
             ./artifact/linux/Linux-x64-dist-host.zip
             ./artifact/linux/Linux-x64-application-ini.zip
             ./artifact/mac/floorp-macOS-universal-moz-artifact.dmg
