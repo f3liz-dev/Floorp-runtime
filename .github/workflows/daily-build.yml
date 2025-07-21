@@ -38,10 +38,11 @@ jobs:
 
   linux-aarch64:
     name: Linux aarch64 build
-    uses: ./.github/workflows/wrapper_linux_aarch64_build.yml
+    uses: ./.github/workflows/wrapper_linux_build.yml
     secrets: inherit
     with:
       debug: false
+      pgo: false # TODO: Enable PGO for Linux aarch64
 
   mac-amd64:
     name: Mac amd x64 build

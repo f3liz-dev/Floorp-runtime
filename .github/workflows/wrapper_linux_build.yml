@@ -25,10 +25,11 @@ on:
         default: false
         required: true
 
-run-name: ${{toJSON(inputs.pgo) == 'true' && '[PGO] ' || ''}}Linux x64 build${{toJSON(inputs.debug) == 'true' && ' Debug' || ''}}
+run-name: ${{toJSON(inputs.pgo) == 'true' && '[PGO] ' || ''}}Linux build${{toJSON(inputs.debug) == 'true' && ' Debug' || ''}}
 jobs:
   run-main:
-    name: Linux-x64
+    name: Linux
     uses: ./.github/workflows/linux_build.yml
     with:
       debug: ${{inputs.debug}}
+      pgo: ${{inputs.pgo}}
