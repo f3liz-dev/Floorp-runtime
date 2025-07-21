@@ -11,7 +11,13 @@ on:
         type: boolean
         required: true
 
-run-name: Linux AArch64 build
+  workflow_call:
+    inputs:
+      debug:
+        type: boolean
+        required: true
+
+run-name: Linux AArch64 build${{toJSON(inputs.debug) == 'true' && ' Debug' || ''}}
 jobs:
   run-main:
     name: Linux-AArch64
