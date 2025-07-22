@@ -147,6 +147,7 @@ jobs:
       with:
         name: floorp-linux-${{ matrix.arch }}-moz-artifact
         path: ./floorp-linux-*-moz-artifact.tar.xz
+        overwrite: true
 
     - name: Publish dist/host for MAR
       uses: actions/upload-artifact@v4
