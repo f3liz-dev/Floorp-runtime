@@ -149,11 +149,19 @@ jobs:
         path: ./floorp-linux-*-moz-artifact.tar.xz
         overwrite: true
 
+    - name: Prepare dist/host for MAR
+      run: |
+        if [[ ${{ matrix.arch }} == "aarch64" ]]; then
+          mv obj-aarch64-unknown-linux-gnu/dist/host ./dist-host
+        else
+          mv obj-x86_64-pc-linux-gnu/dist/host ./dist-host
+        fi
+
     - name: Publish dist/host for MAR
       uses: actions/upload-artifact@v4
       with:
         name: linux-${{ matrix.arch }}-dist-host
-        path: obj-*/dist/host/
+        path: ./dist-host/
         overwrite: true
 
     - name: Publish nora-application.ini for MAR
