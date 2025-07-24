@@ -28,7 +28,7 @@ jobs:
       debug: false
       pgo: ${{ github.event_name == 'workflow_dispatch' && inputs.pgo != false || github.event_name != 'workflow_dispatch' }}
 
-  linux-amd64:
+  linux:
     name: Linux amd x64 build
     uses: ./.github/workflows/wrapper_linux_build.yml
     secrets: inherit
@@ -36,15 +36,7 @@ jobs:
       debug: false
       pgo: ${{ github.event_name == 'workflow_dispatch' && inputs.pgo != false || github.event_name != 'workflow_dispatch' }}
 
-  linux-aarch64:
-    name: Linux aarch64 build
-    uses: ./.github/workflows/wrapper_linux_build.yml
-    secrets: inherit
-    with:
-      debug: false
-      pgo: false # TODO: Enable PGO for Linux aarch64
-
-  mac-amd64:
+  mac:
     name: Mac amd x64 build
     uses: ./.github/workflows/wrapper_mac_build.yml
     secrets: inherit
@@ -54,7 +46,7 @@ jobs:
 
   platform-tests:
     name: Platform Tests
-    needs: [windows-amd64, linux-amd64, mac-amd64, linux-aarch64]
+    needs: [windows-amd64, linux, mac]
     uses: ./.github/workflows/patch-test.yml
     with:
       platform: ubuntu
