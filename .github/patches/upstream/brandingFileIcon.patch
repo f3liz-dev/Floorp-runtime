@@ -1,12 +1,11 @@
 diff --git a/browser/app/moz.build b/browser/app/moz.build
-index f41ce92556..1d2ac9ccae 100644
+index 37f9b0f8bed5d..71210bc367f8d 100644
 --- a/browser/app/moz.build
 +++ b/browser/app/moz.build
-@@ -174,3 +174,20 @@ for icon in ("firefox", "document", "newwindow", "newtab", "pbmode", "document_p
-         CONFIG["MOZ_BRANDING_DIRECTORY"],
-         icon,
-     )
-+
+@@ -180,3 +180,19 @@ if CONFIG["MOZ_ASAN"] or CONFIG["MOZ_DEBUG"]:
+     WINCONSOLE = True
+ else:
+     WINCONSOLE = False
 +
 +if CONFIG["OS_TARGET"] == "WINNT":
 +    checkOSBuildFloorp = "windows"
