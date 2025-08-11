@@ -176,6 +176,10 @@ for icon in ("firefox", "document", "newwindow", "newtab", "pbmode", "document_p
         icon,
     )
 
+if CONFIG["MOZ_ASAN"] or CONFIG["MOZ_DEBUG"]:
+    WINCONSOLE = True
+else:
+    WINCONSOLE = False
 
 if CONFIG["OS_TARGET"] == "WINNT":
     checkOSBuildFloorp = "windows"
