@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4
         name: Clone 🧬
         with:
-          submodules: 'recursive'
+          submodules: 'true'
 
       - name: Check Arch type
         shell: bash
