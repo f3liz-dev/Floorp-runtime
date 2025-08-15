@@ -159,11 +159,6 @@ jobs:
           cd ./artifact/linux-aarch64/ini
           zip -r ../Linux-aarch64-application-ini.zip .
 
-      - name: tar Linux aarch64 Main Artifact
-        run: |
-          cd ./artifact/linux-aarch64
-          tar -czvf ../floorp-linux-aarch64.tar.gz .
-
       # ───────── Mac Artifacts ─────────
       - name: Download Mac Main Artifact
         uses: actions/download-artifact@v4
@@ -216,7 +211,7 @@ jobs:
             ./artifact/win/Windows-x64-dist-host.zip
             ./artifact/win/Windows-x64-application-ini.zip
             ./artifact/linux/floorp-linux-amd64-moz-artifact.tar.xz
-            ./artifact/linux-aarch64/floorp-linux-aarch64.tar.gz
+            ./artifact/linux-aarch64/floorp-linux-aarch64.tar.xz
             ./artifact/linux/Linux-x64-dist-host.zip
             ./artifact/linux/Linux-x64-application-ini.zip
             ./artifact/linux-aarch64/Linux-aarch64-dist-host.zip
