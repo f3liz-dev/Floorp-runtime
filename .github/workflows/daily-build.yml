@@ -121,10 +121,21 @@ jobs:
           name: linux-amd64-dist-host
           path: ./artifact/linux/host
 
+      - name: Download Linux aarch64 Dist-Host
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-aarch64-dist-host
+          path: ./artifact/linux-aarch64/host
+
       - name: Zip Linux Dist-Host
         run: |
           cd ./artifact/linux/host
           zip -r ../Linux-x64-dist-host.zip .
+
+      - name: Zip Linux aarch64 Dist-Host
+        run: |
+          cd ./artifact/linux-aarch64/host
+          zip -r ../Linux-aarch64-dist-host.zip .
 
       - name: Download Linux Application INI
         uses: actions/download-artifact@v4
@@ -132,10 +143,21 @@ jobs:
           name: linux-amd64-application-ini
           path: ./artifact/linux/ini
 
+      - name: Download Linux aarch64 Application INI
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-aarch64-application-ini
+          path: ./artifact/linux-aarch64/ini
+
       - name: Zip Linux Application INI
         run: |
           cd ./artifact/linux/ini
           zip -r ../Linux-x64-application-ini.zip .
+
+      - name: Zip Linux aarch64 Application INI
+        run: |
+          cd ./artifact/linux-aarch64/ini
+          zip -r ../Linux-aarch64-application-ini.zip .
 
       - name: tar Linux aarch64 Main Artifact
         run: |
@@ -197,6 +219,8 @@ jobs:
             ./artifact/linux-aarch64/floorp-linux-aarch64.tar.gz
             ./artifact/linux/Linux-x64-dist-host.zip
             ./artifact/linux/Linux-x64-application-ini.zip
+            ./artifact/linux-aarch64/Linux-aarch64-dist-host.zip
+            ./artifact/linux-aarch64/Linux-aarch64-application-ini.zip
             ./artifact/mac/floorp-macOS-universal-moz-artifact.dmg
             ./artifact/mac/macOS-x64-dist-host.zip
             ./artifact/mac/macOS-x64-application-ini.zip
