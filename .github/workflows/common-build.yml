@@ -74,7 +74,7 @@ jobs:
             for patch in "$PATCH_DIR"/*.patch; do
               [ -e "$patch" ] || continue
               echo "Applying patch: $(basename "$patch")"
-              git apply --verbose "$patch"
+              git apply --verbose --ignore-space-change --ignore-whitespace "$patch"
             done
           else
             echo "No patches to apply"
