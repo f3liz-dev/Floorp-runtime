@@ -45,21 +45,21 @@ elif [[ "$PLATFORM" == "mac" ]]; then
 fi
 
 # Copy branding assets
-if [[ "$PLATFORM" == "mac" ]]; then
-  # Copy Floorp Branding for Mac
-  cp -r ./floorp/gecko/branding/* ./browser/branding/
-  # Set Branding
-  echo "ac_add_options --with-branding=browser/branding/floorp-official" >> mozconfig
-  # Set Flat Chrome (skip for profile generation)
-  if [[ "$PGO_MODE" != "generate" ]]; then
-    echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
-  fi
-elif [[ -d ".github/assets/branding" ]]; then
+if [[ -d ".github/assets/branding" ]]; then
   cp -r ./.github/assets/branding/* ./browser/branding/
   
-  # Set Branding/Flat Chrome
-  echo "ac_add_options --with-branding=browser/branding/floorp-daylight" >> mozconfig
-  echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
+  if [[ "$PLATFORM" == "mac" ]]; then
+    # Set Branding for Mac
+    echo "ac_add_options --with-branding=browser/branding/floorp-official" >> mozconfig
+    # Set Flat Chrome (skip for profile generation)
+    if [[ "$PGO_MODE" != "generate" ]]; then
+      echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
+    fi
+  else
+    # Set Branding for Linux/Windows
+    echo "ac_add_options --with-branding=browser/branding/floorp-daylight" >> mozconfig
+    echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
+  fi
 else
   echo "No custom branding found, using default Firefox branding"
 fi
