@@ -79,8 +79,8 @@ jobs:
   build:
     name: Build ${{ inputs.platform }}-${{ inputs.arch }}
     runs-on: ubuntu-latest
-    needs: ${{ inputs.platform == 'mac' && 'download-macos-sdk' || '' }}
-    timeout-minutes: ${{ inputs.platform == 'mac' && 360 || 180 }}
+    needs: ${{ fromJSON(inputs.platform) == 'mac' && ["download-macos-sdk"] || [] }}
+    timeout-minutes: ${{ fromJSON(inputs.platform) == 'mac' && 360 || 180 }}
 
     steps:
       - name: Setup Node.js
