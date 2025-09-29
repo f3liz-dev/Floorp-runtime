@@ -33,29 +33,61 @@ elif [[ "$PLATFORM" == "linux" ]]; then
   else
     cp ./.github/workflows/mozconfigs/linux-x86_64.mozconfig mozconfig
   fi
+elif [[ "$PLATFORM" == "mac" ]]; then
+  if [[ "$ARCH" == "x86_64" ]]; then
+    cp ./.github/workflows/mozconfigs/macosx64-x86_64.mozconfig mozconfig
+  else
+    cp ./.github/workflows/mozconfigs/macosx64-aarch64.mozconfig mozconfig
+  fi
+  
+  # Add macOS SDK path for cross-compilation
+  echo "ac_add_options --with-macos-sdk=$(echo ~)/macos-sdk" >> mozconfig
 fi
 
-# Copy branding assets if they exist
+# Copy branding assets
 if [[ -d ".github/assets/branding" ]]; then
   cp -r ./.github/assets/branding/* ./browser/branding/
   
-  # Set Branding/Flat Chrome
-  echo "ac_add_options --with-branding=browser/branding/floorp-unofficial" >> mozconfig
-  echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
+  if [[ "$PLATFORM" == "mac" ]]; then
+    # Set Branding for Mac
+    echo "ac_add_options --with-branding=browser/branding/floorp-official" >> mozconfig
+    # Set Flat Chrome (skip for profile generation)
+    if [[ "$PGO_MODE" != "generate" ]]; then
+      echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
+    fi
+  else
+    # Set Branding for Linux/Windows
+    echo "ac_add_options --with-branding=browser/branding/floorp-daylight" >> mozconfig
+    echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
+  fi
 else
   echo "No custom branding found, using default Firefox branding"
+fi
+
+# Enable Linker for Mac
+if [[ "$PLATFORM" == "mac" ]]; then
+  echo "ac_add_options --enable-linker=lld" >> mozconfig
 fi
 
 sudo apt install msitools -y
 
 # SCCACHE
-{
-  echo "mk_add_options 'export RUSTC_WRAPPER=/opt/hostedtoolcache/sccache/0.10.0/x64/sccache'"
-  echo "mk_add_options 'export CCACHE_CPP2=yes'"
-  echo "ac_add_options --with-ccache=/opt/hostedtoolcache/sccache/0.10.0/x64/sccache"
-  echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'"
-  echo "mk_add_options 'export SCCACHE_MAX_FRAME_LENGTH=1048576'"
-} >> mozconfig
+if [[ "$PLATFORM" == "mac" ]]; then
+  # For Mac builds, comment out sccache for now as it's complex in cross-compilation
+  echo "# SCCACHE disabled for Mac cross-compilation" >> mozconfig
+  # echo "mk_add_options 'export RUSTC_WRAPPER=/home/runner/.mozbuild/sccache/sccache'" >> mozconfig
+  # echo "mk_add_options 'export CCACHE_CPP2=yes'" >> mozconfig
+  # echo "ac_add_options --with-ccache=/home/runner/.mozbuild/sccache/sccache" >> mozconfig
+  # echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'" >> mozconfig
+else
+  {
+    echo "mk_add_options 'export RUSTC_WRAPPER=/opt/hostedtoolcache/sccache/0.10.0/x64/sccache'"
+    echo "mk_add_options 'export CCACHE_CPP2=yes'"
+    echo "ac_add_options --with-ccache=/opt/hostedtoolcache/sccache/0.10.0/x64/sccache"
+    echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'"
+    echo "mk_add_options 'export SCCACHE_MAX_FRAME_LENGTH=1048576'"
+  } >> mozconfig
+fi
 
 # Debug
 if [[ "$DEBUG" == "true" ]]; then
@@ -77,9 +109,13 @@ if [[ "$PGO" == "true" ]]; then
 fi
 
 # Update Channel
-#echo "ac_add_options --with-version-file-path=floorp/static/gecko/config" >> mozconfig
-echo "ac_add_options --enable-update-channel=alpha" >> mozconfig
-
-sed -i 's|https://@MOZ_APPUPDATE_HOST@/update/6/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%SYSTEM_CAPABILITIES%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml|https://github.com/f3liz-dev/Floorp-runtime/releases/download/%CHANNEL%/%BUILD_TARGET%.update.xml|g' ./build/application.ini.in
+if [[ "$PLATFORM" == "mac" ]]; then
+  echo "ac_add_options --enable-update-channel=release" >> mozconfig
+  echo "ac_add_options --with-version-file-path=floorp/gecko/config" >> mozconfig
+  sed -i 's|https://@MOZ_APPUPDATE_HOST@/update/6/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%SYSTEM_CAPABILITIES%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml|https://%NORA_UPDATE_HOST%update.xml|g' ./build/application.ini.in
+else
+  echo "ac_add_options --enable-update-channel=alpha" >> mozconfig
+  sed -i 's|https://@MOZ_APPUPDATE_HOST@/update/6/%PRODUCT%/%VERSION%/%BUILD_ID%/%BUILD_TARGET%/%LOCALE%/%CHANNEL%/%OS_VERSION%/%SYSTEM_CAPABILITIES%/%DISTRIBUTION%/%DISTRIBUTION_VERSION%/update.xml|https://github.com/f3liz-dev/Floorp-runtime/releases/download/%CHANNEL%/%BUILD_TARGET%.update.xml|g' ./build/application.ini.in
+fi
 
 ./mach --no-interactive bootstrap --application-choice browser

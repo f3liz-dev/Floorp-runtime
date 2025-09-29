@@ -52,8 +52,9 @@ jobs:
 
   mac:
     name: Mac build
-    uses: ./.github/workflows/wrapper_mac_build.yml
+    uses: ./.github/workflows/wrapper-mac-build.yml
     secrets: inherit
     with:
       debug: ${{ github.event.inputs.debug == 'true' || github.event_name == 'schedule' }}
       pgo: ${{ github.event.inputs.pgo == 'true' && github.event_name != 'schedule' }}
+

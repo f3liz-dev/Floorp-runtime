@@ -54,6 +54,7 @@ jobs:
   build:
     name: Build ${{ inputs.platform }}-${{ inputs.arch }}
     runs-on: ubuntu-latest
+    timeout-minutes: 360
 
     steps:
       - name: Setup Node.js
@@ -67,6 +68,18 @@ jobs:
           submodules: >-
             ${{ inputs.platform == 'mac' && 'recursive' || 'true' }}
 
+      - name: Download macOS SDK
+        if: inputs.platform == 'mac'
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-sdk
+          path: ~/macos-sdk-artifact
+
+      - name: Setup macOS cross-compilation
+        if: inputs.platform == 'mac'
+        run: |
+          ./.github/workflows/scripts/setup-mac-cross.sh "${{ inputs.arch }}"
+
       - name: Apply upstream patches
         run: |
           PATCH_DIR=".github/patches/upstream"
@@ -74,13 +87,14 @@ jobs:
             for patch in "$PATCH_DIR"/*.patch; do
               [ -e "$patch" ] || continue
               echo "Applying patch: $(basename "$patch")"
-              git apply --verbose "$patch"
+              git apply --verbose --ignore-space-change --ignore-whitespace "$patch"
             done
           else
             echo "No patches to apply"
           fi
 
       - name: Setup sccache
+        if: inputs.platform != 'mac'
         uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Setup Rust toolchain
@@ -114,8 +128,8 @@ jobs:
             "${{ inputs.pgo_artifact_name }}" \
             "${{ inputs.MOZ_BUILD_DATE }}"
         env:
-          SCCACHE_GHA_ENABLED: "on"
-          SCCACHE_MAX_FRAME_LENGTH: "1048576"
+          SCCACHE_GHA_ENABLED: ${{ inputs.platform != 'mac' && 'on' || '' }}
+          SCCACHE_MAX_FRAME_LENGTH: ${{ inputs.platform != 'mac' && '1048576' || '' }}
 
       - name: Build and package
         run: |
@@ -124,8 +138,8 @@ jobs:
             "${{ inputs.arch }}" \
             "${{ inputs.MOZ_BUILD_DATE }}"
         env:
-          SCCACHE_GHA_ENABLED: "on"
-          SCCACHE_MAX_FRAME_LENGTH: "1048576"
+          SCCACHE_GHA_ENABLED: ${{ inputs.platform != 'mac' && 'on' || '' }}
+          SCCACHE_MAX_FRAME_LENGTH: ${{ inputs.platform != 'mac' && '1048576' || '' }}
 
       - name: Clean existing Windows artifacts
         if: inputs.platform == 'windows'
@@ -154,6 +168,13 @@ jobs:
             linux-aarch64-dist-host
             linux-aarch64-application-ini
 
+      - name: Clean existing Mac artifacts
+        if: inputs.platform == 'mac'
+        uses: geekyeggo/delete-artifact@v5
+        with:
+          name: |
+            floorp-mac-${{ inputs.arch }}-moz-artifact
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -161,6 +182,9 @@ jobs:
           path: >-
             ${{ inputs.platform == 'windows' &&
             format('~/output/floorp-{0}-{1}-moz-artifact.zip',
+            inputs.platform, inputs.arch) ||
+            inputs.platform == 'mac' &&
+            format('~/output/floorp-{0}-{1}-moz-artifact.tar.gz',
             inputs.platform, inputs.arch) ||
             format('~/output/floorp-{0}-{1}-moz-artifact.tar.xz',
             inputs.platform, inputs.arch) }}
@@ -178,6 +202,7 @@ jobs:
             inputs.platform, inputs.arch) }}
 
       - name: Upload dist/host for MAR
+        if: inputs.platform != 'mac'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ inputs.arch }}-dist-host
@@ -188,6 +213,7 @@ jobs:
           overwrite: true
 
       - name: Upload application.ini for MAR
+        if: inputs.platform != 'mac'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ inputs.platform }}-${{ inputs.arch }}-application-ini
