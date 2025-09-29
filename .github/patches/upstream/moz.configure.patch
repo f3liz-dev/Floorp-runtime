@@ -33,5 +33,5 @@ index e8b401a7df..ff13cf69ba 100644
  include("../toolkit/moz.configure")
 +
 +## Noraneko Patch
-+include("../floorp/gecko/config/moz.configure")
++include("../.github/assets/config/moz.configure")
 +## End of Noraneko Patch
