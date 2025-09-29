@@ -40,7 +40,7 @@ if [[ -d ".github/assets/branding" ]]; then
   cp -r ./.github/assets/branding/* ./browser/branding/
   
   # Set Branding/Flat Chrome
-  echo "ac_add_options --with-branding=browser/branding/floorp-unofficial" >> mozconfig
+  echo "ac_add_options --with-branding=browser/branding/floorp-daylight" >> mozconfig
   echo "ac_add_options --enable-chrome-format=flat" >> mozconfig
 else
   echo "No custom branding found, using default Firefox branding"
