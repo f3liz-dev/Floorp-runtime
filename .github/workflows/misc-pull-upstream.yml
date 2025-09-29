@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./noraneko_runtime
+        working-directory: ./floorp_runtime
 
     steps:
       - name: Checkout main branch
@@ -24,7 +24,7 @@ jobs:
         with:
           ref: 'main'
           fetch-depth: 0
-          path: noraneko_runtime
+          path: floorp_runtime
 
       - name: Clone upstream Firefox repository
         run: |
@@ -38,7 +38,7 @@ jobs:
           rsync -a --delete \
             --exclude='.git' \
             --exclude='/.github/' \
-            --exclude='/noraneko/' \
+            --exclude='/floorp/' \
             --exclude='/.gitmodules' \
             --exclude='/README.md' \
             ../upstream_release/ ./

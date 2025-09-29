@@ -107,7 +107,7 @@ get_artifact_extension() {
 }
 
 ARTIFACT_EXT=$(get_artifact_extension "$PLATFORM")
-ARTIFACT_NAME="noraneko-${PLATFORM}-${ARCH}-moz-artifact.${ARTIFACT_EXT}"
+ARTIFACT_NAME="floorp-${PLATFORM}-${ARCH}-moz-artifact.${ARTIFACT_EXT}"
 
 echo "📦 Expected artifact name: $ARTIFACT_NAME"
 
@@ -123,10 +123,10 @@ fi
 # Find package files
 case "$PLATFORM" in
     linux|mac)
-        PACKAGE_FILES=($(find "$DIST_DIR" -name "noraneko-*.tar.xz" 2>/dev/null || true))
+        PACKAGE_FILES=($(find "$DIST_DIR" -name "floorp-*.tar.xz" 2>/dev/null || true))
         ;;
     windows)
-        PACKAGE_FILES=($(find "$DIST_DIR" -name "noraneko-*win64.zip" 2>/dev/null || true))
+        PACKAGE_FILES=($(find "$DIST_DIR" -name "floorp-*win64.zip" 2>/dev/null || true))
         ;;
 esac
 
@@ -134,7 +134,7 @@ if [[ ${#PACKAGE_FILES[@]} -eq 0 ]]; then
     echo "❌ No package files found in $DIST_DIR"
     echo "Available files:"
     ls -la "$DIST_DIR" || true
-    find "$DIST_DIR" -name "*noraneko*" -o -name "*.tar.xz" -o -name "*.zip" 2>/dev/null || true
+    find "$DIST_DIR" -name "*floorp*" -o -name "*.tar.xz" -o -name "*.zip" 2>/dev/null || true
     exit 1
 fi
 
@@ -182,7 +182,7 @@ else
     echo "⚠️  application.ini not found at $APP_INI_SRC"
     # Try alternative locations
     ALT_LOCATIONS=(
-        "$OBJDIR/dist/noraneko/application.ini"
+        "$OBJDIR/dist/floorp/application.ini"
         "$OBJDIR/application.ini"
     )
     
