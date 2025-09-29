@@ -22,6 +22,26 @@ if [[ "$PLATFORM" == "linux" ]]; then
   xvfb-run -a -s "-screen 0 1024x768x24" ./mach configure
   xvfb-run -a -s "-screen 0 1024x768x24" nice -n 10 ./mach build --jobs=$MOZ_NUM_JOBS
   xvfb-run -a -s "-screen 0 1024x768x24" ./mach package
+elif [[ "$PLATFORM" == "mac" ]]; then
+  echo "Build environment:"
+  echo "CC=$CC"
+  echo "CXX=$CXX"
+  echo "LD=$LD"
+  echo "AR=$AR"
+  echo "NM=$NM"
+  echo "RANLIB=$RANLIB"
+  echo "STRIP=$STRIP"
+  echo "OBJCOPY=$OBJCOPY"
+  echo "OBJDUMP=$OBJDUMP"
+  echo "READELF=$READELF"
+  echo "PKG_CONFIG=$PKG_CONFIG"
+  echo "PYTHON=$PYTHON"
+  echo "RUSTC=$RUSTC"
+  echo "CARGO=$CARGO"
+  
+  ./mach configure
+  nice -n 10 ./mach build --jobs=$MOZ_NUM_JOBS
+  ./mach package
 else
   ./mach configure
   nice -n 10 ./mach build --jobs=$MOZ_NUM_JOBS
@@ -43,5 +63,14 @@ elif [[ "$PLATFORM" == "linux" ]]; then
   else
     mv obj-x86_64-pc-linux-gnu/dist/floorp-*.tar.xz ~/output/${ARTIFACT_NAME}.tar.xz
     cp obj-x86_64-pc-linux-gnu/dist/bin/application.ini ./floorp-application.ini || true
+  fi
+elif [[ "$PLATFORM" == "mac" ]]; then
+  # Mac-specific packaging
+  if [[ "$ARCH" == "aarch64" ]]; then
+    tar -czf floorp-${ARCH}-apple-darwin-with-pgo.tar.gz ./obj-${ARCH}-apple-darwin/dist/
+    mv floorp-${ARCH}-apple-darwin-with-pgo.tar.gz ~/output/${ARTIFACT_NAME}.tar.gz
+  else
+    tar -czf floorp-${ARCH}-apple-darwin-with-pgo.tar.gz ./obj-${ARCH}-apple-darwin/dist/
+    mv floorp-${ARCH}-apple-darwin-with-pgo.tar.gz ~/output/${ARTIFACT_NAME}.tar.gz
   fi
 fi
