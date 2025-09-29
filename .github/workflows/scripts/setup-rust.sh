@@ -27,6 +27,18 @@ elif [[ "$PLATFORM" == "linux" ]]; then
     rustup default 1.86.0
     rustup target add x86_64-unknown-linux-gnu
   fi
+elif [[ "$PLATFORM" == "mac" ]]; then
+  # Install Rust if pgo_artifact_name is not empty
+  if [[ -n "$PGO_ARTIFACT_NAME" ]]; then
+    rustup toolchain install 1.81.0
+    rustup default 1.81.0
+  fi
+
+  if [[ "$ARCH" == "x86_64" ]]; then
+    rustup target add x86_64-apple-darwin
+  else
+    rustup target add aarch64-apple-darwin
+  fi
 fi
 
 rustc --version --verbose
