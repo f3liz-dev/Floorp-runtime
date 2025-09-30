@@ -20,6 +20,9 @@ on:
       MOZ_BUILD_DATE:
         type: string
         default: ""
+      debug:
+        type: boolean
+        default: false
 
 jobs:
   Integration:
@@ -129,15 +132,24 @@ jobs:
 
           ls ./obj-x86_64-apple-darwin/dist/
 
-          hdiutil attach ./obj-x86_64-apple-darwin/dist/floorp*.mac.dmg
-          cp -r "/Volumes/Floorp/*.app" ./obj-x86_64-apple-darwin/dist/floorp/
+          # Determine the correct app name based on inputs
+          if [[ "$GHA_DEBUG" == "true" ]]; then
+            APP_FILE="${APP_NAME}Debug.app"
+          else
+            APP_FILE="${APP_NAME}.app"
+          fi
+          
+          echo "Looking for app: $APP_FILE"
 
-          hdiutil detach /Volumes/Floorp/
+          hdiutil attach ./obj-x86_64-apple-darwin/dist/floorp*.mac.dmg
+          cp -r "/Volumes/${APP_NAME}/${APP_FILE}" ./obj-x86_64-apple-darwin/dist/floorp/
+          hdiutil detach "/Volumes/${APP_NAME}/"
 
           hdiutil attach ./obj-aarch64-apple-darwin/dist/floorp*.mac.dmg
-          cp -r "/Volumes/Floorp/*.app" ./obj-aarch64-apple-darwin/dist/floorp/
-
-          hdiutil detach /Volumes/Floorp/
+          cp -r "/Volumes/${APP_NAME}/${APP_FILE}" ./obj-aarch64-apple-darwin/dist/floorp/
+          hdiutil detach "/Volumes/${APP_NAME}/"
+        env:
+          GHA_DEBUG: ${{ inputs.debug }}
 
       - name: Integration 🗃
         env:
@@ -207,4 +219,5 @@ jobs:
           path: ./nora-application.ini
           overwrite: true
       # Publish End
+
 
