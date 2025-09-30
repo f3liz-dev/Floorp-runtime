@@ -3,7 +3,7 @@
 
 name: Pull Upstream
 
-'on':
+"on":
   workflow_dispatch:
   workflow_call:
 
@@ -22,7 +22,7 @@ jobs:
       - name: Checkout main branch
         uses: actions/checkout@v5
         with:
-          ref: 'main'
+          ref: "main"
           fetch-depth: 0
           path: floorp_runtime
 
@@ -96,8 +96,8 @@ jobs:
           fi
 
           export FF_VERSION=$(cat browser/config/version.txt)
-          git config user.name "f3liz-bot[bot]"
-          git config user.email "230694705+f3liz-bot@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
           git commit -m "sync: upstream gecko-dev $FF_VERSION"
           git push origin main
