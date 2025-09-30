@@ -72,22 +72,13 @@ fi
 sudo apt install msitools -y
 
 # SCCACHE
-if [[ "$PLATFORM" == "mac" ]]; then
-  # For Mac builds, comment out sccache for now as it's complex in cross-compilation
-  echo "# SCCACHE disabled for Mac cross-compilation" >> mozconfig
-  # echo "mk_add_options 'export RUSTC_WRAPPER=/home/runner/.mozbuild/sccache/sccache'" >> mozconfig
-  # echo "mk_add_options 'export CCACHE_CPP2=yes'" >> mozconfig
-  # echo "ac_add_options --with-ccache=/home/runner/.mozbuild/sccache/sccache" >> mozconfig
-  # echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'" >> mozconfig
-else
-  {
-    echo "mk_add_options 'export RUSTC_WRAPPER=/opt/hostedtoolcache/sccache/0.10.0/x64/sccache'"
-    echo "mk_add_options 'export CCACHE_CPP2=yes'"
-    echo "ac_add_options --with-ccache=/opt/hostedtoolcache/sccache/0.10.0/x64/sccache"
-    echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'"
-    echo "mk_add_options 'export SCCACHE_MAX_FRAME_LENGTH=1048576'"
-  } >> mozconfig
-fi
+{
+  echo "mk_add_options 'export RUSTC_WRAPPER=/opt/hostedtoolcache/sccache/0.10.0/x64/sccache'"
+  echo "mk_add_options 'export CCACHE_CPP2=yes'"
+  echo "ac_add_options --with-ccache=/opt/hostedtoolcache/sccache/0.10.0/x64/sccache"
+  echo "mk_add_options 'export SCCACHE_GHA_ENABLED=on'"
+} >> mozconfig
+
 
 # Debug
 if [[ "$DEBUG" == "true" ]]; then
