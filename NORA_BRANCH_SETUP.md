@@ -2,6 +2,10 @@
 
 This document describes the work completed to set up the `nora-0.2.0` branch.
 
+## ⚠️ ACTION REQUIRED
+
+The `nora-0.2.0` branch has been created locally with all required changes, but **manual push is required** to complete the task. See "Next Steps Required" section below.
+
 ## Steps Completed
 
 1. ✅ Added `upstream` remote pointing to `@Floorp-Projects/Floorp-runtime`
@@ -20,9 +24,24 @@ The `nora-0.2.0` branch is ready locally with all the required changes:
 
 ## Next Steps Required
 
-The `nora-0.2.0` branch needs to be pushed to origin. Due to authentication constraints in the automated environment, manual intervention is required to push the branch:
+The `nora-0.2.0` branch needs to be pushed to origin. Due to authentication constraints in the automated environment, manual intervention is required to push the branch.
+
+### Option 1: Use the provided script
 
 ```bash
+./push-nora-branch.sh
+```
+
+### Option 2: Manual push
+
+```bash
+git push -u origin nora-0.2.0
+```
+
+### Option 3: Using GitHub CLI
+
+```bash
+gh auth login
 git push -u origin nora-0.2.0
 ```
 
