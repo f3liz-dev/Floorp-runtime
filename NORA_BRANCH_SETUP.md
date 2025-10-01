@@ -24,26 +24,38 @@ The `nora-0.2.0` branch is ready locally with all the required changes:
 
 ## Next Steps Required
 
-The `nora-0.2.0` branch needs to be pushed to origin. Due to authentication constraints in the automated environment, manual intervention is required to push the branch.
+The `nora-0.2.0` branch needs to be pushed to origin. Due to authentication constraints in the automated environment, **manual push is required** to complete the task.
 
-### Option 1: Use the provided script
+### Recommended: Use the provided script
+
+The repository includes a script that will push the branch:
 
 ```bash
+cd /home/runner/work/Floorp-runtime/Floorp-runtime
 ./push-nora-branch.sh
 ```
 
-### Option 2: Manual push
+### Alternative: Manual push
+
+If you have appropriate GitHub credentials configured:
 
 ```bash
+cd /home/runner/work/Floorp-runtime/Floorp-runtime
 git push -u origin nora-0.2.0
 ```
 
-### Option 3: Using GitHub CLI
+### Using GitHub CLI
 
 ```bash
+cd /home/runner/work/Floorp-runtime/Floorp-runtime
 gh auth login
 git push -u origin nora-0.2.0
 ```
+
+### After Pushing
+
+Once pushed, the branch will be available at:
+`https://github.com/f3liz-dev/Floorp-runtime/tree/nora-0.2.0`
 
 ## Verification
 
