@@ -29,8 +29,6 @@ jobs:
           rsync -aq --progress upstream_release/ temp_release
           cp -r ./nyanrus_release/.git temp_release
           cp -r ./nyanrus_release/.github temp_release
-          cp ./nyanrus_release/.gitmodules temp_release
-          cp -r ./nyanrus_release/floorp temp_release
           cp ./nyanrus_release/README.md temp_release
 
       - id: apply-git-patches
