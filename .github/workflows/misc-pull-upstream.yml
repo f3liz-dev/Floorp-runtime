@@ -22,10 +22,10 @@ jobs:
         working-directory: ./floorp_runtime
 
     steps:
-      - name: Checkout main branch
+      - name: Checkout branch
         uses: actions/checkout@v5
         with:
-          ref: 'main'
+          ref: ${{ github.ref_name }}
           fetch-depth: 0
           path: floorp_runtime
 
@@ -81,7 +81,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              base: 'main'
+              base: '${{ github.ref_name }}'
             });
 
             const syncPR = pulls.data.find(pr => 
@@ -203,11 +203,12 @@ jobs:
 
           CHANGE_TYPE="${{ steps.version_diff.outputs.change_type }}"
           VERSION="${{ steps.new_version.outputs.version }}"
+          BASE_BRANCH="${{ github.ref_name }}"
           
           if [ "$CHANGE_TYPE" = "no_version_change" ]; then
-            BRANCH_NAME="sync/upstream-no-version-$(date +%Y%m%d-%H%M%S)"
+            BRANCH_NAME="sync/${BASE_BRANCH}/upstream-no-version-$(date +%Y%m%d-%H%M%S)"
           else
-            BRANCH_NAME="sync/upstream-$VERSION"
+            BRANCH_NAME="sync/${BASE_BRANCH}/upstream-$VERSION"
           fi
           
           git config user.name "github-actions[bot]"
@@ -280,7 +281,7 @@ jobs:
             });
 
       - name: Create new Pull Request
-        if: steps.check_changes.outputs.has_changes == 'true' && env.UPDATE_EXISTING == 'false' && env.BRANCH_NAME != ''
+        if: steps.check_changes.outputs.has_changes == 'true' && steps.check_pr.outputs.exists == 'false'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -290,6 +291,7 @@ jobs:
             const changeType = '${{ steps.version_diff.outputs.change_type }}';
             const patchFailed = '${{ steps.patch_check.outputs.patch_failed }}' === 'true';
             const failedPatches = process.env.FAILED_PATCHES || '';
+            const baseBranch = '${{ github.ref_name }}';
 
             let title, body;
 
@@ -297,6 +299,7 @@ jobs:
               title = `sync: no_version_change upstream ${oldVersion}`;
               
               body = `## Upstream Sync\n\n`;
+              body += `- **Base branch**: ${baseBranch}\n`;
               body += `- **Current version**: ${oldVersion}\n`;
               body += `- **Change type**: File changes without version change\n\n`;
               
@@ -313,6 +316,7 @@ jobs:
               title = `sync: ${changeType} upstream ${oldVersion} → ${newVersion}`;
               
               body = `## Upstream Sync\n\n`;
+              body += `- **Base branch**: ${baseBranch}\n`;
               body += `- **Previous version**: ${oldVersion}\n`;
               body += `- **New version**: ${newVersion}\n`;
               body += `- **Change type**: ${changeType}\n\n`;
@@ -333,6 +337,6 @@ jobs:
               repo: context.repo.repo,
               title: title,
               head: process.env.BRANCH_NAME,
-              base: 'main',
+              base: baseBranch,
               body: body
             });
