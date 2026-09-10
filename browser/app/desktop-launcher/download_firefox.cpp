@@ -3,11 +3,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "download_firefox.h"
-#include <iostream>
-#include <memory>
 #include <optional>
 #include <string>
-#include <wchar.h>
 #include <windows.h>
 #include <winhttp.h>
 #include "data_sink.h"
@@ -87,8 +84,7 @@ std::optional<std::wstring> get_object_name() {
   static_assert(false);
 #endif
 
-  return L"https://download.mozilla.org/?os=" + arch.value() + L"&lang=" +
-         lang + L"&product=" + product;
+  return L"?os=" + arch.value() + L"&lang=" + lang + L"&product=" + product;
 }
 
 /**

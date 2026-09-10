@@ -4,8 +4,6 @@ const PREF_GETADDONS_CACHE_ENABLED = "extensions.getAddons.cache.enabled";
 const PREF_METADATA_LASTUPDATE = "extensions.getAddons.cache.lastUpdate";
 Services.prefs.setBoolPref(PREF_GETADDONS_CACHE_ENABLED, true);
 
-AddonTestUtils.init(this);
-AddonTestUtils.overrideCertDB();
 AddonTestUtils.createAppInfo(
   "xpcshell@tests.mozilla.org",
   "XPCShell",
@@ -154,11 +152,12 @@ function promiseLocaleChanged(requestedLocale) {
     let localeObserver = {
       observe(aSubject, aTopic) {
         switch (aTopic) {
-          case REQ_LOC_CHANGE_EVENT:
+          case REQ_LOC_CHANGE_EVENT: {
             let reqLocs = Services.locale.requestedLocales;
             equal(reqLocs[0], requestedLocale);
             Services.obs.removeObserver(localeObserver, REQ_LOC_CHANGE_EVENT);
             resolve();
+          }
         }
       },
     };

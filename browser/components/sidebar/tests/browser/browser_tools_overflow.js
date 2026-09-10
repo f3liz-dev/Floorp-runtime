@@ -56,7 +56,7 @@ async function mouseMoveInChunksVertical(el, deltaY, numberOfChunks) {
 }
 
 function getToolsHeight({ SidebarController } = window) {
-  return SidebarController.sidebarMain.buttonGroup.clientHeight;
+  return SidebarController.sidebarMain.buttonsWrapper.clientHeight;
 }
 
 async function resetToolsHeight() {
@@ -66,14 +66,21 @@ async function resetToolsHeight() {
   await SidebarController.sidebarMain.updateComplete;
   await SidebarController.waitUntilStable();
   await BrowserTestUtils.waitForMutationCondition(
-    SidebarController.sidebarMain.buttonGroup,
+    SidebarController.sidebarMain.buttonsWrapper,
     { attributes: true, attributeFilter: ["overflowing"] },
-    () => !SidebarController.sidebarMain.shouldShowOverflowButton
+    () => !SidebarController.sidebarMain.shouldShowOverflowButton,
+    {
+      msg: "Tools stopped overflowing",
+      // resizeTools drives the resize a frame at a time, which runs past a
+      // minute under tsan. That leaves no room under the harness timeout for a
+      // bound of our own, so let the harness be the one that gives up.
+      timeout: Infinity,
+    }
   );
 }
 
 add_task(async function test_resize_of_tools() {
-  await SidebarController.initializeUIState({
+  await SidebarController.updateUIState({
     launcherExpanded: false,
   });
 
@@ -86,7 +93,7 @@ add_task(async function test_resize_of_tools() {
   await resetToolsHeight();
   let overflowButton = SidebarController.sidebarMain.moreToolsButton;
   Assert.ok(
-    !overflowButton,
+    !overflowButton.checkVisibility(),
     "The overflow button is not visible before resize"
   );
 
@@ -96,7 +103,7 @@ add_task(async function test_resize_of_tools() {
   await SidebarController.sidebarMain.updateComplete;
   await SidebarController.waitUntilStable();
   await BrowserTestUtils.waitForMutationCondition(
-    SidebarController.sidebarMain.buttonGroup,
+    SidebarController.sidebarMain.buttonsWrapper,
     { attributes: true, attributeFilter: ["overflowing"] },
     () => SidebarController.sidebarMain.shouldShowOverflowButton
   );
@@ -122,7 +129,7 @@ add_task(async function test_resize_of_tools() {
 });
 
 add_task(async function test_overflow_menu() {
-  await SidebarController.initializeUIState({
+  await SidebarController.updateUIState({
     launcherExpanded: false,
   });
 
@@ -135,7 +142,7 @@ add_task(async function test_overflow_menu() {
   await resetToolsHeight();
   let overflowButton = SidebarController.sidebarMain.moreToolsButton;
   Assert.ok(
-    !overflowButton,
+    !overflowButton.checkVisibility(),
     "The overflow button is not visible before resize"
   );
 
@@ -145,7 +152,7 @@ add_task(async function test_overflow_menu() {
   await SidebarController.sidebarMain.updateComplete;
   await SidebarController.waitUntilStable();
   await BrowserTestUtils.waitForMutationCondition(
-    SidebarController.sidebarMain.buttonGroup,
+    SidebarController.sidebarMain.buttonsWrapper,
     { attributes: true, attributeFilter: ["overflowing"] },
     () => SidebarController.sidebarMain.shouldShowOverflowButton
   );
@@ -194,7 +201,7 @@ add_task(async function test_overflow_menu() {
 });
 
 add_task(async function test_overflow_menu_with_keyboard() {
-  await SidebarController.initializeUIState({
+  await SidebarController.updateUIState({
     launcherExpanded: false,
   });
 
@@ -207,7 +214,7 @@ add_task(async function test_overflow_menu_with_keyboard() {
   await resetToolsHeight();
   let overflowButton = SidebarController.sidebarMain.moreToolsButton;
   Assert.ok(
-    !overflowButton,
+    !overflowButton.checkVisibility(),
     "The overflow button is not visible before resize"
   );
 
@@ -217,7 +224,7 @@ add_task(async function test_overflow_menu_with_keyboard() {
   await SidebarController.sidebarMain.updateComplete;
   await SidebarController.waitUntilStable();
   await BrowserTestUtils.waitForMutationCondition(
-    SidebarController.sidebarMain.buttonGroup,
+    SidebarController.sidebarMain.buttonsWrapper,
     { attributes: true, attributeFilter: ["overflowing"] },
     () => SidebarController.sidebarMain.shouldShowOverflowButton
   );
@@ -267,6 +274,7 @@ add_task(async function test_overflow_menu_with_keyboard() {
   let customizeSidebarButton = overflowMenu.querySelector(
     "moz-button[view=viewCustomizeSidebar]"
   );
+  customizeSidebarButton.focus();
   ok(
     isActiveElement(customizeSidebarButton),
     "Customize sidebar button is focused."
@@ -293,15 +301,94 @@ add_task(async function test_overflow_menu_with_keyboard() {
   }
 });
 
+add_task(
+  async function test_overflowing_buttons_restored_switching_to_horizontal() {
+    await SidebarController.updateUIState({
+      launcherExpanded: false,
+    });
+
+    await SpecialPowers.pushPrefEnv({
+      set: [
+        ["sidebar.main.tools", "aichat,passwords,syncedtabs,history,bookmarks"],
+      ],
+    });
+
+    const sidebar = SidebarController.sidebarMain;
+    await resetToolsHeight();
+
+    info("Resize the tools container to force overflow.");
+    await resizeTools(600);
+    await sidebar.updateComplete;
+    await SidebarController.waitUntilStable();
+    await BrowserTestUtils.waitForMutationCondition(
+      sidebar.buttonsWrapper,
+      { attributes: true, attributeFilter: ["overflowing"] },
+      () => sidebar.shouldShowOverflowButton
+    );
+
+    await BrowserTestUtils.waitForMutationCondition(
+      sidebar.buttonsWrapper,
+      { attributes: true, attributeFilter: ["style"], subtree: true },
+      () =>
+        Array.from(sidebar.toolButtons).some(
+          button => button.style.visibility === "hidden"
+        ),
+      {
+        msg: "At least one tool button is hidden while overflowing in vertical tabs.",
+      }
+    );
+
+    info("Switch to horizontal tabs.");
+    await SpecialPowers.pushPrefEnv({ set: [[VERTICAL_TABS_PREF, false]] });
+    await sidebar.updateComplete;
+    await SidebarController.waitUntilStable();
+
+    await BrowserTestUtils.waitForMutationCondition(
+      sidebar.buttonsWrapper,
+      { attributes: true, attributeFilter: ["style"], subtree: true },
+      () =>
+        Array.from(sidebar.toolButtons).every(
+          button => button.style.visibility !== "hidden"
+        ),
+      {
+        msg: "No tool buttons remain hidden after switching to horizontal tabs.",
+      }
+    );
+    for (const button of sidebar.toolButtons) {
+      is(
+        window.getComputedStyle(button).visibility,
+        "visible",
+        `Tool button ${button.getAttribute("view")} is visible in horizontal tabs.`
+      );
+    }
+    ok(
+      !sidebar.shouldShowOverflowButton,
+      "Overflow button is not shown in horizontal tabs."
+    );
+    is(
+      document.getElementById("tools-overflow-list").childElementCount,
+      0,
+      "Overflow panel copies were cleared."
+    );
+
+    info("Switch back to vertical tabs.");
+    await SpecialPowers.popPrefEnv();
+    await sidebar.updateComplete;
+    await resetToolsHeight();
+
+    while (gBrowser.tabs.length > 1) {
+      BrowserTestUtils.removeTab(gBrowser.tabs.at(-1));
+    }
+  }
+);
+
 add_task(async function test_tools_overflow() {
   const sidebar = document.querySelector("sidebar-main");
   ok(sidebar, "Sidebar is shown.");
   sidebar.expanded = true;
   await sidebar.updateComplete;
 
-  let toolsAndExtensionsButtonGroup = sidebar.shadowRoot.querySelector(
-    ".tools-and-extensions"
-  );
+  let toolsAndExtensionsButtonGroup = sidebar.buttonGroup;
   Assert.strictEqual(
     toolsAndExtensionsButtonGroup.getAttribute("orientation"),
     "horizontal",

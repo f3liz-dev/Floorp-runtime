@@ -125,6 +125,16 @@ interface nsIUrlClassifierUtils : nsISupports
   ACString convertLocalListNameToServerListNameV5(in ACString localListName);
 
   /**
+   * Convert V5 threat type to list name.
+   *
+   * @param Integer to indicate threat type.
+   *
+   * @returns The list names separated by ','. For example,
+   *          'goog-phish-proto,test-phish-proto'.
+   */
+  ACString convertThreatTypeToListNamesV5(in uint32_t threatType);
+
+  /**
    * Make update request for given lists and their states.
    *
    * @param aListNames An array of list name represented in string.
@@ -155,7 +165,7 @@ interface nsIUrlClassifierUtils : nsISupports
    *
    * @param aListNames An array of list names represented in string.
    * @param aListStatesBase64 An array of list states represented in base64.
-   * @param aPrefixes An array of prefixes for which we'd like to find full hashes..
+   * @param aPrefixes An array of prefixes for which we'd like to find full hashes.
    *
    * The aListNames and aListStatesBase64 arrays must be the same length.
    *
@@ -164,6 +174,16 @@ interface nsIUrlClassifierUtils : nsISupports
   ACString makeFindFullHashRequestV4(in Array<ACString> aListNames,
                                      in Array<ACString> aListStatesBase64,
                                      in Array<ACString> aPrefixes);
+
+  /**
+   * Make "hashes:search" request by for the given prefixes.
+   *
+   * @param aHashPrefixes An array of prefixes for which we'd like to find full
+   *                      hashes.
+   *
+   * @returns A query parameter string for the "hashes:search" request.
+   */
+  ACString makeFindFullHashRequestV5(in Array<ACString> aHashPrefixes);
 
   /**
    * Make ThreatHit report request body.
@@ -186,5 +206,16 @@ interface nsIUrlClassifierUtils : nsISupports
    *                  Can be called multiple times in one parsing.
    */
   void parseFindFullHashResponseV4(in ACString aResponse,
+                                   in nsIUrlClassifierParseFindFullHashCallback aCallback);
+
+  /**
+   * Parse FindFullHash response for the V5 protocol. In V5, the FindFullHash
+   * is implemented as the hashes::search API.
+   *
+   * @param aResponse Byte stream from the server.
+   * @param aCallback The callback function on each complete hash parsed.
+   *                  Can be called multiple times in one parsing.
+   */
+  void parseFindFullHashResponseV5(in ACString aResponse,
                                    in nsIUrlClassifierParseFindFullHashCallback aCallback);
 };

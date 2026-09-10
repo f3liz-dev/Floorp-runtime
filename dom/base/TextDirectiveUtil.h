@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -137,8 +135,11 @@ class TextDirectiveUtil final {
   /** Advances the start of `aRange` to the next non-whitespace position.
    * The function follows this section of the spec:
    * https://wicg.github.io/scroll-to-text-fragment/#next-non-whitespace-position
+   *
+   * Returns true if the range was successfully advanced to a non-whitespace
+   * position in a text node, false otherwise (that indicates end of document).
    */
-  static void AdvanceStartToNextNonWhitespacePosition(nsRange& aRange);
+  static bool AdvanceStartToNextNonWhitespacePosition(nsRange& aRange);
 
   /**
    * @brief Returns a point moved by one character or unicode surrogate pair.
@@ -167,6 +168,7 @@ class TextDirectiveUtil final {
   static RangeBoundary FindNextNonWhitespacePosition(
       const RangeBoundary& aPoint);
 
+  enum class BreakOnPunctuation : bool { No, Yes };
   /**
    * @brief Creates a new RangeBoundary at the nearest word boundary.
    *
@@ -174,13 +176,15 @@ class TextDirectiveUtil final {
    * This algorithm can find word boundaries across node boundaries and stops at
    * a block boundary.
    *
-   * @param aRangeBoundary[in] The range boundary that should be moved.
-   *                           Must be set and valid.
-   * @param direction[in]     The direction into which to move.
+   * @param aRangeBoundary[in]  The range boundary that should be moved.
+   *                            Must be set and valid.
+   * @param direction[in]       The direction into which to move.
+   * @param aBreakOnPunctuation Whether to count punctuation as separate words.
    * @return A new `RangeBoundary` which is moved to the nearest word boundary.
    */
   template <TextScanDirection direction>
-  static RangeBoundary FindWordBoundary(const RangeBoundary& aRangeBoundary);
+  static RangeBoundary FindWordBoundary(const RangeBoundary& aRangeBoundary,
+                                        BreakOnPunctuation aBreakOnPunctuation);
 
   /**
    * @brief Compares the common substring between a reference string and a text
@@ -225,6 +229,39 @@ class TextDirectiveUtil final {
   static bool WordIsJustWhitespaceOrPunctuation(const nsAString& aString,
                                                 uint32_t aWordBegin,
                                                 uint32_t aWordEnd);
+
+  /**
+   * @brief Returns true if `aString` contains at least two words.
+   *
+   * Words which are just whitespace or punctuation are not counted, following
+   * the same definition of a word as the word boundary algorithms in this
+   * class.
+   */
+  static bool ContainsAtLeastTwoWords(const nsAString& aString);
+
+  /**
+   * @brief Finds the position of the beginning of the second word (in
+   *        `direction`), then removes everything up to that position from
+   *       `aString` and `aWordDistances`.
+   *
+   * This function modifies both `aString` and `aWordDistances`.
+   * It expects `aString` to be non-empty, and to contain at least two words,
+   * as indicated by `aWordDistances` containing at least two elements.
+   *
+   * @tparam direction Either left-to-right or right-to-left.
+   * @param aString        The string to modify. Must not be empty.
+   * @param aWordDistances The array of word boundary distances. The distances
+   *                       are always sorted and contain monotonically
+   *                       increasing values. For LTR, the distances are based
+   *                       off the beginning of the string. For RTL, the
+   *                       distances are based off the end of the string. Must
+   *                       contain at least two elements.
+   * @return The length of the first word including whitespace and
+   *         punctuation up to the beginning of the second word.
+   */
+  template <TextScanDirection direction>
+  static uint32_t RemoveFirstWordFromStringAndDistanceArray(
+      nsAString& aString, nsTArray<uint32_t>& aWordDistances);
 };
 
 class TimeoutWatchdog final {
@@ -333,8 +370,10 @@ template <TextScanDirection direction>
 
   Maybe<int32_t> compare =
       direction == TextScanDirection::Left
-          ? nsContentUtils::ComparePoints(aRange.StartRef(), boundary)
-          : nsContentUtils::ComparePoints(boundary, aRange.EndRef());
+          ? nsContentUtils::ComparePoints<TreeKind::ShadowIncludingDOM>(
+                aRange.StartRef(), boundary)
+          : nsContentUtils::ComparePoints<TreeKind::ShadowIncludingDOM>(
+                boundary, aRange.EndRef());
   if (compare && *compare == -1) {
     // *compare == -1 means that the found boundary is after the range start
     // when looking left, and before the range end when looking right.
@@ -404,7 +443,8 @@ template <TextScanDirection direction>
 
 template <TextScanDirection direction>
 /*static*/ RangeBoundary TextDirectiveUtil::FindWordBoundary(
-    const RangeBoundary& aRangeBoundary) {
+    const RangeBoundary& aRangeBoundary,
+    BreakOnPunctuation aBreakOnPunctuation) {
   MOZ_ASSERT(aRangeBoundary.IsSetAndValid());
   nsINode* node = aRangeBoundary.GetContainer();
   uint32_t offset = *aRangeBoundary.Offset(
@@ -453,15 +493,34 @@ template <TextScanDirection direction>
         --offset;
       }
     }
-    const uint32_t pos =
+    uint32_t pos =
         direction == TextScanDirection::Left ? offset : bufferLength + offset;
-    const auto [wordStart, wordEnd] =
-        intl::WordBreaker::FindWord(textBuffer, pos);
-    offset = direction == TextScanDirection::Left ? wordStart
-                                                  : wordEnd - bufferLength;
-    node = textNode;
-    if (offset && offset < textNode->Length()) {
-      break;
+    while (true) {
+      const auto [wordStart, wordEnd] =
+          intl::WordBreaker::FindWord(textBuffer, pos);
+      offset = direction == TextScanDirection::Left ? wordStart
+                                                    : wordEnd - bufferLength;
+      node = textNode;
+      if (offset == 0 || offset >= textNode->Length()) {
+        // need to include more text nodes to be sure of word boundary
+        break;
+      }
+      if (aBreakOnPunctuation == BreakOnPunctuation::Yes ||
+          !WordIsJustWhitespaceOrPunctuation(textBuffer, wordStart, wordEnd)) {
+        return {node, offset};
+      }
+      // Word is just punctuation - continue to next word break
+      if constexpr (direction == TextScanDirection::Left) {
+        if (wordStart == 0) {
+          break;
+        }
+        pos = wordStart - 1;
+      } else {
+        if (wordEnd == textBuffer.Length()) {
+          break;
+        }
+        pos = wordEnd;
+      }
     }
   }
   return {node, offset};
@@ -645,6 +704,50 @@ template <TextScanDirection direction>
   return commonLength;
 }
 
+template <TextScanDirection direction>
+/*static*/ uint32_t
+TextDirectiveUtil::RemoveFirstWordFromStringAndDistanceArray(
+    nsAString& aString, nsTArray<uint32_t>& aWordDistances) {
+  MOZ_DIAGNOSTIC_ASSERT(!aString.IsEmpty());
+  MOZ_DIAGNOSTIC_ASSERT(aWordDistances.Length() > 1);
+  auto lengthOfFirstWordPlusWhitespaceAndPunctuation = aWordDistances[0];
+  auto chIsWhitespaceOrPunctuation = [&](uint32_t distance) {
+    const char16_t ch = aString.CharAt(direction == TextScanDirection::Right
+                                           ? distance
+                                           : aString.Length() - distance - 1);
+    return nsContentUtils::IsHTMLWhitespace(ch) ||
+           mozilla::IsPunctuationForWordSelect(ch);
+  };
+  while (lengthOfFirstWordPlusWhitespaceAndPunctuation < aString.Length() &&
+         chIsWhitespaceOrPunctuation(
+             lengthOfFirstWordPlusWhitespaceAndPunctuation)) {
+    ++lengthOfFirstWordPlusWhitespaceAndPunctuation;
+  }
+  if (lengthOfFirstWordPlusWhitespaceAndPunctuation == aString.Length()) {
+    // In this case the string only contains whitespace or punctuation after the
+    // first word.
+    aWordDistances.Clear();
+    return lengthOfFirstWordPlusWhitespaceAndPunctuation;
+  }
+  // Adjust all distances to be relative to the new start position.
+  // In the case that the loop above jumps over punctuation which is actually
+  // considered to be a word, the distance underflows (or becomes zero).
+  // These obsolete distances are then removed.
+  for (auto& wordDistance : aWordDistances) {
+    wordDistance -= lengthOfFirstWordPlusWhitespaceAndPunctuation;
+  }
+  aWordDistances.RemoveElementsBy([&aString](uint32_t distance) {
+    return distance == 0 || distance > aString.Length();
+  });
+  if constexpr (direction == TextScanDirection::Right) {
+    aString = Substring(aString, lengthOfFirstWordPlusWhitespaceAndPunctuation);
+  } else {
+    aString = Substring(
+        aString, 0,
+        aString.Length() - lengthOfFirstWordPlusWhitespaceAndPunctuation);
+  }
+  return lengthOfFirstWordPlusWhitespaceAndPunctuation;
+}
 }  // namespace mozilla::dom
 
 #endif

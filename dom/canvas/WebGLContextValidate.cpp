@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -22,7 +21,6 @@
 #include "WebGLVertexArray.h"
 #include "gfxEnv.h"
 #include "jsfriendapi.h"
-#include "mozilla/CheckedInt.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_webgl.h"
 #include "nsPrintfCString.h"
@@ -241,6 +239,12 @@ static webgl::Limits MakeLimits(const WebGLContext& webgl) {
   if (webgl.IsWebGL2() ||
       limits.supportedExtensions[WebGLExtensionID::WEBGL_draw_buffers]) {
     gl.GetUIntegerv(LOCAL_GL_MAX_DRAW_BUFFERS, &limits.maxColorDrawBuffers);
+    // The driver may report `MAX_DRAW_BUFFERS` larger than the compile-time
+    // `webgl::kMaxDrawBuffers` that sizes all per-color-buffer host state (e.g.
+    // `WebGLFramebuffer::mColorAttachments`). Clamp so attachment indices
+    // derived from this limit can never exceed those fixed-size arrays.
+    limits.maxColorDrawBuffers =
+        std::min(limits.maxColorDrawBuffers, uint32_t{webgl::kMaxDrawBuffers});
   }
 
   if (limits.supportedExtensions[WebGLExtensionID::EXT_disjoint_timer_query]) {
@@ -489,6 +493,13 @@ bool WebGLContext::InitAndValidateGL(FailureReason* const out_failReason) {
     gl->fEnable(LOCAL_GL_TEXTURE_CUBE_MAP_SEAMLESS);
   }
 
+  if (!gl->IsGLES() && gl->ShadingLanguageVersion() < 150) {
+    const nsPrintfCString reason("GL_SHADING_LANGUAGE_VERSION: %u < 150!",
+                                 gl->ShadingLanguageVersion());
+    *out_failReason = {"FEATURE_FAILURE_WEBGL_GLSL_VERSION", reason};
+    return false;
+  }
+
   // initialize shader translator
   if (!sh::Initialize()) {
     *out_failReason = {"FEATURE_FAILURE_WEBGL_GLSL",
@@ -608,7 +619,7 @@ bool WebGLContext::ValidateFramebufferTarget(GLenum target) const {
       break;
   }
 
-  if (MOZ_LIKELY(isValid)) {
+  if (isValid) [[likely]] {
     return true;
   }
 

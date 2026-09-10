@@ -4,6 +4,9 @@
 const { LinkPreview } = ChromeUtils.importESModule(
   "moz-src:///browser/components/genai/LinkPreview.sys.mjs"
 );
+const { MLUninstallService } = ChromeUtils.importESModule(
+  "chrome://global/content/ml/Utils.sys.mjs"
+);
 const { Region } = ChromeUtils.importESModule(
   "resource://gre/modules/Region.sys.mjs"
 );
@@ -26,6 +29,7 @@ const TEST_LINK_URL = "https://example.com";
 
 registerCleanupFunction(() => {
   Services.prefs.clearUserPref("browser.ml.linkPreview.onboardingTimes");
+  Services.prefs.clearUserPref("browser.ml.linkPreview.supportedLocales");
 });
 
 /**
@@ -88,7 +92,11 @@ add_task(async function test_skip_generate_if_non_eng() {
   );
   await BrowserTestUtils.waitForEvent(panel, "popupshown");
 
-  is(generateStub.callCount, 1, "generateTextAI for allowed language");
+  is(
+    generateStub.callCount,
+    LinkPreview.canRunOnDevice ? 1 : 0,
+    "generateTextAI called for allowed language only when backend is available"
+  );
 
   panel.remove();
   generateStub.restore();
@@ -188,15 +196,25 @@ add_task(async function test_link_preview_with_long_press() {
 
   is(LinkPreview.cancelLongPress, null, "long press not started");
 
-  window.dispatchEvent(new MouseEvent("mousedown", { button: 1 }));
+  window.dispatchEvent(new MouseEvent("mousedown", { button: 1, buttons: 4 }));
 
   is(LinkPreview.cancelLongPress, null, "long press ignore non-primary button");
 
-  window.dispatchEvent(new MouseEvent("mousedown", { ctrlKey: true }));
+  window.dispatchEvent(
+    new MouseEvent("mousedown", { buttons: 1, ctrlKey: true })
+  );
 
   is(LinkPreview.cancelLongPress, null, "long press ignore modifier keys");
 
   window.dispatchEvent(new MouseEvent("mousedown"));
+
+  is(
+    LinkPreview.cancelLongPress,
+    null,
+    "long press ignore activation without a held button"
+  );
+
+  window.dispatchEvent(new MouseEvent("mousedown", { buttons: 1 }));
 
   ok(LinkPreview.cancelLongPress, "long press timer started");
 
@@ -205,7 +223,7 @@ add_task(async function test_link_preview_with_long_press() {
   is(LinkPreview.cancelLongPress, null, "long press cancelled");
   is(stub.callCount, 0, "no link preview shown");
 
-  window.dispatchEvent(new MouseEvent("mousedown"));
+  window.dispatchEvent(new MouseEvent("mousedown", { buttons: 1 }));
 
   await TestUtils.waitForCondition(
     () => stub.callCount,
@@ -419,6 +437,27 @@ add_task(async function test_fetch_page_data() {
 });
 
 /**
+ * Test that Shift-JIS encoding is handled correctly.
+ */
+add_task(async function test_fetch_shift_jis() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.ml.linkPreview.enabled", true]],
+  });
+  const actor =
+    window.browsingContext.currentWindowContext.getActor("LinkPreview");
+  const result = await actor.fetchPageData(
+    "https://example.com/browser/browser/components/genai/tests/browser/data/encodingWithShiftJIS.html"
+  );
+
+  ok(!result.error, "should not have an error");
+  is(
+    result.rawMetaInfo["html:title"],
+    "Shift-JIS テスト",
+    "title should be correct"
+  );
+});
+
+/**
  * Test fetching errors.
  */
 add_task(async function test_fetch_errors() {
@@ -427,7 +466,7 @@ add_task(async function test_fetch_errors() {
   });
   const actor =
     window.browsingContext.currentWindowContext.getActor("LinkPreview");
-  // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+  // eslint-disable-next-line sdl/no-insecure-url
   let result = await actor.fetchPageData("http://example.com/");
 
   ok(result.error, "got error from fetching http");
@@ -490,6 +529,22 @@ add_task(async function test_link_preview_panel_shown() {
   is(events[0].extra.tab, "blank", "tab context is blank");
 
   await BrowserTestUtils.waitForEvent(panel, "popupshown");
+
+  if (!LinkPreview.canRunOnDevice) {
+    const previewCard = panel.querySelector("link-preview-card");
+    ok(previewCard, "card still renders the regular preview without a backend");
+    await previewCard.updateComplete;
+    ok(!previewCard.generating, "card is not generating without a backend");
+    ok(
+      !previewCard.shadowRoot.querySelector(".keypoints-header"),
+      "no key points section without a backend"
+    );
+    is(stub.callCount, 0, "generateTextAI not called without a backend");
+    panel.remove();
+    stub.restore();
+    LinkPreview.keyboardComboActive = false;
+    return;
+  }
 
   is(stub.callCount, 1, "would have generated key points");
   events = Glean.genaiLinkpreview.fetch.testGetValue();
@@ -698,7 +753,66 @@ add_task(async function test_no_key_points_in_disallowed_region() {
 
   Services.prefs.clearUserPref("browser.ml.linkPreview.noKeyPointsRegions");
 
-  ok(LinkPreview.canShowKeyPoints, "could show key points");
+  is(
+    LinkPreview.canShowKeyPoints,
+    LinkPreview.canRunOnDevice,
+    "key points track hardware support once the region is allowed"
+  );
+});
+
+/**
+ * Test that no key points are generated and no key points UI is rendered when
+ * the device hardware cannot run the llama.cpp backend, while the rest of the
+ * preview card still renders.
+ */
+add_task(async function test_no_key_points_on_unsupported_hardware() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.ml.linkPreview.enabled", true]],
+  });
+
+  const canRunStub = sinon.stub(LinkPreview, "canRunOnDevice").get(() => false);
+  const generateStub = sinon.stub(LinkPreviewModel, "generateTextAI");
+
+  ok(
+    !LinkPreview.canShowKeyPoints,
+    "should not show key points on unsupported hardware"
+  );
+
+  LinkPreview.keyboardComboActive = true;
+  XULBrowserWindow.setOverLink(
+    "https://example.com/browser/browser/components/genai/tests/browser/data/readableEn.html",
+    {}
+  );
+
+  let panel = await TestUtils.waitForCondition(() =>
+    document.getElementById("link-preview-panel")
+  );
+  await BrowserTestUtils.waitForEvent(panel, "popupshown");
+
+  is(
+    generateStub.callCount,
+    0,
+    "generateTextAI should not be called on unsupported hardware"
+  );
+
+  const card = panel.querySelector("link-preview-card");
+  ok(card, "card still renders the regular preview");
+  await card.updateComplete;
+  ok(
+    !card.shadowRoot.querySelector(".keypoints-header"),
+    "key points section should not be rendered"
+  );
+
+  panel.remove();
+  LinkPreview.keyboardComboActive = false;
+  generateStub.restore();
+  canRunStub.restore();
+
+  is(
+    LinkPreview.canShowKeyPoints,
+    LinkPreview.canRunOnDevice,
+    "key points track hardware support once the stub is restored"
+  );
 });
 
 /**
@@ -726,6 +840,22 @@ add_task(async function test_link_preview_error_rendered() {
   const card = panel.querySelector("link-preview-card");
   ok(card, "Found link-preview-card in panel");
 
+  if (!LinkPreview.canRunOnDevice) {
+    await card.updateComplete;
+    ok(
+      !card.shadowRoot.querySelector(".keypoints-header"),
+      "no key points section without a backend"
+    );
+    ok(
+      !card.shadowRoot.querySelector(".og-error-message"),
+      "no key points error message rendered without a backend"
+    );
+    panel.remove();
+    generateStub.restore();
+    LinkPreview.keyboardComboActive = false;
+    return;
+  }
+
   // Check that errors are off by default.
   ok(
     !card.isMissingDataErrorState,
@@ -743,13 +873,8 @@ add_task(async function test_link_preview_error_rendered() {
   ok(ogErrorEl1, "og-error-message shown with isMissingDataErrorState = true");
   is(
     ogErrorEl1.getAttribute("data-l10n-id"),
-    "link-preview-generation-error-missing-data",
+    "link-preview-generation-error-missing-data-v2",
     "Correct fluent ID for missing data error"
-  );
-  is(
-    ogErrorEl1.textContent.trim(),
-    "We can’t generate key points for this webpage.",
-    "Correct localized message for missing data error"
   );
 
   // Switch to a "generation error"
@@ -788,7 +913,7 @@ add_task(async function test_link_preview_error_rendered() {
 
 /**
  * Test that settings icon is correctly rendered in the link preview card.
-//  */
+ */
 add_task(async function test_link_preview_settings_icon_rendered() {
   await SpecialPowers.pushPrefEnv({
     set: [["browser.ml.linkPreview.enabled", true]],
@@ -876,6 +1001,23 @@ add_task(async function test_toggle_expand_collapse() {
   const card = panel.querySelector("link-preview-card");
   ok(card, "Card created for link preview");
 
+  if (!LinkPreview.canRunOnDevice) {
+    await card.updateComplete;
+    ok(
+      !card.shadowRoot.querySelector(".keypoints-header"),
+      "no key points header to toggle without a backend"
+    );
+    is(
+      generateStub.callCount,
+      0,
+      "generateTextAI not called without a backend"
+    );
+    panel.remove();
+    generateStub.restore();
+    LinkPreview.keyboardComboActive = false;
+    return;
+  }
+
   is(card.collapsed, false, "Card should start expanded");
   is(
     generateStub.callCount,
@@ -918,4 +1060,94 @@ add_task(async function test_toggle_expand_collapse() {
   panel.remove();
   generateStub.restore();
   LinkPreview.keyboardComboActive = false;
+});
+
+/**
+ * Test that the Link Preview feature does not generate key points in unsupported locales.
+ */
+add_task(async function test_no_key_points_in_unsupported_locale() {
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.ml.linkPreview.enabled", true],
+      ["browser.ml.linkPreview.optin", true],
+    ],
+  });
+
+  const localeStub = sinon
+    .stub(LinkPreview, "_isLocaleSupported")
+    .returns(false);
+  const generateStub = sinon.stub(LinkPreviewModel, "generateTextAI");
+
+  LinkPreview.keyboardComboActive = true;
+  XULBrowserWindow.setOverLink(
+    "https://example.com/browser/browser/components/genai/tests/browser/data/readableEn.html",
+    {}
+  );
+
+  let panel = await TestUtils.waitForCondition(() =>
+    document.getElementById("link-preview-panel")
+  );
+  await BrowserTestUtils.waitForEvent(panel, "popupshown");
+
+  const card = panel.querySelector("link-preview-card");
+  ok(card, "Card created for link preview");
+
+  is(
+    generateStub.callCount,
+    0,
+    "generateTextAI should not be called when locale is not supported"
+  );
+  ok(!LinkPreview.canShowKeyPoints, "should not show key points");
+
+  panel.remove();
+  LinkPreview.keyboardComboActive = false;
+  localeStub.restore();
+  generateStub.restore();
+});
+
+/**
+ * Test that the Link Preview feature does generate key points in supported locales.
+ */
+add_task(async function test_key_points_in_supported_locale() {
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.ml.linkPreview.enabled", true],
+      ["browser.ml.linkPreview.optin", true],
+    ],
+  });
+
+  const localeStub = sinon
+    .stub(LinkPreview, "_isLocaleSupported")
+    .returns(true);
+  const generateStub = sinon.stub(LinkPreviewModel, "generateTextAI");
+
+  LinkPreview.keyboardComboActive = true;
+  XULBrowserWindow.setOverLink(
+    "https://example.com/browser/browser/components/genai/tests/browser/data/readableEn.html",
+    {}
+  );
+
+  let panel = await TestUtils.waitForCondition(() =>
+    document.getElementById("link-preview-panel")
+  );
+  await BrowserTestUtils.waitForEvent(panel, "popupshown");
+
+  const card = panel.querySelector("link-preview-card");
+  ok(card, "Card created for link preview");
+
+  is(
+    generateStub.callCount,
+    LinkPreview.canRunOnDevice ? 1 : 0,
+    "generateTextAI called for a supported locale only when backend is available"
+  );
+  is(
+    LinkPreview.canShowKeyPoints,
+    LinkPreview.canRunOnDevice,
+    "key points track hardware support in a supported locale"
+  );
+
+  panel.remove();
+  LinkPreview.keyboardComboActive = false;
+  localeStub.restore();
+  generateStub.restore();
 });

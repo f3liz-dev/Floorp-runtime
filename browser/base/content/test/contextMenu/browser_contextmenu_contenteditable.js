@@ -6,7 +6,7 @@
 let contextMenu;
 
 const example_base =
-  // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+  // eslint-disable-next-line sdl/no-insecure-url
   "http://example.com/browser/browser/base/content/test/contextMenu/";
 const chrome_base =
   "chrome://mochitests/content/browser/browser/base/content/test/contextMenu/";
@@ -16,6 +16,16 @@ Services.scriptloader.loadSubScript(
   chrome_base + "contextmenu_common.js",
   this
 );
+
+const askChatMenu = [
+  "context-ask-chat",
+  true,
+  // Need a blank entry here because the Ask Chat submenu is dynamically built with no ids.
+  "",
+  null,
+  "---",
+  null,
+];
 
 async function openMenuAndPaste(browser, useFormatting) {
   const kElementToUse = "test-contenteditable-spellcheck-false";
@@ -45,9 +55,15 @@ async function openMenuAndPaste(browser, useFormatting) {
       false,
       "context-selectall",
       true,
+      "---",
+      null,
+      ...askChatMenu,
     ],
     {
       keepMenuOpen: true,
+      awaitOnMenuBuilt: {
+        id: "context-ask-chat",
+      },
     }
   );
   let popupHidden = BrowserTestUtils.waitForPopupEvent(contextMenu, "hidden");

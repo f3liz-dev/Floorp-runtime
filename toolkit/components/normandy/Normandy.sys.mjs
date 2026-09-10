@@ -18,7 +18,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "resource://normandy/lib/PreferenceExperiments.sys.mjs",
   PreferenceRollouts: "resource://normandy/lib/PreferenceRollouts.sys.mjs",
   RecipeRunner: "resource://normandy/lib/RecipeRunner.sys.mjs",
-  ShieldPreferences: "resource://normandy/lib/ShieldPreferences.sys.mjs",
 });
 
 const UI_AVAILABLE_NOTIFICATION = "sessionstore-windows-restored";
@@ -42,9 +41,17 @@ export var Normandy = {
 
   /** Initialization that needs to happen before the first paint on startup. */
   async init({ runAsync = true } = {}) {
-    // It is important to register the listener for the UI before the first
-    // await, to avoid missing it.
-    Services.obs.addObserver(this, UI_AVAILABLE_NOTIFICATION);
+    // NOTE: It looks like we can see us being called twice between init(true)
+    // coming from "browser-before-ui-startup" (see BrowserComponents.manifest)
+    // and init(false) coming from FirstStartup.sys.mjs.
+    // We need the UI_AVAILABLE_NOTIFICATION observer only if runAsync == true
+    // and we assume that the rest of the initialization can just happen twice.
+    // TODO: Check which pieces really need to run twice, if any.
+    if (runAsync) {
+      // It is important to register the listener for the UI before the first
+      // await, to avoid missing it.
+      Services.obs.addObserver(this, UI_AVAILABLE_NOTIFICATION);
+    }
 
     // It is important this happens before the first `await`. Note that this
     // also happens before migrations are applied.
@@ -64,20 +71,16 @@ export var Normandy = {
         this.uiAvailableNotificationObserved.promise,
         new Promise(resolve => setTimeout(resolve, 5 * 60 * 1000)),
       ]);
-    }
 
-    // Remove observer for UI notifications. It will error if the notification
-    // was already removed, which is fine.
-    try {
+      // Remove observer for UI notifications.
       Services.obs.removeObserver(this, UI_AVAILABLE_NOTIFICATION);
-    } catch (e) {}
+    }
 
     await this.finishInit();
   },
 
   async observe(subject, topic) {
     if (topic === UI_AVAILABLE_NOTIFICATION) {
-      Services.obs.removeObserver(this, UI_AVAILABLE_NOTIFICATION);
       this.uiAvailableNotificationObserved.resolve();
     }
   },
@@ -126,12 +129,6 @@ export var Normandy = {
       await lazy.PreferenceExperiments.init();
     } catch (err) {
       log.error("Failed to initialize preference experiments:", err);
-    }
-
-    try {
-      lazy.ShieldPreferences.init();
-    } catch (err) {
-      log.error("Failed to initialize preferences UI:", err);
     }
 
     await lazy.RecipeRunner.init();

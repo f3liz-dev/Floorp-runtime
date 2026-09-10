@@ -11,8 +11,6 @@
 // Integration tests for PeerConnection.
 // These tests exercise a full stack for the SVC extension.
 
-#include <stdint.h>
-
 #include <algorithm>
 #include <vector>
 
@@ -24,10 +22,8 @@
 #include "api/rtp_parameters.h"
 #include "api/rtp_transceiver_interface.h"
 #include "api/scoped_refptr.h"
-#include "api/test/rtc_error_matchers.h"
 #include "media/base/media_constants.h"
 #include "pc/test/integration_test_helpers.h"
-#include "test/gmock.h"
 #include "test/gtest.h"
 #include "test/wait_until.h"
 
@@ -45,8 +41,7 @@ class PeerConnectionSVCIntegrationTest
       scoped_refptr<RtpTransceiverInterface> transceiver,
       absl::string_view codec_name) {
     RtpCapabilities capabilities =
-        caller()->pc_factory()->GetRtpReceiverCapabilities(
-            webrtc::MediaType::VIDEO);
+        caller()->pc_factory()->GetRtpReceiverCapabilities(MediaType::VIDEO);
     std::vector<RtpCodecCapability> codecs;
     for (const RtpCodecCapability& codec_capability : capabilities.codecs) {
       if (codec_capability.name == codec_name)
@@ -100,8 +95,7 @@ TEST_F(PeerConnectionSVCIntegrationTest, SetParametersAcceptsL1T3WithVP8) {
   ConnectFakeSignaling();
 
   RtpCapabilities capabilities =
-      caller()->pc_factory()->GetRtpReceiverCapabilities(
-          webrtc::MediaType::VIDEO);
+      caller()->pc_factory()->GetRtpReceiverCapabilities(MediaType::VIDEO);
   std::vector<RtpCodecCapability> vp8_codec;
   for (const RtpCodecCapability& codec_capability : capabilities.codecs) {
     if (codec_capability.name == kVp8CodecName)
@@ -139,9 +133,7 @@ TEST_F(PeerConnectionSVCIntegrationTest,
   EXPECT_TRUE(SetCodecPreferences(transceiver, kVp8CodecName).ok());
 
   caller()->CreateAndSetAndSignalOffer();
-  ASSERT_THAT(
-      WaitUntil([&] { return SignalingStateStable(); }, ::testing::IsTrue()),
-      IsRtcOk());
+  ASSERT_TRUE(WaitUntil([&] { return SignalingStateStable(); }));
 
   RtpParameters parameters = transceiver->sender()->GetParameters();
   ASSERT_EQ(parameters.encodings.size(), 1u);
@@ -165,9 +157,7 @@ TEST_F(PeerConnectionSVCIntegrationTest,
   EXPECT_TRUE(SetCodecPreferences(transceiver, kVp9CodecName).ok());
 
   caller()->CreateAndSetAndSignalOffer();
-  ASSERT_THAT(
-      WaitUntil([&] { return SignalingStateStable(); }, ::testing::IsTrue()),
-      IsRtcOk());
+  ASSERT_TRUE(WaitUntil([&] { return SignalingStateStable(); }));
 
   RtpParameters parameters = transceiver->sender()->GetParameters();
   ASSERT_EQ(parameters.encodings.size(), 1u);
@@ -191,9 +181,7 @@ TEST_F(PeerConnectionSVCIntegrationTest,
   EXPECT_TRUE(SetCodecPreferences(transceiver, kVp8CodecName).ok());
 
   caller()->CreateAndSetAndSignalOffer();
-  ASSERT_THAT(
-      WaitUntil([&] { return SignalingStateStable(); }, ::testing::IsTrue()),
-      IsRtcOk());
+  ASSERT_TRUE(WaitUntil([&] { return SignalingStateStable(); }));
 
   RtpParameters parameters = transceiver->sender()->GetParameters();
   ASSERT_EQ(parameters.encodings.size(), 1u);
@@ -218,9 +206,7 @@ TEST_F(PeerConnectionSVCIntegrationTest,
   EXPECT_TRUE(SetCodecPreferences(transceiver, kVp9CodecName).ok());
 
   caller()->CreateAndSetAndSignalOffer();
-  ASSERT_THAT(
-      WaitUntil([&] { return SignalingStateStable(); }, ::testing::IsTrue()),
-      IsRtcOk());
+  ASSERT_TRUE(WaitUntil([&] { return SignalingStateStable(); }));
 
   RtpParameters parameters = transceiver->sender()->GetParameters();
   ASSERT_EQ(parameters.encodings.size(), 1u);
@@ -243,8 +229,7 @@ TEST_F(PeerConnectionSVCIntegrationTest, FallbackToL1Tx) {
   auto caller_transceiver = transceiver_or_error.MoveValue();
 
   RtpCapabilities capabilities =
-      caller()->pc_factory()->GetRtpReceiverCapabilities(
-          webrtc::MediaType::VIDEO);
+      caller()->pc_factory()->GetRtpReceiverCapabilities(MediaType::VIDEO);
   std::vector<RtpCodecCapability> send_codecs = capabilities.codecs;
   // Only keep VP9 in the caller
   send_codecs.erase(std::partition(send_codecs.begin(), send_codecs.end(),
@@ -263,9 +248,7 @@ TEST_F(PeerConnectionSVCIntegrationTest, FallbackToL1Tx) {
   EXPECT_TRUE(result.ok());
 
   caller()->CreateAndSetAndSignalOffer();
-  ASSERT_THAT(
-      WaitUntil([&] { return SignalingStateStable(); }, ::testing::IsTrue()),
-      IsRtcOk());
+  ASSERT_TRUE(WaitUntil([&] { return SignalingStateStable(); }));
 
   parameters = caller_transceiver->sender()->GetParameters();
   ASSERT_TRUE(parameters.encodings[0].scalability_mode.has_value());
@@ -284,9 +267,7 @@ TEST_F(PeerConnectionSVCIntegrationTest, FallbackToL1Tx) {
 
   // Renegotiate to force the new codec list to be used
   caller()->CreateAndSetAndSignalOffer();
-  ASSERT_THAT(
-      WaitUntil([&] { return SignalingStateStable(); }, ::testing::IsTrue()),
-      IsRtcOk());
+  ASSERT_TRUE(WaitUntil([&] { return SignalingStateStable(); }));
 
   // Fallback should happen and L3T3 is not used anymore
   parameters = caller_transceiver->sender()->GetParameters();

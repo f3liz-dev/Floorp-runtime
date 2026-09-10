@@ -7,6 +7,12 @@ const {
   Component,
   createFactory,
 } = require("resource://devtools/client/shared/vendor/react.mjs");
+const {
+  connect,
+} = require("resource://devtools/client/shared/vendor/react-redux.js");
+const {
+  getDisplayedMessages,
+} = require("resource://devtools/client/netmonitor/src/selectors/index.js");
 const dom = require("resource://devtools/client/shared/vendor/react-dom-factories.js");
 const PropTypes = require("resource://devtools/client/shared/vendor/react-prop-types.mjs");
 const {
@@ -71,6 +77,7 @@ const RESPONSE_PAYLOAD = L10N.getStr("responsePayload");
 const RAW_RESPONSE_PAYLOAD = L10N.getStr("netmonitor.response.raw");
 const HTML_RESPONSE = L10N.getStr("netmonitor.response.html");
 const RESPONSE_EMPTY_TEXT = L10N.getStr("responseEmptyText");
+const RESPONSE_REDIRECT_EMPTY_TEXT = L10N.getStr("responseRedirectEmptyText");
 const RESPONSE_TRUNCATED = L10N.getStr("responseTruncated");
 
 const JSON_VIEW_MIME_TYPE = "application/vnd.mozilla.json.view";
@@ -89,6 +96,7 @@ class ResponsePanel extends Component {
       showMessagesView: PropTypes.bool,
       defaultRawResponse: PropTypes.bool,
       setDefaultRawResponse: PropTypes.func,
+      messages: PropTypes.array,
     };
   }
 
@@ -143,12 +151,14 @@ class ResponsePanel extends Component {
    * Update only if:
    * 1) The rendered object has changed
    * 2) The user selected another search result target.
-   * 3) Internal state changes
+   * 3) The messages sent changes
+   * 4) Internal state changes
    */
   shouldComponentUpdate(nextProps, nextState) {
     return (
       this.state !== nextState ||
       this.props.request !== nextProps.request ||
+      this.props.messages !== nextProps.messages ||
       nextProps.targetSearchResult !== null
     );
   }
@@ -163,14 +173,14 @@ class ResponsePanel extends Component {
    * as text/plain instead.
    */
   handleJSONResponse(mimeType, response) {
-    const limit = Services.prefs.getIntPref(
-      "devtools.netmonitor.responseBodyLimit"
-    );
     const { request } = this.props;
 
     // Check if the response has been truncated, in which case no parse should
     // be attempted.
-    if (limit > 0 && limit <= request.responseContent.content.size) {
+    //
+    // Note that this logic isn't specific to JSON at all and is the generic handling
+    // of truncated requests!
+    if (request.truncated) {
       const result = {};
       result.error = RESPONSE_TRUNCATED;
       return result;
@@ -261,7 +271,7 @@ class ResponsePanel extends Component {
    * Pick correct component, componentprops, and other needed data to render
    * the given response
    *
-   * @returns {Object} shape:
+   * @returns {object} shape:
    *  {component}: React component used to render response
    *  {Object} componetProps: Props passed to component
    *  {Error} error: JSON parsing error
@@ -319,6 +329,7 @@ class ResponsePanel extends Component {
         defaultSelectFirstNode: false,
         mode: MODE.LONG,
         useBaseTreeViewExpand: true,
+        url,
       };
       hasFormattedDisplay = true;
     } else if (Filters.html(this.props.request)) {
@@ -332,8 +343,9 @@ class ResponsePanel extends Component {
       component = SourcePreview;
       componentProps = {
         text,
-        mode: json ? "application/json" : mimeType.replace(/;.+/, ""),
+        mimeType: json ? "application/json" : mimeType.replace(/;.+/, ""),
         targetSearchResult,
+        url,
       };
     }
     return {
@@ -344,6 +356,7 @@ class ResponsePanel extends Component {
       json,
       responsePayloadLabel,
       xssiStrippedCharsInfoBox,
+      url,
     };
   }
 
@@ -417,8 +430,8 @@ class ResponsePanel extends Component {
   }
 
   render() {
-    const { connector, showMessagesView, request } = this.props;
-    const { blockedReason, responseContent, url } = request;
+    const { connector, showMessagesView, request, messages } = this.props;
+    const { blockedReason, responseContent, url, isRedirect } = request;
     const { filterText, rawResponsePayloadDisplayed } = this.state;
 
     // Display CORS blocked Reason info box
@@ -426,7 +439,16 @@ class ResponsePanel extends Component {
       this.renderCORSBlockedReason(blockedReason);
 
     if (showMessagesView) {
-      return MessagesView({ connector });
+      // Render with the messages view only
+      // - If there are valid messages to view
+      // - If there is nothing to render (this will show the empty content message)
+      //
+      // Note: If there are no messages but we have content for the response
+      // (this can happen when the messages are not formatted properly), we should
+      // fallback to showing the raw response content.
+      if (messages.length || !responseContent?.content.text) {
+        return MessagesView({ connector });
+      }
     }
 
     if (
@@ -437,7 +459,17 @@ class ResponsePanel extends Component {
       return div(
         { className: "panel-container" },
         CORSBlockedReasonDetails,
-        div({ className: "empty-notice" }, RESPONSE_EMPTY_TEXT)
+        // Response body limit configuration may lead to completely empty response body
+        // often because of encoded response which would cut the whole encoded chunk.
+        request.truncated &&
+          div(
+            { className: "response-error-header", title: RESPONSE_TRUNCATED },
+            RESPONSE_TRUNCATED
+          ),
+        div(
+          { className: "empty-notice" },
+          isRedirect ? RESPONSE_REDIRECT_EMPTY_TEXT : RESPONSE_EMPTY_TEXT
+        )
       );
     }
 
@@ -502,4 +534,7 @@ class ResponsePanel extends Component {
   }
 }
 
-module.exports = ResponsePanel;
+module.exports = connect((state, props) => ({
+  // The messages are only needed for websockets or server sent events
+  messages: props.showMessagesView ? getDisplayedMessages(state) : null,
+}))(ResponsePanel);

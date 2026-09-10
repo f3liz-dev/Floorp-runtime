@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -226,38 +224,38 @@ bool TouchEvent::PrefEnabled(nsIDocShell* aDocShell) {
   } else if (touchEventsOverride ==
              mozilla::dom::TouchEventsOverride::Disabled) {
     enabled = false;
+  } else if (nsContentUtils::ShouldResistFingerprinting(
+                 aDocShell, RFPTarget::PointerEvents)) {
+#ifdef MOZ_WIDGET_COCOA
+    enabled = false;
+#else
+    enabled = true;
+#endif
   } else {
     const int32_t prefValue = StaticPrefs::dom_w3c_touch_events_enabled();
     if (prefValue == 2) {
-      if (nsContentUtils::ShouldResistFingerprinting(
-              aDocShell, RFPTarget::PointerEvents)) {
-        enabled = SPOOFED_MAX_TOUCH_POINTS != 0;
-      } else {
-        enabled = PlatformSupportsTouch();
+      enabled = PlatformSupportsTouch();
 
-        static bool firstTime = true;
-        // The touch screen data seems to be inaccurate in the parent process,
-        // and we really need the crash annotation in child processes.
-        if (firstTime && !XRE_IsParentProcess()) {
-          CrashReporter::RecordAnnotationBool(
-              CrashReporter::Annotation::HasDeviceTouchScreen, enabled);
-          firstTime = false;
-        }
+      static bool firstTime = true;
+      // The touch screen data seems to be inaccurate in the parent process,
+      // and we really need the crash annotation in child processes.
+      if (firstTime && !XRE_IsParentProcess()) {
+        CrashReporter::RecordAnnotationBool(
+            CrashReporter::Annotation::HasDeviceTouchScreen, enabled);
+        firstTime = false;
+      }
 
 #if defined(XP_WIN) || defined(MOZ_WIDGET_GTK)
-        if (enabled && aDocShell) {
-          // APZ might be disabled on this particular widget, in which case
-          // TouchEvent support will also be disabled. Try to detect that.
-          RefPtr<nsPresContext> pc = aDocShell->GetPresContext();
-          if (pc) {
-            nsCOMPtr<nsIWidget> widget = pc->GetRootWidget();
-            if (widget) {
-              enabled &= widget->AsyncPanZoomEnabled();
-            }
+      if (enabled && aDocShell) {
+        // APZ might be disabled on this particular widget, in which case
+        // TouchEvent support will also be disabled. Try to detect that.
+        if (RefPtr<nsPresContext> pc = aDocShell->GetPresContext()) {
+          if (nsCOMPtr<nsIWidget> widget = pc->GetRootWidget()) {
+            enabled &= widget->AsyncPanZoomEnabled();
           }
         }
-#endif
       }
+#endif
     } else {
       enabled = !!prefValue;
     }

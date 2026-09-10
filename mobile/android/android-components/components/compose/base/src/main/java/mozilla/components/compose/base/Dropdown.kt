@@ -4,7 +4,6 @@
 
 package mozilla.components.compose.base
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +17,9 @@ import androidx.compose.foundation.layout.requiredSizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -55,10 +56,7 @@ private val DefaultDropdownMenuItemHorizontalPadding = 16.dp
 private val DropdownMenuMaxHeight = 200.dp
 
 private val ContextMenuWidth =
-    2 * HorizontalPadding +
-        IconSize +
-        IconSpace +
-        2 * DefaultDropdownMenuItemHorizontalPadding
+    2 * HorizontalPadding + IconSize + IconSpace + 2 * DefaultDropdownMenuItemHorizontalPadding
 
 /**
  * UI for a dropdown and a contextual menu that can be expanded or collapsed.
@@ -67,8 +65,8 @@ private val ContextMenuWidth =
  * @param placeholder The text to be displayed when no [dropdownItems] are selected.
  * @param dropdownItems The [MenuItem.CheckableItem]s that should be shown when the dropdown is expanded.
  * @param modifier Modifier to be applied to the dropdown layout.
- * @param dropdownMenuTextWidth The optional width to allocate for the text for each [MenuItem.CheckableItem].
- * If not specified, the best width will be determined based on the dropdown items provided.
+ * @param dropdownMenuTextWidth The optional width to allocate for the text for each [MenuItem.CheckableItem]. If not
+ *   specified, the best width will be determined based on the dropdown items provided.
  * @param isInLandscapeMode Whether the device is in landscape mode.
  */
 @Suppress("LongMethod")
@@ -83,11 +81,12 @@ fun Dropdown(
 ) {
     val dropdownMenuWidth = dropdownMenuTextWidth?.let { ContextMenuWidth + it }
 
-    val checkedItemText by remember(dropdownItems) {
-        derivedStateOf {
-            dropdownItems.find { it.isChecked }?.text
+    val checkedItemText by
+        remember(dropdownItems) {
+            derivedStateOf {
+                dropdownItems.find { it.isChecked }?.text
+            }
         }
-    }
 
     val density = LocalDensity.current
 
@@ -96,19 +95,16 @@ fun Dropdown(
     var measuredDropdownMenuWidthDp by remember { mutableStateOf(0.dp) }
 
     Column(
-        modifier = modifier
-            .clickable {
-                expanded = true
-            }
-            .semantics { role = Role.DropdownList },
+        modifier =
+            modifier
+                .clickable {
+                    expanded = true
+                }
+                .semantics { role = Role.DropdownList }
     ) {
         Text(
             text = label,
-            modifier = Modifier
-                .wrapContentSize()
-                .defaultMinSize(minHeight = 16.dp)
-                .wrapContentHeight(),
-            color = AcornTheme.colors.textPrimary,
+            modifier = Modifier.wrapContentSize().defaultMinSize(minHeight = 16.dp).wrapContentHeight(),
             style = AcornTheme.typography.caption,
         )
 
@@ -121,7 +117,6 @@ fun Dropdown(
                 Text(
                     text = placeholderText,
                     modifier = Modifier.weight(1f),
-                    color = AcornTheme.colors.textPrimary,
                     style = AcornTheme.typography.subtitle1,
                 )
 
@@ -130,45 +125,47 @@ fun Dropdown(
                 Icon(
                     painter = painterResource(id = iconsR.drawable.mozac_ic_dropdown_arrow),
                     contentDescription = null,
-                    tint = AcornTheme.colors.iconPrimary,
                 )
             }
 
             Box(modifier = Modifier.align(Alignment.TopEnd)) {
-                val widthModifier = if (dropdownMenuWidth == null) {
-                    Modifier
-                } else {
-                    Modifier.width(width = dropdownMenuWidth)
-                }
+                val widthModifier =
+                    if (dropdownMenuWidth == null) {
+                        Modifier
+                    } else {
+                        Modifier.width(width = dropdownMenuWidth)
+                    }
 
                 DropdownMenu(
                     menuItems = dropdownItems,
                     expanded = expanded,
-                    modifier = Modifier
-                        .onGloballyPositioned { coordinates ->
-                            measuredDropdownMenuWidthDp = with(density) {
-                                coordinates.size.width.toDp()
+                    modifier =
+                        Modifier.onGloballyPositioned { coordinates ->
+                                measuredDropdownMenuWidthDp =
+                                    with(density) {
+                                        coordinates.size.width.toDp()
+                                    }
                             }
-                        }
-                        .requiredSizeIn(maxHeight = DropdownMenuMaxHeight)
-                        .then(widthModifier),
-                    offset = if (isInLandscapeMode) {
-                        DpOffset(
-                            -measuredDropdownMenuWidthDp,
-                            IconSize,
-                        )
-                    } else {
-                        DpOffset(
-                            0.dp,
-                            IconSize,
-                        )
-                    },
+                            .requiredSizeIn(maxHeight = DropdownMenuMaxHeight)
+                            .then(widthModifier),
+                    offset =
+                        if (isInLandscapeMode) {
+                            DpOffset(
+                                -measuredDropdownMenuWidthDp,
+                                IconSize,
+                            )
+                        } else {
+                            DpOffset(
+                                0.dp,
+                                IconSize,
+                            )
+                        },
                     onDismissRequest = { expanded = false },
                 )
             }
         }
 
-        Divider(color = AcornTheme.colors.formDefault)
+        HorizontalDivider(color = AcornTheme.colors.formDefault)
     }
 }
 
@@ -205,19 +202,21 @@ private fun getSelectedDropdownItems(): List<MenuItem.CheckableItem> =
             onClick = {},
         ),
         MenuItem.CheckableItem(
-            text = Text.String(
-                "Super super super super super super super super super long item " +
-                "exceeding width of medium width",
-            ),
+            text =
+                Text.String(
+                    "Super super super super super super super super super long item " +
+                        "exceeding width of medium width"
+                ),
             isChecked = false,
             onClick = {},
         ),
         MenuItem.CheckableItem(
-            text = Text.String(
-                "Super super super super super super super super super super super " +
-                "super super super super super super super super super super long item exceeding " +
-                "width of large width",
-            ),
+            text =
+                Text.String(
+                    "Super super super super super super super super super super super " +
+                        "super super super super super super super super super super long item exceeding " +
+                        "width of large width"
+                ),
             isChecked = false,
             onClick = {},
         ),
@@ -227,26 +226,24 @@ private fun getSelectedDropdownItems(): List<MenuItem.CheckableItem> =
 @Composable
 private fun DropdownPreview() {
     AcornTheme {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(color = AcornTheme.colors.layer1),
-        ) {
-            Dropdown(
-                label = "Placeholder and nothing selected",
-                dropdownItems = getDropdownItems(),
-                placeholder = "Placeholder",
-                modifier = Modifier.fillMaxWidth(),
-            )
+        Surface {
+            Column(modifier = Modifier.fillMaxSize()) {
+                Dropdown(
+                    label = "Placeholder and nothing selected",
+                    dropdownItems = getDropdownItems(),
+                    placeholder = "Placeholder",
+                    modifier = Modifier.fillMaxWidth(),
+                )
 
-            Spacer(modifier = Modifier.height(AcornTheme.layout.space.dynamic150))
+                Spacer(modifier = Modifier.height(AcornTheme.layout.space.dynamic150))
 
-            Dropdown(
-                label = "Placeholder and item selected",
-                placeholder = "Placeholder",
-                dropdownItems = getSelectedDropdownItems(),
-                modifier = Modifier.fillMaxWidth(),
-            )
+                Dropdown(
+                    label = "Placeholder and item selected",
+                    placeholder = "Placeholder",
+                    dropdownItems = getSelectedDropdownItems(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
     }
 }

@@ -1,14 +1,13 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #ifndef jit_x86_SharedICHelpers_x86_inl_h
 #define jit_x86_SharedICHelpers_x86_inl_h
 
-#include "jit/BaselineFrame.h"
 #include "jit/SharedICHelpers.h"
+
+#include "jit/BaselineFrame.h"
 
 #include "jit/MacroAssembler-inl.h"
 
@@ -29,13 +28,13 @@ inline void EmitBaselineTailCallVM(TrampolinePtr target, MacroAssembler& masm,
 #endif
 
   // Push frame descriptor and perform the tail call.
-  masm.pushFrameDescriptor(FrameType::BaselineJS);
+  masm.push(FrameDescriptor(FrameType::BaselineJS));
   masm.push(ICTailCallReg);
   masm.jump(target);
 }
 
 inline void EmitBaselineCallVM(TrampolinePtr target, MacroAssembler& masm) {
-  masm.pushFrameDescriptor(FrameType::BaselineStub);
+  masm.push(FrameDescriptor(FrameType::BaselineStub));
   masm.call(target);
 }
 

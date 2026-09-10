@@ -1,26 +1,21 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsTHashtable.h"
-#include "nsBaseHashtable.h"
-#include "nsTHashMap.h"
-#include "nsInterfaceHashtable.h"
-#include "nsClassHashtable.h"
-#include "nsRefCountedHashtable.h"
-
-#include "nsCOMPtr.h"
-#include "nsIMemoryReporter.h"
-#include "nsISupports.h"
-#include "nsCOMArray.h"
-#include "mozilla/Attributes.h"
-#include "mozilla/Unused.h"
+#include <numeric>
 
 #include "gtest/gtest.h"
-
-#include <numeric>
+#include "mozilla/Attributes.h"
+#include "nsBaseHashtable.h"
+#include "nsCOMArray.h"
+#include "nsCOMPtr.h"
+#include "nsClassHashtable.h"
+#include "nsIMemoryReporter.h"
+#include "nsISupports.h"
+#include "nsInterfaceHashtable.h"
+#include "nsRefCountedHashtable.h"
+#include "nsTHashMap.h"
+#include "nsTHashtable.h"
 
 using mozilla::MakeRefPtr;
 using mozilla::MakeUnique;
@@ -120,7 +115,7 @@ class EntityToUnicodeEntry : public PLDHashEntryHdr {
   }
   static const char* KeyToPointer(const char* aEntity) { return aEntity; }
   static PLDHashNumber HashKey(const char* aEntity) {
-    return mozilla::HashString(aEntity);
+    return mozilla::HashString(aEntity, strlen(aEntity));
   }
   enum { ALLOW_MEMMOVE = true };
 
@@ -239,7 +234,7 @@ MozExternalRefCountType IFoo::Release() {
 }
 
 nsresult IFoo::QueryInterface(const nsIID& aIID, void** aResult) {
-  nsISupports* rawPtr = 0;
+  nsISupports* rawPtr = nullptr;
   nsresult status = NS_OK;
 
   if (aIID.Equals(NS_GET_IID(IFoo)))
@@ -1078,8 +1073,6 @@ TEST(Hashtables, DataHashtable)
 
 TEST(Hashtables, DataHashtable_STLIterators)
 {
-  using mozilla::Unused;
-
   nsTHashMap<nsUint32HashKey, const char*> UniToEntity(ENTITY_COUNT);
 
   for (auto& entity : gEntities) {
@@ -1102,18 +1095,17 @@ TEST(Hashtables, DataHashtable_STLIterators)
   // with the actual syntactical requirements of those algorithms).
   std::for_each(UniToEntity.cbegin(), UniToEntity.cend(),
                 [](const auto& entry) {});
-  Unused << std::find_if(
-      UniToEntity.cbegin(), UniToEntity.cend(),
-      [](const auto& entry) { return entry.GetKey() == 42; });
-  Unused << std::accumulate(
+  (void)std::find_if(UniToEntity.cbegin(), UniToEntity.cend(),
+                     [](const auto& entry) { return entry.GetKey() == 42; });
+  (void)std::accumulate(
       UniToEntity.cbegin(), UniToEntity.cend(), 0u,
       [](size_t sum, const auto& entry) { return sum + entry.GetKey(); });
-  Unused << std::any_of(UniToEntity.cbegin(), UniToEntity.cend(),
-                        [](const auto& entry) { return entry.GetKey() == 42; });
-  Unused << std::max_element(UniToEntity.cbegin(), UniToEntity.cend(),
-                             [](const auto& lhs, const auto& rhs) {
-                               return lhs.GetKey() > rhs.GetKey();
-                             });
+  (void)std::any_of(UniToEntity.cbegin(), UniToEntity.cend(),
+                    [](const auto& entry) { return entry.GetKey() == 42; });
+  (void)std::max_element(UniToEntity.cbegin(), UniToEntity.cend(),
+                         [](const auto& lhs, const auto& rhs) {
+                           return lhs.GetKey() > rhs.GetKey();
+                         });
 
   // const range-based for
   {

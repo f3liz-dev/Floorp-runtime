@@ -4,40 +4,24 @@
 
 import { DSCard, PlaceholderDSCard } from "../DSCard/DSCard.jsx";
 import { DSEmptyState } from "../DSEmptyState/DSEmptyState.jsx";
-import { DSDismiss } from "content-src/components/DiscoveryStreamComponents/DSDismiss/DSDismiss";
 import { TopicsWidget } from "../TopicsWidget/TopicsWidget.jsx";
-import { ListFeed } from "../ListFeed/ListFeed.jsx";
 import { AdBanner } from "../AdBanner/AdBanner.jsx";
 import { FluentOrText } from "../../FluentOrText/FluentOrText.jsx";
-import { actionCreators as ac } from "common/Actions.mjs";
-import React, { useEffect, useState, useRef, useCallback } from "react";
+import React, { useEffect, useRef } from "react";
 import { connect } from "react-redux";
-import { TrendingSearches } from "../TrendingSearches/TrendingSearches.jsx";
-const PREF_ONBOARDING_EXPERIENCE_DISMISSED =
-  "discoverystream.onboardingExperience.dismissed";
+// @nova-cleanup(remove-pref): Delete this const; see the showNovaHeader read below.
+const PREF_NOVA_ENABLED = "nova.enabled";
 const PREF_SECTIONS_CARDS_ENABLED = "discoverystream.sections.cards.enabled";
-const PREF_THUMBS_UP_DOWN_ENABLED = "discoverystream.thumbsUpDown.enabled";
+const PREF_SECTIONS_ENABLED = "discoverystream.sections.enabled";
 const PREF_TOPICS_ENABLED = "discoverystream.topicLabels.enabled";
 const PREF_TOPICS_SELECTED = "discoverystream.topicSelection.selectedTopics";
 const PREF_TOPICS_AVAILABLE = "discoverystream.topicSelection.topics";
 const PREF_SPOCS_STARTUPCACHE_ENABLED =
   "discoverystream.spocs.startupCache.enabled";
-const PREF_LIST_FEED_ENABLED = "discoverystream.contextualContent.enabled";
-const PREF_LIST_FEED_SELECTED_FEED =
-  "discoverystream.contextualContent.selectedFeed";
-const PREF_FAKESPOT_ENABLED =
-  "discoverystream.contextualContent.fakespot.enabled";
 const PREF_BILLBOARD_ENABLED = "newtabAdSize.billboard";
 const PREF_BILLBOARD_POSITION = "newtabAdSize.billboard.position";
 const PREF_LEADERBOARD_ENABLED = "newtabAdSize.leaderboard";
 const PREF_LEADERBOARD_POSITION = "newtabAdSize.leaderboard.position";
-const PREF_TRENDING_SEARCH = "trendingSearch.enabled";
-const PREF_TRENDING_SEARCH_SYSTEM = "system.trendingSearch.enabled";
-const PREF_SEARCH_ENGINE = "trendingSearch.defaultSearchEngine";
-const PREF_TRENDING_SEARCH_VARIANT = "trendingSearch.variant";
-const INTERSECTION_RATIO = 0.5;
-const VISIBLE = "visible";
-const VISIBILITY_CHANGE_EVENT = "visibilitychange";
 const WIDGET_IDS = {
   TOPICS: 1,
 };
@@ -46,119 +30,6 @@ export function DSSubHeader({ children }) {
   return (
     <div className="section-top-bar ds-sub-header">
       <h3 className="section-title-container">{children}</h3>
-    </div>
-  );
-}
-
-export function OnboardingExperience({ dispatch, windowObj = globalThis }) {
-  const [dismissed, setDismissed] = useState(false);
-  const [maxHeight, setMaxHeight] = useState(null);
-  const heightElement = useRef(null);
-
-  const onDismissClick = useCallback(() => {
-    // We update this as state and redux.
-    // The state update is for this newtab,
-    // and the redux update is for other tabs, offscreen tabs, and future tabs.
-    // We need the state update for this tab to support the transition.
-    setDismissed(true);
-    dispatch(ac.SetPref(PREF_ONBOARDING_EXPERIENCE_DISMISSED, true));
-    dispatch(
-      ac.DiscoveryStreamUserEvent({
-        event: "BLOCK",
-        source: "POCKET_ONBOARDING",
-      })
-    );
-  }, [dispatch]);
-
-  useEffect(() => {
-    const resizeObserver = new windowObj.ResizeObserver(() => {
-      if (heightElement.current) {
-        setMaxHeight(heightElement.current.offsetHeight);
-      }
-    });
-
-    const options = { threshold: INTERSECTION_RATIO };
-    const intersectionObserver = new windowObj.IntersectionObserver(entries => {
-      if (
-        entries.some(
-          entry =>
-            entry.isIntersecting &&
-            entry.intersectionRatio >= INTERSECTION_RATIO
-        )
-      ) {
-        dispatch(
-          ac.DiscoveryStreamUserEvent({
-            event: "IMPRESSION",
-            source: "POCKET_ONBOARDING",
-          })
-        );
-        // Once we have observed an impression, we can stop for this instance of newtab.
-        intersectionObserver.unobserve(heightElement.current);
-      }
-    }, options);
-
-    const onVisibilityChange = () => {
-      intersectionObserver.observe(heightElement.current);
-      windowObj.document.removeEventListener(
-        VISIBILITY_CHANGE_EVENT,
-        onVisibilityChange
-      );
-    };
-
-    if (heightElement.current) {
-      resizeObserver.observe(heightElement.current);
-      // Check visibility or setup a visibility event to make
-      // sure we don't fire this for off screen pre loaded tabs.
-      if (windowObj.document.visibilityState === VISIBLE) {
-        intersectionObserver.observe(heightElement.current);
-      } else {
-        windowObj.document.addEventListener(
-          VISIBILITY_CHANGE_EVENT,
-          onVisibilityChange
-        );
-      }
-      setMaxHeight(heightElement.current.offsetHeight);
-    }
-
-    // Return unmount callback to clean up observers.
-    return () => {
-      resizeObserver?.disconnect();
-      intersectionObserver?.disconnect();
-      windowObj.document.removeEventListener(
-        VISIBILITY_CHANGE_EVENT,
-        onVisibilityChange
-      );
-    };
-  }, [dispatch, windowObj]);
-
-  const style = {};
-  if (dismissed) {
-    style.maxHeight = "0";
-    style.opacity = "0";
-    style.transition = "max-height 0.26s ease, opacity 0.26s ease";
-  } else if (maxHeight) {
-    style.maxHeight = `${maxHeight}px`;
-  }
-
-  return (
-    <div style={style}>
-      <div className="ds-onboarding-ref" ref={heightElement}>
-        <div className="ds-onboarding-container">
-          <DSDismiss
-            onDismissClick={onDismissClick}
-            extraClasses={`ds-onboarding`}
-          >
-            <div>
-              <header>
-                <span className="icon icon-pocket" />
-                <span data-l10n-id="newtab-pocket-onboarding-discover" />
-              </header>
-              <p data-l10n-id="newtab-pocket-onboarding-cta" />
-            </div>
-            <div className="ds-onboarding-graphic" />
-          </DSDismiss>
-        </div>
-      </div>
     </div>
   );
 }
@@ -196,55 +67,94 @@ export function IntersectionObserver({
 }
 
 export class _CardGrid extends React.PureComponent {
+  constructor(props) {
+    super(props);
+    this.state = {
+      focusedIndex: 0,
+    };
+    this.onCardFocus = this.onCardFocus.bind(this);
+    this.handleCardKeyDown = this.handleCardKeyDown.bind(this);
+  }
+
+  onCardFocus(index) {
+    this.setState({ focusedIndex: index });
+  }
+
+  handleCardKeyDown(e) {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+      e.preventDefault();
+
+      const currentCardEl = e.target.closest("article.ds-card");
+      if (!currentCardEl) {
+        return;
+      }
+
+      // Arrow direction should match visual navigation direction in RTL
+      const isRTL = document.dir === "rtl";
+      const navigateToPrevious = isRTL
+        ? e.key === "ArrowRight"
+        : e.key === "ArrowLeft";
+
+      let targetCardEl = currentCardEl;
+
+      // Walk through siblings to find the target card element
+      while (targetCardEl) {
+        targetCardEl = navigateToPrevious
+          ? targetCardEl.previousElementSibling
+          : targetCardEl.nextElementSibling;
+
+        if (targetCardEl && targetCardEl.matches("article.ds-card")) {
+          const link = targetCardEl.querySelector("a.ds-card-link");
+          if (link) {
+            link.focus();
+          }
+          break;
+        }
+      }
+    }
+  }
+
   // eslint-disable-next-line max-statements
   renderCards() {
     const prefs = this.props.Prefs.values;
     const {
       items,
-      onboardingExperience,
       ctaButtonSponsors,
       ctaButtonVariant,
-      spocMessageVariant,
       widgets,
       DiscoveryStream,
     } = this.props;
 
     const { topicsLoading } = DiscoveryStream;
-    const isOnboardingExperienceDismissed =
-      prefs[PREF_ONBOARDING_EXPERIENCE_DISMISSED];
     const mayHaveSectionsCards = prefs[PREF_SECTIONS_CARDS_ENABLED];
-    const mayHaveThumbsUpDown = prefs[PREF_THUMBS_UP_DOWN_ENABLED];
     const showTopics = prefs[PREF_TOPICS_ENABLED];
     const selectedTopics = prefs[PREF_TOPICS_SELECTED];
     const availableTopics = prefs[PREF_TOPICS_AVAILABLE];
     const spocsStartupCacheEnabled = prefs[PREF_SPOCS_STARTUPCACHE_ENABLED];
-    const listFeedEnabled = prefs[PREF_LIST_FEED_ENABLED];
-    const listFeedSelectedFeed = prefs[PREF_LIST_FEED_SELECTED_FEED];
     const billboardEnabled = prefs[PREF_BILLBOARD_ENABLED];
     const leaderboardEnabled = prefs[PREF_LEADERBOARD_ENABLED];
-    const trendingEnabled =
-      prefs[PREF_TRENDING_SEARCH] &&
-      prefs[PREF_TRENDING_SEARCH_SYSTEM] &&
-      prefs[PREF_SEARCH_ENGINE]?.toLowerCase() === "google";
-    const trendingVariant = prefs[PREF_TRENDING_SEARCH_VARIANT];
 
-    // filter out recs that should be in ListFeed
-    const recs = this.props.data.recommendations
-      .filter(item => !item.feedName)
-      .slice(0, items);
+    const recs = this.props.data.recommendations.slice(0, items);
     const cards = [];
+    let cardIndex = 0;
 
     for (let index = 0; index < items; index++) {
       const rec = recs[index];
-      cards.push(
+      const isPlaceholder =
         topicsLoading ||
-          !rec ||
-          rec.placeholder ||
-          (rec.flight_id &&
-            !spocsStartupCacheEnabled &&
-            this.props.App.isForStartupCache.DiscoveryStream) ? (
-          <PlaceholderDSCard key={`dscard-${index}`} />
-        ) : (
+        this.props.placeholder ||
+        !rec ||
+        rec.placeholder ||
+        (rec.flight_id &&
+          !spocsStartupCacheEnabled &&
+          this.props.App.isForStartupCache.DiscoveryStream);
+
+      if (isPlaceholder) {
+        cards.push(<PlaceholderDSCard key={`dscard-${index}`} />);
+      } else {
+        const currentCardIndex = cardIndex;
+        cardIndex++;
+        cards.push(
           <DSCard
             key={`dscard-${rec.id}`}
             pos={rec.pos}
@@ -264,7 +174,6 @@ export class _CardGrid extends React.PureComponent {
             url={rec.url}
             id={rec.id}
             shim={rec.shim}
-            fetchTimestamp={rec.fetchTimestamp}
             type={this.props.type}
             context={rec.context}
             sponsor={rec.sponsor}
@@ -277,10 +186,6 @@ export class _CardGrid extends React.PureComponent {
             bookmarkGuid={rec.bookmarkGuid}
             ctaButtonSponsors={ctaButtonSponsors}
             ctaButtonVariant={ctaButtonVariant}
-            spocMessageVariant={spocMessageVariant}
-            recommendation_id={rec.recommendation_id}
-            firstVisibleTimestamp={this.props.firstVisibleTimestamp}
-            mayHaveThumbsUpDown={mayHaveThumbsUpDown}
             mayHaveSectionsCards={mayHaveSectionsCards}
             corpus_item_id={rec.corpus_item_id}
             scheduled_corpus_item_id={rec.scheduled_corpus_item_id}
@@ -289,9 +194,12 @@ export class _CardGrid extends React.PureComponent {
             format={rec.format}
             alt_text={rec.alt_text}
             isTimeSensitive={rec.isTimeSensitive}
+            tabIndex={currentCardIndex === this.state.focusedIndex ? 0 : -1}
+            onFocus={() => this.onCardFocus(currentCardIndex)}
+            attribution={rec.attribution}
           />
-        )
-      );
+        );
+      }
     }
 
     if (widgets?.positions?.length && widgets?.data?.length) {
@@ -327,29 +235,6 @@ export class _CardGrid extends React.PureComponent {
           cards.splice(position.index, 1, widgetComponent);
         }
       }
-    }
-    if (listFeedEnabled) {
-      const isFakespot = listFeedSelectedFeed === "fakespot";
-      const fakespotEnabled = prefs[PREF_FAKESPOT_ENABLED];
-      if (!isFakespot || (isFakespot && fakespotEnabled)) {
-        // Place the list feed as the 3rd element in the card grid
-        cards.splice(
-          2,
-          1,
-          this.renderListFeed(
-            this.props.data.recommendations,
-            listFeedSelectedFeed
-          )
-        );
-      }
-    }
-    if (trendingEnabled && trendingVariant === "b") {
-      const firstSpocPosition = this.props.spocPositions[0]?.index;
-      // double check that a spoc/mrec is actually in the index it should be in
-      const format = cards[firstSpocPosition]?.props?.format;
-      const isSpoc = format === "spoc" || format === "rectangle";
-      // if the spoc is not in its position, place TrendingSearches in the 3rd position
-      cards.splice(isSpoc ? firstSpocPosition + 1 : 2, 1, <TrendingSearches />);
     }
 
     // if a banner ad is enabled and we have any available, place them in the grid
@@ -400,7 +285,6 @@ export class _CardGrid extends React.PureComponent {
               key={`dscard-${spocToRender.id}`}
               dispatch={this.props.dispatch}
               type={this.props.type}
-              firstVisibleTimestamp={this.props.firstVisibleTimestamp}
               row={row}
               prefs={prefs}
             />
@@ -422,30 +306,13 @@ export class _CardGrid extends React.PureComponent {
 
     return (
       <>
-        {!isOnboardingExperienceDismissed && onboardingExperience && (
-          <OnboardingExperience dispatch={this.props.dispatch} />
+        {cards?.length > 0 && (
+          <div className={gridClassName} onKeyDown={this.handleCardKeyDown}>
+            {cards}
+          </div>
         )}
-        {cards?.length > 0 && <div className={gridClassName}>{cards}</div>}
       </>
     );
-  }
-
-  renderListFeed(recommendations, selectedFeed) {
-    const recs = recommendations.filter(item => item.feedName === selectedFeed);
-    const isFakespot = selectedFeed === "fakespot";
-    // remove duplicates from category list
-    const categories = [...new Set(recs.map(({ category }) => category))];
-    const listFeed = (
-      <ListFeed
-        // only display recs that match selectedFeed for ListFeed
-        recs={recs}
-        categories={isFakespot ? categories : []}
-        firstVisibleTimestamp={this.props.firstVisibleTimestamp}
-        type={this.props.type}
-        dispatch={this.props.dispatch}
-      />
-    );
-    return listFeed;
   }
 
   renderGridClassName() {
@@ -486,9 +353,23 @@ export class _CardGrid extends React.PureComponent {
     // Handle the case where a user has dismissed all recommendations
     const isEmpty = data.recommendations.length === 0;
 
+    const prefs = this.props.Prefs.values;
+    // @nova-cleanup(remove-conditional): Delete novaEnabled and replace
+    // showNovaHeader with `const showHeader = !sectionsEnabled;`, renaming the
+    // two showNovaHeader uses in the JSX below.
+    const novaEnabled = prefs[PREF_NOVA_ENABLED];
+    const sectionsEnabled = prefs[PREF_SECTIONS_ENABLED];
+    const showNovaHeader = novaEnabled && !sectionsEnabled;
+
     return (
-      <div>
-        {this.props.title && (
+      <div className="ds-card-grid-container">
+        {showNovaHeader && (
+          <h2
+            className="ds-header"
+            data-l10n-id="newtab-section-header-stories"
+          />
+        )}
+        {!showNovaHeader && this.props.title && (
           <div className="ds-header">
             <div className="title">{this.props.title}</div>
             {this.props.context && (

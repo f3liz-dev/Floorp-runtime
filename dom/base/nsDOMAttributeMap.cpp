@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -180,23 +178,6 @@ already_AddRefed<Attr> nsDOMAttributeMap::SetNamedItemNS(
     Attr& aAttr, nsIPrincipal* aSubjectPrincipal, ErrorResult& aError) {
   NS_ENSURE_TRUE(mContent, nullptr);
 
-  // XXX should check same-origin between mContent and aAttr however
-  // nsContentUtils::CheckSameOrigin can't deal with attributenodes yet
-
-  // Check that attribute is not owned by somebody else
-  nsDOMAttributeMap* owner = aAttr.GetMap();
-  if (owner) {
-    if (owner != this) {
-      aError.Throw(NS_ERROR_DOM_INUSE_ATTRIBUTE_ERR);
-      return nullptr;
-    }
-
-    // setting a preexisting attribute is a no-op, just return the same
-    // node.
-    RefPtr<Attr> attribute = &aAttr;
-    return attribute.forget();
-  }
-
   nsAutoString value;
   aAttr.GetValue(value);
 
@@ -212,11 +193,19 @@ already_AddRefed<Attr> nsDOMAttributeMap::SetNamedItemNS(
   if (aError.Failed()) {
     return nullptr;
   }
-  // After the GetTrustedTypesCompliantAttributeValue() call, the attribute may
-  // have been attached to another element.
-  if (aAttr.GetMap() && aAttr.GetMap() != this) {
-    aError.Throw(NS_ERROR_DOM_INUSE_ATTRIBUTE_ERR);
-    return nullptr;
+
+  // Check that attribute is not owned by somebody else
+  nsDOMAttributeMap* owner = aAttr.GetMap();
+  if (owner) {
+    if (owner != this) {
+      aError.Throw(NS_ERROR_DOM_INUSE_ATTRIBUTE_ERR);
+      return nullptr;
+    }
+
+    // setting a preexisting attribute is a no-op, just return the same
+    // node.
+    RefPtr<Attr> attribute = &aAttr;
+    return attribute.forget();
   }
 
   nsresult rv;

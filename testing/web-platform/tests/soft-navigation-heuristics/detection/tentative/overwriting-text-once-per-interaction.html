@@ -31,14 +31,10 @@
         entries[0].identifier, elementId,
         `Unexpected ElementTiming entry: expected "${elementId}"`);
 
-    const softNavPromise = SoftNavigationTestHelper.getPerformanceEntries(
-        "soft-navigation",
-        /* includeSoftNavigationObservations= */true,
-        /* minNumEntries= */ 1);
-    let icpPromise = SoftNavigationTestHelper.getPerformanceEntries(
-        "interaction-contentful-paint",
-        /* includeSoftNavigationObservations= */true,
-        /* minNumEntries= */ 1);
+    const softNavPromise =
+        SoftNavigationTestHelper.getPerformanceEntries("soft-navigation");
+    let icpPromise =
+        SoftNavigationTestHelper.getPerformanceEntries("interaction-contentful-paint");
     const {promise, resolve} = Promise.withResolvers();
 
     navigateButton.addEventListener('click', async () => {
@@ -75,19 +71,16 @@
     let icps = await helper.withTimeoutMessage(
         icpPromise, 'ICP not detected.', /*timeout=*/ 3000);
     assert_equals(icps.length, 1, 'Expected exactly one ICP entry.');
-    assert_equals(icps[0].id, 'content', 'Expected ICP candidate to be "content"');
+    assert_equals(icps[0].largestContentfulPaint.id, 'content', 'Expected ICP candidate to be "content"');
 
 
     // Set things up for the next ICP entry.
-    icpPromise = SoftNavigationTestHelper.getPerformanceEntries(
-        "interaction-contentful-paint",
-        /* includeSoftNavigationObservations= */true,
-        /* minNumEntries= */ 1);
+    icpPromise = SoftNavigationTestHelper.getPerformanceEntries("interaction-contentful-paint");
     resolve();
 
     icps = await helper.withTimeoutMessage(
         icpPromise, 'New ICP not detected.', /*timeout=*/ 3000);
     assert_equals(icps.length, 1, 'Expected exactly one ICP entry.');
-    assert_equals(icps[0].id, 'container-text', 'Expected ICP candidate to be "container-text"');
+    assert_equals(icps[0].largestContentfulPaint.id, 'container-text', 'Expected ICP candidate to be "container-text"');
   }, 'Soft Navigation Detection supports replacing existing text once per interaction');
 </script>

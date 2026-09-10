@@ -40,7 +40,7 @@ const TEST_MERINO_EMPTY_POLYGON_VALUES = [
 ];
 
 add_setup(async function init() {
-  await Services.search.init();
+  await SearchService.init();
 
   // Disable search suggestions so we don't hit the network.
   Services.prefs.setBoolPref("browser.search.suggest.enabled", false);
@@ -50,7 +50,7 @@ add_setup(async function init() {
     prefs: [
       ["market.featureGate", true],
       ["suggest.market", true],
-      ["suggest.quicksuggest.nonsponsored", true],
+      ["suggest.quicksuggest.all", true],
     ],
   });
 });
@@ -61,6 +61,41 @@ add_task(async function telemetryType() {
     "market",
     "Telemetry type should be 'market'"
   );
+});
+
+add_task(async function disabledPrefs() {
+  let prefs = [
+    "quicksuggest.enabled",
+    "suggest.market",
+    "suggest.quicksuggest.all",
+  ];
+
+  for (let pref of prefs) {
+    info("Testing pref: " + pref);
+
+    // First make sure the suggestion is added.
+    await check_results({
+      context: createContext("test", {
+        providers: [UrlbarProviderQuickSuggest.name],
+        isPrivate: false,
+      }),
+      matches: [marketResult()],
+    });
+
+    // Now disable them.
+    UrlbarPrefs.set(pref, false);
+    await check_results({
+      context: createContext("test", {
+        providers: [UrlbarProviderQuickSuggest.name],
+        isPrivate: false,
+      }),
+      matches: [],
+    });
+
+    // Revert.
+    UrlbarPrefs.set(pref, true);
+    await QuickSuggestTestUtils.forceSync();
+  }
 });
 
 // Tests the "Not interested" command: all Market suggestions should be disabled
@@ -196,10 +231,9 @@ add_task(async function empty_polygon_values() {
 
 function marketResult() {
   return {
-    type: UrlbarUtils.RESULT_TYPE.DYNAMIC,
-    source: UrlbarUtils.RESULT_SOURCE.SEARCH,
+    type: UrlbarShared.RESULT_TYPE.DYNAMIC,
+    source: UrlbarShared.RESULT_SOURCE.SEARCH,
     isBestMatch: true,
-    hideRowLabel: true,
     rowIndex: -1,
     heuristic: false,
     exposureTelemetry: 0,
@@ -208,20 +242,18 @@ function marketResult() {
       provider: "polygon",
       telemetryType: "market",
       isSponsored: false,
-      engine: Services.search.defaultEngine.name,
-      polygon: {
-        values: [
-          {
-            image_url: "https://example.com/aapl.svg",
-            query: "AAPL stock",
-            name: "Apple Inc",
-            ticker: "AAPL",
-            todays_change_perc: "-0.54",
-            last_price: "$181.98 USD",
-          },
-        ],
-      },
-      dynamicType: "market",
+      engine: SearchService.defaultEngine.name,
+      items: [
+        {
+          image_url: "https://example.com/aapl.svg",
+          query: "AAPL stock",
+          name: "Apple Inc",
+          ticker: "AAPL",
+          todays_change_perc: "-0.54",
+          last_price: "$181.98 USD",
+        },
+      ],
+      dynamicType: "realtime-market",
     },
   };
 }

@@ -79,6 +79,7 @@ const EXPECTED_AMP_RESULT = QuickSuggestTestUtils.ampResult({
   source: "merino",
   provider: "adm",
   requestId: "request_id",
+  suggestedIndex: -1,
 });
 const EXPECTED_WIKIPEDIA_RESULT = QuickSuggestTestUtils.wikipediaResult({
   source: "merino",
@@ -98,7 +99,7 @@ add_setup(async () => {
   await QuickSuggestTestUtils.ensureQuickSuggestInit({
     merinoSuggestions: MERINO_SUGGESTIONS,
     prefs: [
-      ["suggest.quicksuggest.nonsponsored", true],
+      ["suggest.quicksuggest.all", true],
       ["suggest.quicksuggest.sponsored", true],
 
       // Turn off higher-placement sponsored so this test doesn't need to worry
@@ -320,7 +321,7 @@ add_task(async function offline_default_mode_end2end() {
 
 async function doOfflineTest({ mode, expectedResultArgs }) {
   // Turn off Merino.
-  UrlbarPrefs.set("quicksuggest.dataCollection.enabled", false);
+  UrlbarPrefs.set("quicksuggest.online.enabled", false);
 
   Services.prefs.setStringPref(PREF_RANKING_MODE, mode);
 
@@ -364,18 +365,23 @@ async function doOfflineTest({ mode, expectedResultArgs }) {
       QuickSuggestTestUtils.ampResult({
         ...expectedResultArgs,
         keyword: "offline",
+        suggestedIndex: -1,
       }),
     ],
   });
 
   Services.prefs.clearUserPref(PREF_RANKING_MODE);
-  UrlbarPrefs.set("quicksuggest.dataCollection.enabled", true);
+  UrlbarPrefs.clear("quicksuggest.online.enabled");
   sandbox.restore();
 }
 
 async function applyRanking(suggestions) {
+  let providersManager = ProvidersManager.getInstanceForSap("urlbar");
+  let quickSuggestProviderInstance = providersManager.getProvider(
+    UrlbarProviderQuickSuggest.name
+  );
   for (let s of suggestions) {
-    await UrlbarProviderQuickSuggest._test_applyRanking(s);
+    await quickSuggestProviderInstance._test_applyRanking(s);
   }
 }
 

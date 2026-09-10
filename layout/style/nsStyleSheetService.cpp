@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,7 +12,6 @@
 #include "mozilla/PresShellInlines.h"
 #include "mozilla/StyleSheet.h"
 #include "mozilla/StyleSheetInlines.h"
-#include "mozilla/Unused.h"
 #include "mozilla/css/Loader.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/Promise.h"
@@ -54,11 +51,11 @@ nsStyleSheetService::~nsStyleSheetService() {
 
 NS_IMPL_ISUPPORTS(nsStyleSheetService, nsIStyleSheetService, nsIMemoryReporter)
 
-static bool SheetHasURI(StyleSheet* aSheet, nsIURI* aSheetURI) {
+static bool SheetHasOriginalURI(StyleSheet* aSheet, nsIURI* aSheetURI) {
   MOZ_ASSERT(aSheetURI);
 
   bool result;
-  nsIURI* uri = aSheet->GetSheetURI();
+  nsIURI* uri = aSheet->GetOriginalURI();
   return uri && NS_SUCCEEDED(uri->Equals(aSheetURI, &result)) && result;
 }
 
@@ -66,7 +63,7 @@ int32_t nsStyleSheetService::FindSheetByURI(uint32_t aSheetType,
                                             nsIURI* aSheetURI) {
   SheetArray& sheets = mSheets[aSheetType];
   for (int32_t i = sheets.Length() - 1; i >= 0; i--) {
-    if (SheetHasURI(sheets[i], aSheetURI)) {
+    if (SheetHasOriginalURI(sheets[i], aSheetURI)) {
       return i;
     }
   }
@@ -126,38 +123,41 @@ nsStyleSheetService::LoadAndRegisterSheet(nsIURI* aSheetURI,
       }
 
       for (uint32_t i = 0; i < children.Length(); i++) {
-        Unused << children[i]->SendLoadAndRegisterSheet(aSheetURI, aSheetType);
+        (void)children[i]->SendLoadAndRegisterSheet(aSheetURI, aSheetType);
       }
     }
   }
   return rv;
 }
 
-nsresult nsStyleSheetService::LoadAndRegisterSheetInternal(
-    nsIURI* aSheetURI, uint32_t aSheetType) {
-  NS_ENSURE_ARG_POINTER(aSheetURI);
-
-  css::SheetParsingMode parsingMode;
+static nsresult GetSheetOrigin(uint32_t aSheetType, StyleOrigin* aOrigin) {
   switch (aSheetType) {
-    case AGENT_SHEET:
-      parsingMode = css::eAgentSheetFeatures;
-      break;
+    case nsStyleSheetService::AGENT_SHEET:
+      *aOrigin = StyleOrigin::UserAgent;
+      return NS_OK;
 
-    case USER_SHEET:
-      parsingMode = css::eUserSheetFeatures;
-      break;
+    case nsStyleSheetService::USER_SHEET:
+      *aOrigin = StyleOrigin::User;
+      return NS_OK;
 
-    case AUTHOR_SHEET:
-      parsingMode = css::eAuthorSheetFeatures;
-      break;
+    case nsStyleSheetService::AUTHOR_SHEET:
+      *aOrigin = StyleOrigin::Author;
+      return NS_OK;
 
     default:
       NS_WARNING("invalid sheet type argument");
       return NS_ERROR_INVALID_ARG;
   }
+}
 
+nsresult nsStyleSheetService::LoadAndRegisterSheetInternal(
+    nsIURI* aSheetURI, uint32_t aSheetType) {
+  NS_ENSURE_ARG_POINTER(aSheetURI);
+
+  StyleOrigin origin;
+  MOZ_TRY(GetSheetOrigin(aSheetType, &origin));
   auto loader = MakeRefPtr<css::Loader>();
-  auto result = loader->LoadSheetSync(aSheetURI, parsingMode,
+  auto result = loader->LoadSheetSync(aSheetURI, origin,
                                       css::Loader::UseSystemPrincipal::Yes);
   if (result.isErr()) {
     return result.unwrapErr();
@@ -175,30 +175,8 @@ nsStyleSheetService::SheetRegistered(nsIURI* sheetURI, uint32_t aSheetType,
   MOZ_ASSERT(_retval, "Null out param");
 
   // Check to see if we have the sheet.
-  *_retval = (FindSheetByURI(aSheetType, sheetURI) >= 0);
-
+  *_retval = FindSheetByURI(aSheetType, sheetURI) >= 0;
   return NS_OK;
-}
-
-static nsresult GetParsingMode(uint32_t aSheetType,
-                               css::SheetParsingMode* aParsingMode) {
-  switch (aSheetType) {
-    case nsStyleSheetService::AGENT_SHEET:
-      *aParsingMode = css::eAgentSheetFeatures;
-      return NS_OK;
-
-    case nsStyleSheetService::USER_SHEET:
-      *aParsingMode = css::eUserSheetFeatures;
-      return NS_OK;
-
-    case nsStyleSheetService::AUTHOR_SHEET:
-      *aParsingMode = css::eAuthorSheetFeatures;
-      return NS_OK;
-
-    default:
-      NS_WARNING("invalid sheet type argument");
-      return NS_ERROR_INVALID_ARG;
-  }
 }
 
 NS_IMETHODIMP
@@ -207,16 +185,11 @@ nsStyleSheetService::PreloadSheet(nsIURI* aSheetURI, uint32_t aSheetType,
   MOZ_ASSERT(aSheet, "Null out param");
   NS_ENSURE_ARG_POINTER(aSheetURI);
 
-  css::SheetParsingMode parsingMode;
-  nsresult rv = GetParsingMode(aSheetType, &parsingMode);
-  NS_ENSURE_SUCCESS(rv, rv);
+  StyleOrigin origin;
+  MOZ_TRY(GetSheetOrigin(aSheetType, &origin));
 
-  auto sheet = MakeRefPtr<PreloadedStyleSheet>(aSheetURI, parsingMode);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = sheet->Preload();
-  NS_ENSURE_SUCCESS(rv, rv);
-
+  auto sheet = MakeRefPtr<PreloadedStyleSheet>(aSheetURI, origin);
+  MOZ_TRY(sheet->Preload());
   sheet.forget(aSheet);
   return NS_OK;
 }
@@ -227,9 +200,8 @@ nsStyleSheetService::PreloadSheetAsync(nsIURI* aSheetURI, uint32_t aSheetType,
                                        JS::MutableHandle<JS::Value> aRval) {
   NS_ENSURE_ARG_POINTER(aSheetURI);
 
-  css::SheetParsingMode parsingMode;
-  nsresult rv = GetParsingMode(aSheetType, &parsingMode);
-  NS_ENSURE_SUCCESS(rv, rv);
+  StyleOrigin origin;
+  MOZ_TRY(GetSheetOrigin(aSheetType, &origin));
 
   nsCOMPtr<nsIGlobalObject> global = xpc::CurrentNativeGlobal(aCx);
   NS_ENSURE_TRUE(global, NS_ERROR_UNEXPECTED);
@@ -240,7 +212,7 @@ nsStyleSheetService::PreloadSheetAsync(nsIURI* aSheetURI, uint32_t aSheetType,
     return errv.StealNSResult();
   }
 
-  auto sheet = MakeRefPtr<PreloadedStyleSheet>(aSheetURI, parsingMode);
+  auto sheet = MakeRefPtr<PreloadedStyleSheet>(aSheetURI, origin);
   sheet->PreloadAsync(WrapNotNull(promise));
 
   if (!ToJSValue(aCx, promise, aRval)) {
@@ -280,7 +252,7 @@ nsStyleSheetService::UnregisterSheet(nsIURI* aSheetURI, uint32_t aSheetType) {
     }
 
     for (uint32_t i = 0; i < children.Length(); i++) {
-      Unused << children[i]->SendUnregisterSheet(aSheetURI, aSheetType);
+      (void)children[i]->SendUnregisterSheet(aSheetURI, aSheetType);
     }
   }
 
@@ -316,7 +288,7 @@ nsStyleSheetService::CollectReports(nsIHandleReportCallback* aHandleReport,
 size_t nsStyleSheetService::SizeOfIncludingThis(
     mozilla::MallocSizeOf aMallocSizeOf) const {
   size_t n = aMallocSizeOf(this);
-  for (auto& sheetArray : mSheets) {
+  for (const auto& sheetArray : mSheets) {
     n += sheetArray.ShallowSizeOfExcludingThis(aMallocSizeOf);
     for (StyleSheet* sheet : sheetArray) {
       if (sheet) {

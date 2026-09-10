@@ -9,7 +9,7 @@ class LogGradleErrorForTreeHerderJupiterTest {
     private fun assertEqualLines(expected: String, actual: String) {
         assertLinesMatch(
             expected.split("\n"),
-            actual.split("\n"))
+            actual.trimEnd('\n').split("\n"))
     }
 
     @Test
@@ -93,9 +93,6 @@ class LogGradleErrorForTreeHerderJupiterTest {
         val cause = IllegalStateException(null as String?)
         val exception = RuntimeException("Test message", cause)
         val actualMessage = LogGradleErrorForTreeHerder.getIndentedMessage(exception)
-        assertEqualLines("""
-            Test message
-            >
-        """.trimIndent(), actualMessage)
+        assertEqualLines("Test message\n> ", actualMessage)
     }
 }

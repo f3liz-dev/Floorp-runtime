@@ -83,9 +83,9 @@ exports.WatcherActor = class WatcherActor extends Actor {
    * @param {object} sessionContext
    *        The Session Context to help know what is debugged.
    *        See devtools/server/actors/watcher/session-context.js
-   * @param {Number} sessionContext.browserId: If this is a "browser-element" context type,
+   * @param {number} sessionContext.browserId: If this is a "browser-element" context type,
    *        the "browserId" of the <browser> element we would like to debug.
-   * @param {Boolean} sessionContext.isServerTargetSwitchingEnabled: Flag to to know if we should
+   * @param {boolean} sessionContext.isServerTargetSwitchingEnabled: Flag to to know if we should
    *        spawn new top level targets for the debugged context.
    */
   constructor(conn, sessionContext) {
@@ -102,7 +102,15 @@ exports.WatcherActor = class WatcherActor extends Actor {
             sessionContext.browserId
         );
       }
-      this._browserElement = browsingContext.embedderElement;
+      // Save a reference to the WebProgress interface as we keep the same instance when:
+      //  * navigating between two distinct BrowsingContext groups.
+      //    For example when navigating from parent process [about:addons] to content process [any https page].
+      //    We are navigating to a new BrowsingContext instance,
+      //    while keeping the same <browser> element.
+      //  * moving the tab between top level windows
+      //    `swapFrameLoaders` doesn't create a new WebProgress,
+      //    whereas `browsingContext.embedderElement` changes to the new <browser> element.
+      this._webProgress = browsingContext.webProgress;
     }
 
     this.watcherConnectionPrefix = conn.allocID("watcher");
@@ -155,15 +163,16 @@ exports.WatcherActor = class WatcherActor extends Actor {
   }
 
   /**
-   * If we are debugging only one Tab or Document, returns its BrowserElement.
-   * For Tabs, it will be the <browser> element used to load the web page.
+   * If we are debugging only one Tab or Document, returns its BrowsingContext.
    *
    * This is typicaly used to fetch:
-   * - its `browserId` attribute, which uniquely defines it,
-   * - its `browsingContextID` or `browsingContext`, which helps inspecting its content.
+   * - its `browserId` attribute, which uniquely defines the tab, which could navigate to many documents,
+   * - its `id` attribute, which helps identify the precise document instance currently loaded.
    */
-  get browserElement() {
-    return this._browserElement;
+  get browsingContext() {
+    // webProgress will be null when we are debugging anything but a <browser> element (i.e. a tab)
+    // for example, the browser toolbox codepath
+    return this._webProgress?.browsingContext;
   }
 
   getAllBrowsingContexts() {
@@ -175,7 +184,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
    */
   isContextDestroyed() {
     if (this.sessionContext.type == "browser-element") {
-      return !this.browserElement.browsingContext;
+      return !this.browsingContext;
     } else if (this.sessionContext.type == "webextension") {
       // This is no obvious browsing context to target for extensions, so always consider it running
       return false;
@@ -210,7 +219,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
     ParentProcessWatcherRegistry.unregisterWatcher(this.actorID);
 
     // In case the watcher actor is leaked, prevent leaking the browser window
-    this._browserElement = null;
+    this._webProgress = null;
 
     // Destroy the actor in order to ensure destroying all its children actors.
     // As this actor is a pool with children actors, when the transport/connection closes
@@ -218,7 +227,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
     super.destroy();
   }
 
-  /*
+  /**
    * Get the list of the currently watched resources for this watcher.
    *
    * @return Array<String>
@@ -236,8 +245,6 @@ exports.WatcherActor = class WatcherActor extends Actor {
       traits: {
         ...this.sessionContext.supportedTargets,
         resources: this.sessionContext.supportedResources,
-        // @backward-compat { version 142 } Supports emitting of multiple network event updates.
-        multipleNetworkEventUpdates: true,
       },
     };
   }
@@ -264,7 +271,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
     let topLevelTargetProcess;
     if (this.sessionContext.type == SESSION_TYPES.BROWSER_ELEMENT) {
       topLevelTargetProcess =
-        this.browserElement.browsingContext.currentWindowGlobal?.domProcess;
+        this.browsingContext.currentWindowGlobal?.domProcess;
       if (topLevelTargetProcess) {
         await topLevelTargetProcess.getActor(this._jsActorName).watchTargets({
           watcherActorID: this.actorID,
@@ -341,6 +348,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
   /**
    * Flush any early iframe targets relating to this top level
    * window target.
+   *
    * @param {number} topInnerWindowID
    */
   _flushIframeTargets(topInnerWindowID) {
@@ -579,7 +587,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
     );
 
     switch (this.sessionContext.type) {
-      case "all":
+      case "all": {
         const parentProcessTargetActor = actors.find(
           actor => actor.typeName === "parentProcessTarget"
         );
@@ -587,6 +595,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
           return new Set([parentProcessTargetActor]);
         }
         return new Set();
+      }
       case "browser-element":
       case "webextension":
         // All target actors for browser-element and webextension sessions
@@ -757,7 +766,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
   /**
    * Returns the network actor.
    *
-   * @return {Object} actor
+   * @return {object} actor
    *        The network actor.
    */
   getNetworkParentActor() {
@@ -768,10 +777,14 @@ exports.WatcherActor = class WatcherActor extends Actor {
     return this._networkParentActor;
   }
 
+  getExistingNetworkParentActor() {
+    return this._networkParentActor;
+  }
+
   /**
    * Returns the blackboxing actor.
    *
-   * @return {Object} actor
+   * @return {object} actor
    *        The blackboxing actor.
    */
   getBlackboxingActor() {
@@ -785,7 +798,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
   /**
    * Returns the breakpoint list actor.
    *
-   * @return {Object} actor
+   * @return {object} actor
    *        The breakpoint list actor.
    */
   getBreakpointListActor() {
@@ -799,7 +812,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
   /**
    * Returns the target configuration actor.
    *
-   * @return {Object} actor
+   * @return {object} actor
    *        The configuration actor.
    */
   getTargetConfigurationActor() {
@@ -812,7 +825,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
   /**
    * Returns the thread configuration actor.
    *
-   * @return {Object} actor
+   * @return {object} actor
    *        The configuration actor.
    */
   getThreadConfigurationActor() {
@@ -827,11 +840,11 @@ exports.WatcherActor = class WatcherActor extends Actor {
    * Used to agrement some new entries for a given data type (watchers target, resources,
    * breakpoints,...)
    *
-   * @param {String} type
+   * @param {string} type
    *        Data type to contribute to.
    * @param {Array<*>} entries
    *        List of values to add or set for this data type.
-   * @param {String} updateType
+   * @param {string} updateType
    *        "add" will only add the new entries in the existing data set.
    *        "set" will update the data set with the new entries.
    */
@@ -894,7 +907,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
    * Used to remve some existing entries for a given data type (watchers target, resources,
    * breakpoints,...)
    *
-   * @param {String} type
+   * @param {string} type
    *        Data type to modify.
    * @param {Array<*>} entries
    *        List of values to remove from this data type.
@@ -922,7 +935,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
   /**
    * Retrieve the current watched data for the provided type.
    *
-   * @param {String} type
+   * @param {string} type
    *        Data type to retrieve.
    */
   getSessionDataForType(type) {
@@ -934,7 +947,7 @@ exports.WatcherActor = class WatcherActor extends Actor {
    * This will notify the Service Worker JS Process Actors about the new top level page domain.
    * So that we start tracking that domain's workers.
    *
-   * @param {String} newTargetUrl
+   * @param {string} newTargetUrl
    */
   async updateDomainSessionDataForServiceWorkers(newTargetUrl) {
     // If the url could not be parsed the host defaults to an empty string.

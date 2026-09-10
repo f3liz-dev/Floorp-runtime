@@ -49,6 +49,7 @@ extern "C" {
     output_params.channels = 2;
     output_params.layout = CUBEB_LAYOUT_UNDEFINED;
     output_params.prefs = CUBEB_STREAM_PREF_NONE;
+    output_params.input_params = CUBEB_INPUT_PROCESSING_PARAM_NONE;
 
     rv = cubeb_get_min_latency(app_ctx, &output_params, &latency_frames);
     if (rv != CUBEB_OK) {
@@ -62,6 +63,7 @@ extern "C" {
     input_params.channels = 1;
     input_params.layout = CUBEB_LAYOUT_UNDEFINED;
     input_params.prefs = CUBEB_STREAM_PREF_NONE;
+    input_params.input_params = CUBEB_INPUT_PROCESSING_PARAM_NONE;
 
     cubeb_stream * stm;
     rv = cubeb_stream_init(app_ctx, &stm, "Example Stream 1",
@@ -583,8 +585,9 @@ cubeb_destroy(cubeb * context);
                                 NULL if this stream is input only. When input
                                 and output stream parameters are supplied, their
                                 rate has to be the same.
-    @param latency_frames Stream latency in frames.  Valid range
-                          is [1, 96000].
+    @param latency_frames Requested stream latency in frames. Valid range is
+                          [1, 96000]. The actual latency may differ depending
+                          on the backend, platform, and hardware.
     @param data_callback Will be called to preroll data before playback is
                          started by cubeb_stream_start.
     @param state_callback A pointer to a state callback.

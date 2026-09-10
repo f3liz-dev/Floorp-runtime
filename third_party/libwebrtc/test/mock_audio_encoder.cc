@@ -10,6 +10,14 @@
 
 #include "test/mock_audio_encoder.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <span>
+
+#include "api/audio_codecs/audio_encoder.h"
+#include "rtc_base/buffer.h"
+#include "rtc_base/checks.h"
+
 namespace webrtc {
 
 MockAudioEncoder::MockAudioEncoder() = default;
@@ -25,7 +33,7 @@ MockAudioEncoder::FakeEncoding::FakeEncoding(size_t encoded_bytes) {
 
 AudioEncoder::EncodedInfo MockAudioEncoder::FakeEncoding::operator()(
     uint32_t timestamp,
-    ArrayView<const int16_t> audio,
+    std::span<const int16_t> audio,
     Buffer* encoded) {
   encoded->SetSize(encoded->size() + info_.encoded_bytes);
   return info_;
@@ -34,17 +42,17 @@ AudioEncoder::EncodedInfo MockAudioEncoder::FakeEncoding::operator()(
 MockAudioEncoder::CopyEncoding::~CopyEncoding() = default;
 
 MockAudioEncoder::CopyEncoding::CopyEncoding(AudioEncoder::EncodedInfo info,
-                                             ArrayView<const uint8_t> payload)
+                                             std::span<const uint8_t> payload)
     : info_(info), payload_(payload) {}
 
-MockAudioEncoder::CopyEncoding::CopyEncoding(ArrayView<const uint8_t> payload)
+MockAudioEncoder::CopyEncoding::CopyEncoding(std::span<const uint8_t> payload)
     : payload_(payload) {
   info_.encoded_bytes = payload_.size();
 }
 
 AudioEncoder::EncodedInfo MockAudioEncoder::CopyEncoding::operator()(
     uint32_t timestamp,
-    ArrayView<const int16_t> audio,
+    std::span<const int16_t> audio,
     Buffer* encoded) {
   RTC_CHECK(encoded);
   RTC_CHECK_LE(info_.encoded_bytes, payload_.size());

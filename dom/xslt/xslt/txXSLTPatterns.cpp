@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,7 +15,6 @@
 #include "txXSLTFunctions.h"
 
 using mozilla::UniquePtr;
-using mozilla::Unused;
 using mozilla::WrapUnique;
 
 /*
@@ -200,7 +198,7 @@ txPattern* txLocPathPattern::getSubPatternAt(uint32_t aPos) {
 void txLocPathPattern::setSubPatternAt(uint32_t aPos, txPattern* aPattern) {
   NS_ASSERTION(aPos < mSteps.Length(), "setting bad subexpression index");
   Step* step = &mSteps[aPos];
-  Unused << step->pattern.release();
+  (void)step->pattern.release();
   step->pattern = WrapUnique(aPattern);
 }
 

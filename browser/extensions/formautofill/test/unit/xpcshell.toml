@@ -1,4 +1,7 @@
 [DEFAULT]
+run-if = [
+  "os != 'android'",
+]
 firefox-appdir = "browser"
 head = "head.js"
 support-files = ["../fixtures/**"]
@@ -40,6 +43,8 @@ head = "head_addressComponent.js"
 
 ["test_addressRecords.js"]
 
+["test_autofillDataTypes.js"]
+
 ["test_autofillFormFields.js"]
 
 ["test_autofill_ios_library.js"]
@@ -48,7 +53,6 @@ head = "head_addressComponent.js"
 
 ["test_creditCardRecords.js"]
 skip-if = [
-  "os == 'mac' && os_version == '11.20' && arch == 'aarch64'", # Bug 1729554
   "os == 'mac' && os_version == '15.30' && arch == 'aarch64'", # Bug 1729554
 ]
 
@@ -60,15 +64,12 @@ skip-if = [
 
 ["test_getAdaptedProfiles_locales.js"]
 
-["test_getCategoriesFromFieldNames.js"]
-
 ["test_getCreditCardLogo.js"]
 
 ["test_getInfo.js"]
 
 ["test_getRecords.js"]
 skip-if = [
-  "os == 'mac' && os_version == '11.20' && arch == 'aarch64'", # Bug 1729554
   "os == 'mac' && os_version == '15.30' && arch == 'aarch64'", # Bug 1729554
 ]
 
@@ -92,22 +93,26 @@ skip-if = [
 
 ["test_parseStreetAddress.js"]
 
+["test_passportStorage.js"]
+
+["test_paymentsListItems.js"]
+
 ["test_phoneNumber.js"]
 
 ["test_profileAutocompleteResult.js"]
 
 ["test_reconcile.js"]
 skip-if = [
-  "os == 'mac' && os_version == '11.20' && arch == 'aarch64'", # Bug 1729554
   "os == 'mac' && os_version == '15.30' && arch == 'aarch64'", # Bug 1729554
 ]
+
+["test_rustStoreShutdown.js"]
 
 ["test_savedFieldNames.js"]
 
 ["test_storage_remove.js"]
 skip-if = [
   "os == 'mac' && os_version == '15.30' && arch == 'aarch64'", # Bug 1729554
-  "os == 'mac' && os_version == '11.20' && arch == 'aarch64'", # Bug 1729554
 ]
 
 ["test_storage_syncfields.js"]
@@ -115,7 +120,6 @@ skip-if = [
 ["test_storage_tombstones.js"]
 skip-if = [
   "os == 'mac' && os_version == '15.30' && arch == 'aarch64'", # Bug 1729554
-  "os == 'mac' && os_version == '11.20' && arch == 'aarch64'", # Bug 1729554
 ]
 
 ["test_sync.js"]
@@ -127,7 +131,6 @@ head = "head.js ../../../../../services/sync/tests/unit/head_appinfo.js ../../..
 ["test_sync_deprecate_credit_card_v4.js"]
 head = "head.js ../../../../../services/sync/tests/unit/head_appinfo.js ../../../../../services/common/tests/unit/head_helpers.js ../../../../../services/sync/tests/unit/head_helpers.js ../../../../../services/sync/tests/unit/head_http_server.js"
 skip-if = [
-  "os == 'mac' && os_version == '11.20' && arch == 'aarch64'", # Bug 1729554
   "os == 'mac' && os_version == '15.30' && arch == 'aarch64'", # Bug 1729554
 ]
 
@@ -135,6 +138,5 @@ skip-if = [
 
 ["test_transformFields.js"]
 skip-if = [
-  "os == 'mac' && os_version == '11.20' && arch == 'aarch64'", # Bug 1729554
   "os == 'mac' && os_version == '15.30' && arch == 'aarch64'", # Bug 1729554
 ]

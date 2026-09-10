@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -82,13 +81,14 @@ class SupportedLimits;
 class Texture;
 class WebGPUChild;
 
-class Device final : public DOMEventTargetHelper {
+class Device final : public DOMEventTargetHelper,
+                     public SupportsWeakPtr,
+                     public ObjectBase {
  public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(Device, DOMEventTargetHelper)
   GPU_DECL_JS_WRAP(Device)
 
-  const RawId mId;
   RefPtr<SupportedFeatures> mFeatures;
   RefPtr<SupportedLimits> mLimits;
   RefPtr<AdapterInfo> mAdapterInfo;
@@ -103,34 +103,25 @@ class Device final : public DOMEventTargetHelper {
                   RefPtr<AdapterInfo> aAdapterInfo,
                   RefPtr<dom::Promise> aLostPromise);
 
-  RefPtr<WebGPUChild> GetBridge();
   already_AddRefed<Texture> InitSwapChain(
       const dom::GPUCanvasConfiguration* const aConfig,
       const layers::RemoteTextureOwnerId aOwnerId,
-      mozilla::Span<RawId const> aBufferIds, bool aUseSharedTextureInSwapChain,
-      gfx::SurfaceFormat aFormat, gfx::IntSize aCanvasSize);
+      bool aUseSharedTextureInSwapChain, gfx::SurfaceFormat aFormat,
+      gfx::IntSize aCanvasSize);
   bool CheckNewWarning(const nsACString& aMessage);
-
-  void CleanupUnregisteredInParent();
 
   void TrackBuffer(Buffer* aBuffer);
   void UntrackBuffer(Buffer* aBuffer);
 
-  bool IsLost() const;
-
-  RawId GetId() const { return mId; }
-
  private:
-  ~Device();
-  void Cleanup();
+  virtual ~Device();
   // Expires external textures in mExternalTexturesToExpire. Scheduled to run
   // as a stable state task when an external texture is imported from an
   // HTMLVideoElement.
   void ExpireExternalTextures();
 
-  RefPtr<WebGPUChild> mBridge;
-  bool mValid = true;
-  nsString mLabel;
+  // Used to guard losing the device multiple times.
+  bool mLost;
   RefPtr<dom::Promise> mLostPromise;
   RefPtr<Queue> mQueue;
   nsTHashSet<nsCString> mKnownWarnings;
@@ -141,8 +132,6 @@ class Device final : public DOMEventTargetHelper {
   nsTArray<WeakPtr<ExternalTexture>> mExternalTexturesToExpire;
 
  public:
-  void GetLabel(nsAString& aValue) const;
-  void SetLabel(const nsAString& aLabel);
   dom::Promise* GetLost(ErrorResult& aRv);
   void ResolveLost(dom::GPUDeviceLostReason aReason, const nsAString& aMessage);
 
@@ -156,6 +145,9 @@ class Device final : public DOMEventTargetHelper {
   already_AddRefed<Buffer> CreateBuffer(const dom::GPUBufferDescriptor& aDesc,
                                         ErrorResult& aRv);
 
+  static dom::GPUTextureDescriptor SwapChainTextureDescriptor(
+      const dom::GPUCanvasConfiguration& aConfig,
+      const gfx::IntSize& aCanvasSize);
   already_AddRefed<Texture> CreateTextureForSwapChain(
       const dom::GPUCanvasConfiguration* const aConfig,
       const gfx::IntSize& aCanvasSize,

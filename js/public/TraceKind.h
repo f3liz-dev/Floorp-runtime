@@ -1,6 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -96,11 +94,11 @@ struct MapTypeToTraceKind {
   D(Script,       js::BaseScript,      true,      true)        \
   D(Shape,        js::Shape,           true,      false)       \
   D(String,       JSString,            false,     false)       \
-  D(Symbol,       JS::Symbol,          false,     false)       \
+  D(Symbol,       JS::Symbol,          true,      true)        \
   D(BigInt,       JS::BigInt,          false,     false)       \
   D(RegExpShared, js::RegExpShared,    true,      true)        \
   D(GetterSetter, js::GetterSetter,    true,      true)        \
-  D(PropMap,      js::PropMap,         false,     false)
+  D(PropMap,      js::PropMap,         true,      false)
 // clang-format on
 
 // Returns true if the JS::TraceKind is represented as a node in cycle collector

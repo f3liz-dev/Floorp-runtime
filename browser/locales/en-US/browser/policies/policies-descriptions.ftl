@@ -11,6 +11,8 @@
 
 policy-3rdparty = Set policies that WebExtensions can access via chrome.storage.managed.
 
+policy-AIControls = Configure AI controls.
+
 policy-AllowedDomainsForApps = Define domains allowed to access Google Workspace.
 
 policy-AllowFileSelectionDialogs = Allow file selection dialogs.
@@ -31,6 +33,8 @@ policy-AutoLaunchProtocolsFromOrigins = Define a list of external protocols that
 
 policy-BackgroundAppUpdate2 = Enable or disable the background updater.
 
+policy-Backup = Disable backup or restore of profile data.
+
 policy-BlockAboutAddons = Block access to the Add-ons Manager (about:addons).
 
 policy-BlockAboutConfig = Block access to the about:config page.
@@ -45,6 +49,11 @@ policy-CaptivePortal = Enable or disable captive portal support.
 
 policy-CertificatesDescription = Add certificates or use built-in certificates.
 
+# CNSA 2.0 is the United States National Security Agency's Commercial National
+# Security Algorithm Suite 2.0. ML-KEM-1024 is a post-quantum key agreement
+# algorithm. Neither should be translated.
+policy-CNSA2KeyAgreementEnabled = Enable the CNSA 2.0 ML-KEM-1024 key agreement for TLS.
+
 policy-ContentAnalysis = Enable or disable connection to data-loss-prevention agent.
 
 policy-Cookies = Allow or deny websites to set cookies.
@@ -56,7 +65,11 @@ policy-DisableAccounts = Disable account-based services, including sync.
 
 policy-DisabledCiphers = Disable ciphers.
 
+policy-DefaultBrowserSettingEnabled = Control whether the user can set { -brand-short-name } as the default browser.
+
 policy-DefaultDownloadDirectory = Set the default download directory.
+
+policy-DefaultSerialGuardSetting = Control use of the Serial API.
 
 policy-DisableAppUpdate = Prevent the browser from updating.
 
@@ -82,6 +95,8 @@ policy-DisableForgetButton = Prevent access to the Forget button.
 
 policy-DisableFormHistory = Don’t remember search and form history.
 
+policy-DisableLaunchOnLogin = Prevent { -brand-short-name } from launching automatically when the user logs in.
+
 policy-DisablePrimaryPasswordCreation = If true, a Primary Password can’t be created.
 
 policy-DisablePasswordReveal = Do not allow passwords to be revealed in saved logins.
@@ -91,6 +106,10 @@ policy-DisablePrivateBrowsing = Disable Private Browsing.
 policy-DisableProfileImport = Disable the menu command to Import data from another browser.
 
 policy-DisableProfileRefresh = Disable the Refresh { -brand-short-name } button in the about:support page.
+
+policy-DisableRemoteImprovements = Prevent { -brand-short-name } from applying performance, stability, and feature changes between updates.
+
+policy-DisableRemoteSettingsAndAcceptSecurityConsequences = Disable remote settings.
 
 policy-DisableSafeMode = Disable the feature to restart in Safe Mode. Note: the Shift key to enter Safe Mode can only be disabled on Windows using Group Policy.
 
@@ -135,6 +154,8 @@ policy-FirefoxHome2 = Configure { -firefox-home-brand-name }.
 
 policy-FirefoxSuggest = Configure { -firefox-suggest-brand-name }.
 
+policy-GenerativeAI = Configure generative AI features.
+
 policy-GoToIntranetSiteForSingleWordEntryInAddressBar = Force direct intranet site navigation instead of searching when typing single word entries in the address bar.
 
 policy-Handlers = Configure default application handlers.
@@ -150,6 +171,8 @@ policy-HttpsOnlyMode = Allow HTTPS-Only Mode to be enabled.
 
 policy-InstallAddonsPermission = Allow certain websites to install add-ons.
 
+policy-IPProtectionAvailable = Prevent the built-in VPN from being available to users.
+
 policy-LegacyProfiles = Disable the feature enforcing a separate profile for each installation.
 
 ## Do not translate "SameSite", it's the name of a cookie attribute.
@@ -161,6 +184,8 @@ policy-LegacySameSiteCookieBehaviorEnabledForDomainList = Revert to legacy SameS
 ##
 
 policy-LocalFileLinks = Allow specific websites to link to local files.
+
+policy-LocalNetworkAccess = Enable or disable local network access checks.
 
 policy-ManagedBookmarks = Configures a list of bookmarks managed by an administrator that cannot be changed by the user.
 
@@ -199,7 +224,7 @@ policy-Permissions2 = Configure permissions for camera, microphone, location, no
 
 policy-PictureInPicture = Enable or disable Picture-in-Picture.
 
-policy-PopupBlocking = Allow certain websites to display popups by default.
+policy-PopupBlocking2 = Allow certain websites to display popups and be redirected by third-party frames.
 
 policy-Preferences = Set and lock the value for a subset of preferences.
 
@@ -208,6 +233,8 @@ policy-PrivateBrowsingModeAvailability = Set availability of private browsing mo
 policy-PromptForDownloadLocation = Ask where to save files when downloading.
 
 policy-Proxy = Configure proxy settings.
+
+policy-RelaunchRequired = Require { -brand-short-name } to be relaunched within a given period and notify the user of the upcoming relaunch.
 
 policy-RequestedLocales = Set the list of requested locales for the application in order of preference.
 
@@ -223,6 +250,8 @@ policy-SearchSuggestEnabled = Enable or disable search suggestions.
 policy-SecurityDevices2 = Add or delete PKCS #11 modules.
 
 policy-ShowHomeButton = Show the home button on the toolbar.
+
+policy-SitePolicies = Site specific policies.
 
 # ”You represent that...” means ”You confirm/declare that...”
 policy-SkipTermsOfUse2 = Do not display the Terms of Use and Privacy Notice upon startup. You represent that you accept and have the authority to accept the Terms of Use on behalf of all individuals to whom you provide access to this browser.
@@ -241,6 +270,8 @@ policy-UserMessaging = Don’t show certain messages to the user.
 
 policy-UseSystemPrintDialog = Print using the system print dialog.
 
+policy-VisualSearchEnabled = Enable or disable visual search.
+
 # “format” refers to the format used for the value of this policy.
 policy-WebsiteFilter = Block websites from being visited. See documentation for more details on the format.
 
@@ -248,3 +279,6 @@ policy-Windows10SSO = Allow Windows single sign-on for Microsoft, work, and scho
 
 # Entra is the name of a Microsoft product.
 policy-MicrosoftEntraSSO = Allow single sign-on for Microsoft Entra accounts.
+
+# Do not translate "XSLTProcessor" as it is the name of an API interface.
+policy-XSLTEnabled = Enable or disable support for the XSLTProcessor JavaScript API and the XSLT processing instruction.

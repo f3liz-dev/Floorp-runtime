@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -16,12 +14,8 @@
 #include "mozilla/Mutex.h"
 #include "mozilla/RemoteCDMParent.h"
 #include "mozilla/StaticPtr.h"
-#include "mozilla/UniquePtr.h"
 
 namespace mozilla {
-
-using AMediaCodecCryptoInfoFnPtr_setPattern = void (*)(AMediaCodecCryptoInfo*,
-                                                       cryptoinfo_pattern_t*);
 
 class MediaDrmCrypto final {
   template <typename T, typename... Args>
@@ -105,6 +99,9 @@ class MediaDrmRemoteCDMParent final : public RemoteCDMParent {
 
   void ActorDestroy(ActorDestroyReason aWhy) override;
 
+  static void UnprovisionMediaDrmOrigins(
+      const nsTArray<nsCString>& aOriginKeys);
+
  private:
   virtual ~MediaDrmRemoteCDMParent();
 
@@ -135,7 +132,7 @@ class MediaDrmRemoteCDMParent final : public RemoteCDMParent {
   void HandleEvent(nsString&& aSessionId, AMediaDrmEventType aEventType,
                    int aExtra, nsTArray<uint8_t>&& aData);
 
-  void HandleExpirationUpdate(nsString&& aSessionId, int aExpiryTimeInMS);
+  void HandleExpirationUpdate(nsString&& aSessionId, int64_t aExpiryTimeInMS);
 
   void HandleKeysChange(nsString&& aSessionId, bool aHasNewUsableKey,
                         nsTArray<CDMKeyInfo>&& aKeyInfo);
@@ -150,8 +147,6 @@ class MediaDrmRemoteCDMParent final : public RemoteCDMParent {
 
   using DrmCallbackMap = std::map<AMediaDrm*, MediaDrmRemoteCDMParent*>;
   static StaticAutoPtr<DrmCallbackMap> sCbMap;
-  static AMediaCodecCryptoInfoFnPtr_setPattern
-      sAMediaCodecCryptoInfo_setPattern;
 
   struct SessionEntry {
     AMediaDrmSessionId id;

@@ -9,24 +9,40 @@
  */
 #include "video/video_quality_test.h"
 
-#include <stdio.h>
-
+#include <algorithm>
 #include <cstdint>
+#include <cstdio>
+#include <memory>
 #include <optional>
+#include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
+
+#ifdef WEBRTC_WIN
+#include <conio.h>
+#endif
 
 #include "absl/flags/flag.h"
+#include "api/audio/audio_device.h"
+#include "api/audio/builtin_audio_processing_builder.h"
+#include "api/audio/create_audio_device_module.h"
 #include "api/call/transport.h"
 #include "api/environment/environment.h"
+#include "api/fec_controller_override.h"
 #include "api/field_trials_view.h"
 #include "api/make_ref_counted.h"
 #include "api/rtc_event_log/rtc_event_log.h"
+#include "api/rtc_event_log_output_file.h"
+#include "api/rtp_header_extension_id.h"
 #include "api/rtp_parameters.h"
 #include "api/scoped_refptr.h"
+#include "api/task_queue/task_queue_base.h"
+#include "api/test/create_frame_generator.h"
 #include "api/test/frame_generator_interface.h"
 #include "api/test/simulated_network.h"
 #include "api/units/time_delta.h"
+#include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "api/video/encoded_image.h"
 #include "api/video/video_bitrate_allocation.h"
 #include "api/video/video_codec_constants.h"
@@ -37,78 +53,59 @@
 #include "api/video_codecs/spatial_layer.h"
 #include "api/video_codecs/video_codec.h"
 #include "api/video_codecs/video_decoder.h"
+#include "api/video_codecs/video_encoder.h"
 #include "call/audio_receive_stream.h"
 #include "call/audio_send_stream.h"
 #include "call/audio_state.h"
 #include "call/call_config.h"
+#include "call/fake_network_pipe.h"
 #include "call/video_receive_stream.h"
 #include "call/video_send_stream.h"
+#include "media/base/media_constants.h"
+#include "media/engine/adm_helpers.h"
+#include "media/engine/fake_video_codec_factory.h"
 #include "media/engine/internal_decoder_factory.h"
+#include "media/engine/internal_encoder_factory.h"
+#include "media/engine/simulcast_encoder_adapter.h"
+#include "media/engine/webrtc_video_engine.h"
 #include "modules/audio_device/include/test_audio_device.h"
-#include "modules/rtp_rtcp/include/rtp_rtcp_defines.h"
+#include "modules/audio_mixer/audio_mixer_impl.h"
+#include "modules/video_coding/utility/ivf_file_writer.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/numerics/safe_conversions.h"
-#include "rtc_base/system/file_wrapper.h"
+#include "rtc_base/strings/string_builder.h"
+#include "rtc_base/task_queue_for_test.h"
+#include "test/call_test.h"
+#include "test/create_test_field_trials.h"
 #include "test/direct_transport.h"
 #include "test/frame_generator_capturer.h"
 #include "test/gtest.h"
 #include "test/layer_filtering_transport.h"
-#include "video/config/video_encoder_config.h"
-#include "video/video_analyzer.h"
-
-#if defined(WEBRTC_WIN)
-#include <conio.h>
-#endif
-
-#include <algorithm>
-#include <memory>
-#include <string>
-#include <vector>
-
-#include "api/audio/audio_device.h"
-#include "api/audio/builtin_audio_processing_builder.h"
-#include "api/fec_controller_override.h"
-#include "api/rtc_event_log_output_file.h"
-#include "api/task_queue/default_task_queue_factory.h"
-#include "api/task_queue/task_queue_base.h"
-#include "api/test/create_frame_generator.h"
-#include "api/video/builtin_video_bitrate_allocator_factory.h"
-#include "api/video_codecs/video_encoder.h"
-#include "call/fake_network_pipe.h"
-#include "media/base/media_constants.h"
-#include "media/engine/adm_helpers.h"
-#include "media/engine/fake_video_codec_factory.h"
-#include "media/engine/internal_encoder_factory.h"
-#include "media/engine/simulcast_encoder_adapter.h"
-#include "media/engine/webrtc_video_engine.h"
-#include "modules/audio_mixer/audio_mixer_impl.h"
-#include "modules/video_coding/utility/ivf_file_writer.h"
-#include "rtc_base/strings/string_builder.h"
-#include "rtc_base/task_queue_for_test.h"
 #include "test/network/simulated_network.h"
 #include "test/platform_video_capturer.h"
 #include "test/test_flags.h"
 #include "test/testsupport/file_utils.h"
+#include "test/testsupport/y4m_frame_generator.h"
 #include "test/video_renderer.h"
+#include "test/video_test_constants.h"
+#include "video/config/encoder_stream_factory.h"
+#include "video/config/video_encoder_config.h"
 #include "video/frame_dumping_decoder.h"
+#include "video/video_analyzer.h"
 #ifdef WEBRTC_WIN
 #include "modules/audio_device/include/audio_device_factory.h"
 #endif
-#include "test/video_test_constants.h"
-#include "video/config/encoder_stream_factory.h"
 
 namespace webrtc {
 
 namespace {
-enum : int {  // The first valid value is 1.
-  kAbsSendTimeExtensionId = 1,
-  kGenericFrameDescriptorExtensionId00,
-  kGenericFrameDescriptorExtensionId01,
-  kTransportSequenceNumberExtensionId,
-  kVideoContentTypeExtensionId,
-  kVideoTimingExtensionId,
-};
+constexpr RtpHeaderExtensionId kAbsSendTimeExtensionId(1);
+constexpr RtpHeaderExtensionId kGenericFrameDescriptorExtensionId00(2);
+constexpr RtpHeaderExtensionId kDependencyDescriptorExtensionId(3);
+constexpr RtpHeaderExtensionId kTransportSequenceNumberExtensionId(4);
+constexpr RtpHeaderExtensionId kVideoContentTypeExtensionId(5);
+constexpr RtpHeaderExtensionId kVideoTimingExtensionId(6);
 
 constexpr char kSyncGroup[] = "av_sync";
 constexpr int kOpusMinBitrateBps = 6000;
@@ -172,20 +169,20 @@ class QualityTestVideoEncoder : public VideoEncoder,
  public:
   QualityTestVideoEncoder(std::unique_ptr<VideoEncoder> encoder,
                           VideoAnalyzer* analyzer,
-                          std::vector<FileWrapper> files,
+                          std::vector<std::string> file_names,
                           double overshoot_factor)
       : encoder_(std::move(encoder)),
         overshoot_factor_(overshoot_factor),
         analyzer_(analyzer) {
-    for (FileWrapper& file : files) {
+    for (const std::string& file_name : file_names) {
       writers_.push_back(
-          IvfFileWriter::Wrap(std::move(file), /* byte_limit= */ 100000000));
+          IvfFileWriter::Wrap(file_name, /* byte_limit= */ 100000000));
     }
   }
 
   // Implement VideoEncoder
   void SetFecControllerOverride(
-      FecControllerOverride* fec_controller_override) {
+      FecControllerOverride* fec_controller_override) override {
     // Ignored.
   }
 
@@ -204,7 +201,7 @@ class QualityTestVideoEncoder : public VideoEncoder,
   int32_t Release() override { return encoder_->Release(); }
 
   int32_t Encode(const VideoFrame& frame,
-                 const std::vector<VideoFrameType>* frame_types) {
+                 const std::vector<VideoFrameType>* frame_types) override {
     if (analyzer_) {
       analyzer_->PreEncodeOnFrame(frame);
     }
@@ -297,8 +294,11 @@ class QualityTestVideoEncoder : public VideoEncoder,
     return callback_->OnEncodedImage(encoded_image, codec_specific_info);
   }
 
-  void OnDroppedFrame(DropReason reason) override {
-    callback_->OnDroppedFrame(reason);
+  void OnFrameDropped(uint32_t rtp_timestamp,
+                      int spatial_id,
+                      bool is_end_of_temporal_unit) override {
+    callback_->OnFrameDropped(rtp_timestamp, spatial_id,
+                              is_end_of_temporal_unit);
   }
 
   const std::unique_ptr<VideoEncoder> encoder_;
@@ -339,7 +339,7 @@ std::unique_ptr<VideoDecoder> VideoQualityTest::CreateVideoDecoder(
     const SdpVideoFormat& format) {
   std::unique_ptr<VideoDecoder> decoder;
   if (format.name == "FakeCodec") {
-    decoder = webrtc::FakeVideoDecoderFactory::CreateVideoDecoder();
+    decoder = FakeVideoDecoderFactory::CreateVideoDecoder();
   } else {
     decoder = decoder_factory_->Create(env, format);
   }
@@ -348,8 +348,7 @@ std::unique_ptr<VideoDecoder> VideoQualityTest::CreateVideoDecoder(
     str << receive_logs_++;
     std::string path =
         params_.logging.encoded_frame_base_path + "." + str.str() + ".recv.ivf";
-    decoder = CreateFrameDumpingDecoderWrapper(
-        std::move(decoder), FileWrapper::OpenWriteOnly(path));
+    decoder = CreateFrameDumpingDecoderWrapper(std::move(decoder), path);
   }
   return decoder;
 }
@@ -366,19 +365,15 @@ std::unique_ptr<VideoEncoder> VideoQualityTest::CreateVideoEncoder(
         env, encoder_factory_.get(), nullptr, format);
   }
 
-  std::vector<FileWrapper> encoded_frame_dump_files;
+  std::vector<std::string> encoded_frame_dump_files;
   if (!params_.logging.encoded_frame_base_path.empty()) {
-    char ss_buf[100];
-    SimpleStringBuilder sb(ss_buf);
+    StringBuilder sb;
     sb << send_logs_++;
     std::string prefix =
         params_.logging.encoded_frame_base_path + "." + sb.str() + ".send.";
-    encoded_frame_dump_files.push_back(
-        FileWrapper::OpenWriteOnly(prefix + "1.ivf"));
-    encoded_frame_dump_files.push_back(
-        FileWrapper::OpenWriteOnly(prefix + "2.ivf"));
-    encoded_frame_dump_files.push_back(
-        FileWrapper::OpenWriteOnly(prefix + "3.ivf"));
+    encoded_frame_dump_files.push_back(prefix + "1.ivf");
+    encoded_frame_dump_files.push_back(prefix + "2.ivf");
+    encoded_frame_dump_files.push_back(prefix + "3.ivf");
   }
 
   double overshoot_factor = 1.0;
@@ -406,10 +401,10 @@ std::unique_ptr<VideoEncoder> VideoQualityTest::CreateVideoEncoder(
   return encoder;
 }
 
-VideoQualityTest::VideoQualityTest(
-    std::unique_ptr<InjectionComponents> injection_components)
-    : clock_(Clock::GetRealTimeClock()),
-      task_queue_factory_(CreateDefaultTaskQueueFactory()),
+VideoQualityTest::VideoQualityTest(InjectionComponents injection_components)
+    : CallTest(injection_components.field_trials_ptr
+                   ? *injection_components.field_trials_ptr
+                   : CreateTestFieldTrials("")),
       video_decoder_factory_(
           [this](const Environment& env, const SdpVideoFormat& format) {
             return this->CreateVideoDecoder(env, format);
@@ -428,29 +423,26 @@ VideoQualityTest::VideoQualityTest(
       send_logs_(0),
       injection_components_(std::move(injection_components)),
       num_video_streams_(0) {
-  if (injection_components_ == nullptr) {
-    injection_components_ = std::make_unique<InjectionComponents>();
-  }
-  if (injection_components_->video_decoder_factory != nullptr) {
-    decoder_factory_ = std::move(injection_components_->video_decoder_factory);
+  if (injection_components_.video_decoder_factory != nullptr) {
+    decoder_factory_ = std::move(injection_components_.video_decoder_factory);
   } else {
     decoder_factory_ = std::make_unique<InternalDecoderFactory>();
   }
-  if (injection_components_->video_encoder_factory != nullptr) {
-    encoder_factory_ = std::move(injection_components_->video_encoder_factory);
+  if (injection_components_.video_encoder_factory != nullptr) {
+    encoder_factory_ = std::move(injection_components_.video_encoder_factory);
   } else {
     encoder_factory_ = std::make_unique<InternalEncoderFactory>();
   }
 
   fec_controller_factory_ =
-      std::move(injection_components_->fec_controller_factory);
+      std::move(injection_components_.fec_controller_factory);
   network_state_predictor_factory_ =
-      std::move(injection_components_->network_state_predictor_factory);
+      std::move(injection_components_.network_state_predictor_factory);
   network_controller_factory_ =
-      std::move(injection_components_->network_controller_factory);
+      std::move(injection_components_.network_controller_factory);
 
   // Register header extensions that are used by transport to identify
-  // extensions when parsing incomig packets.
+  // extensions when parsing incoming packets.
   RegisterRtpExtension(RtpExtension(RtpExtension::kTransportSequenceNumberUri,
                                     kTransportSequenceNumberExtensionId));
   RegisterRtpExtension(
@@ -458,16 +450,12 @@ VideoQualityTest::VideoQualityTest(
   RegisterRtpExtension(RtpExtension(RtpExtension::kGenericFrameDescriptorUri00,
                                     kGenericFrameDescriptorExtensionId00));
   RegisterRtpExtension(RtpExtension(RtpExtension::kDependencyDescriptorUri,
-                                    kRtpExtensionDependencyDescriptor));
+                                    kDependencyDescriptorExtensionId));
   RegisterRtpExtension(RtpExtension(RtpExtension::kVideoContentTypeUri,
                                     kVideoContentTypeExtensionId));
   RegisterRtpExtension(
       RtpExtension(RtpExtension::kVideoTimingUri, kVideoTimingExtensionId));
 }
-
-VideoQualityTest::InjectionComponents::InjectionComponents() = default;
-
-VideoQualityTest::InjectionComponents::~InjectionComponents() = default;
 
 void VideoQualityTest::TestBody() {}
 
@@ -487,18 +475,15 @@ std::string VideoQualityTest::GenerateGraphTitle() const {
 }
 
 void VideoQualityTest::CheckParamsAndInjectionComponents() {
-  if (injection_components_ == nullptr) {
-    injection_components_ = std::make_unique<InjectionComponents>();
-  }
-  if (!params_.config && injection_components_->sender_network == nullptr &&
-      injection_components_->receiver_network == nullptr) {
+  if (!params_.config && injection_components_.sender_network == nullptr &&
+      injection_components_.receiver_network == nullptr) {
     params_.config = BuiltInNetworkBehaviorConfig();
   }
   RTC_CHECK(
-      (params_.config && injection_components_->sender_network == nullptr &&
-       injection_components_->receiver_network == nullptr) ||
-      (!params_.config && injection_components_->sender_network != nullptr &&
-       injection_components_->receiver_network != nullptr));
+      (params_.config && injection_components_.sender_network == nullptr &&
+       injection_components_.receiver_network == nullptr) ||
+      (!params_.config && injection_components_.sender_network != nullptr &&
+       injection_components_.receiver_network != nullptr));
   for (size_t video_idx = 0; video_idx < num_video_streams_; ++video_idx) {
     // Iterate over primary and secondary video streams.
     if (!params_.video[video_idx].enabled)
@@ -616,6 +601,7 @@ VideoStream VideoQualityTest::DefaultVideoStream(const Params& params,
   stream.max_qp = kDefaultVideoMaxQpVpx;
   stream.num_temporal_layers = params.video[video_idx].num_temporal_layers;
   stream.active = true;
+  stream.scalability_mode = params.ss[0].scalability_mode;
   return stream;
 }
 
@@ -644,14 +630,14 @@ void VideoQualityTest::FillScalabilitySettings(
     const std::vector<std::string>& sl_descriptors) {
   if (params->ss[video_idx].streams.empty() &&
       params->ss[video_idx].infer_streams) {
-    webrtc::VideoEncoder::EncoderInfo encoder_info;
-    webrtc::VideoEncoderConfig encoder_config;
+    VideoEncoder::EncoderInfo encoder_info;
+    VideoEncoderConfig encoder_config;
     encoder_config.codec_type =
         PayloadStringToCodecType(params->video[video_idx].codec);
     encoder_config.content_type =
         params->screenshare[video_idx].enabled
-            ? webrtc::VideoEncoderConfig::ContentType::kScreen
-            : webrtc::VideoEncoderConfig::ContentType::kRealtimeVideo;
+            ? VideoEncoderConfig::ContentType::kScreen
+            : VideoEncoderConfig::ContentType::kRealtimeVideo;
     encoder_config.max_bitrate_bps = params->video[video_idx].max_bitrate_bps;
     encoder_config.min_transmit_bitrate_bps =
         params->video[video_idx].min_transmit_bps;
@@ -711,7 +697,7 @@ void VideoQualityTest::FillScalabilitySettings(
     std::vector<int> v = VideoQualityTest::ParseCSV(descriptor);
     RTC_CHECK_EQ(v.size(), 8);
 
-    SpatialLayer layer = {0};
+    SpatialLayer layer = {.width = 0};
     layer.width = v[0];
     layer.height = v[1];
     layer.maxFramerate = v[2];
@@ -737,7 +723,7 @@ void VideoQualityTest::SetupVideo(Transport* send_transport,
   RTC_CHECK(num_video_streams_ > 0);
   video_encoder_configs_.resize(num_video_streams_);
   std::string generic_codec_name;
-  webrtc::VideoEncoder::EncoderInfo encoder_info;
+  VideoEncoder::EncoderInfo encoder_info;
   for (size_t video_idx = 0; video_idx < num_video_streams_; ++video_idx) {
     VideoSendStream::Config config(send_transport);
     config.rtp.extmap_allow_mixed = true;
@@ -803,7 +789,7 @@ void VideoQualityTest::SetupVideo(Transport* send_transport,
     if (params_.call.dependency_descriptor) {
       video_send_configs_[video_idx].rtp.extensions.emplace_back(
           RtpExtension::kDependencyDescriptorUri,
-          kRtpExtensionDependencyDescriptor);
+          kDependencyDescriptorExtensionId);
     }
 
     video_send_configs_[video_idx].rtp.extensions.emplace_back(
@@ -1058,11 +1044,11 @@ void VideoQualityTest::SetupThumbnailCapturers(size_t num_thumbnail_streams) {
   for (size_t i = 0; i < num_thumbnail_streams; ++i) {
     auto frame_generator_capturer =
         std::make_unique<test::FrameGeneratorCapturer>(
-            clock_,
+            &env_.clock(),
             test::CreateSquareFrameGenerator(static_cast<int>(thumbnail.width),
                                              static_cast<int>(thumbnail.height),
                                              std::nullopt, std::nullopt),
-            thumbnail.max_framerate, *task_queue_factory_);
+            thumbnail.max_framerate, env_.task_queue_factory());
     EXPECT_TRUE(frame_generator_capturer->Init());
     thumbnail_capturers_.push_back(std::move(frame_generator_capturer));
   }
@@ -1080,9 +1066,21 @@ VideoQualityTest::CreateFrameGenerator(size_t video_idx) {
         params_.screenshare[video_idx].slide_change_interval *
             params_.video[video_idx].fps);
   } else if (!params_.video[video_idx].clip_path.empty()) {
-    frame_generator = test::CreateFromYuvFileFrameGenerator(
-        {params_.video[video_idx].clip_path}, params_.video[video_idx].width,
-        params_.video[video_idx].height, 1);
+    RTC_CHECK_GE(params_.video[video_idx].clip_path.size(), 4)
+        << "Clip path must have a three letter file ending.";
+    std::string file_ending = params_.video[video_idx].clip_path.substr(
+        params_.video[video_idx].clip_path.size() - 4);
+    if (file_ending == ".yuv") {
+      frame_generator = test::CreateFromYuvFileFrameGenerator(
+          {params_.video[video_idx].clip_path}, params_.video[video_idx].width,
+          params_.video[video_idx].height, 1);
+    } else if (file_ending == ".y4m") {
+      frame_generator = std::make_unique<test::Y4mFrameGenerator>(
+          params_.video[video_idx].clip_path,
+          test::Y4mFrameGenerator::RepeatMode::kPingPong);
+    } else {
+      RTC_DCHECK_NOTREACHED() << "Unsupported file format: " << file_ending;
+    }
   } else {
     std::vector<std::string> slides = params_.screenshare[video_idx].slides;
     if (slides.empty()) {
@@ -1109,8 +1107,8 @@ VideoQualityTest::CreateFrameGenerator(size_t video_idx) {
                    params_.screenshare[video_idx].slide_change_interval);
 
       frame_generator = test::CreateScrollingInputFromYuvFilesFrameGenerator(
-          clock_, slides, kWidth, kHeight, params_.video[video_idx].width,
-          params_.video[video_idx].height,
+          &env_.clock(), slides, kWidth, kHeight,
+          params_.video[video_idx].width, params_.video[video_idx].height,
           params_.screenshare[video_idx].scroll_duration * 1000,
           kPauseDurationMs);
     }
@@ -1160,18 +1158,27 @@ void VideoQualityTest::CreateCapturers() {
             std::nullopt);
       }
     } else {
-      frame_generator = test::CreateFromYuvFileFrameGenerator(
-          {params_.video[video_idx].clip_path}, params_.video[video_idx].width,
-          params_.video[video_idx].height, 1);
-      ASSERT_TRUE(frame_generator) << "Could not create capturer for "
-                                   << params_.video[video_idx].clip_path
-                                   << ".yuv. Is this file present?";
+      RTC_CHECK_GE(params_.video[video_idx].clip_path.size(), 4)
+          << "Clip path must have a three letter file ending.";
+      std::string file_ending = params_.video[video_idx].clip_path.substr(
+          params_.video[video_idx].clip_path.size() - 4);
+      if (file_ending == ".yuv") {
+        frame_generator = test::CreateFromYuvFileFrameGenerator(
+            {params_.video[video_idx].clip_path},
+            params_.video[video_idx].width, params_.video[video_idx].height, 1);
+      } else if (file_ending == ".y4m") {
+        frame_generator = std::make_unique<test::Y4mFrameGenerator>(
+            params_.video[video_idx].clip_path,
+            test::Y4mFrameGenerator::RepeatMode::kPingPong);
+      } else {
+        RTC_DCHECK_NOTREACHED() << "Unsupported file format: " << file_ending;
+      }
     }
     ASSERT_TRUE(frame_generator);
     auto frame_generator_capturer =
         std::make_unique<test::FrameGeneratorCapturer>(
-            clock_, std::move(frame_generator), params_.video[video_idx].fps,
-            *task_queue_factory_);
+            &env_.clock(), std::move(frame_generator),
+            params_.video[video_idx].fps, env_.task_queue_factory());
     EXPECT_TRUE(frame_generator_capturer->Init());
     video_sources_[video_idx] = std::move(frame_generator_capturer);
   }
@@ -1200,14 +1207,15 @@ void VideoQualityTest::StopThumbnails() {
 std::unique_ptr<test::LayerFilteringTransport>
 VideoQualityTest::CreateSendTransport() {
   std::unique_ptr<NetworkBehaviorInterface> network_behavior = nullptr;
-  if (injection_components_->sender_network == nullptr) {
+  if (injection_components_.sender_network == nullptr) {
     network_behavior = std::make_unique<SimulatedNetwork>(*params_.config);
   } else {
-    network_behavior = std::move(injection_components_->sender_network);
+    network_behavior = std::move(injection_components_.sender_network);
   }
   return std::make_unique<test::LayerFilteringTransport>(
-      task_queue(),
-      std::make_unique<FakeNetworkPipe>(clock_, std::move(network_behavior)),
+      env_, network_thread(),
+      std::make_unique<FakeNetworkPipe>(&env_.clock(),
+                                        std::move(network_behavior)),
       sender_call_.get(), test::VideoTestConstants::kPayloadTypeVP8,
       test::VideoTestConstants::kPayloadTypeVP9, params_.video[0].selected_tl,
       params_.ss[0].selected_sl, payload_type_map_,
@@ -1220,14 +1228,15 @@ VideoQualityTest::CreateSendTransport() {
 std::unique_ptr<test::DirectTransport>
 VideoQualityTest::CreateReceiveTransport() {
   std::unique_ptr<NetworkBehaviorInterface> network_behavior = nullptr;
-  if (injection_components_->receiver_network == nullptr) {
+  if (injection_components_.receiver_network == nullptr) {
     network_behavior = std::make_unique<SimulatedNetwork>(*params_.config);
   } else {
-    network_behavior = std::move(injection_components_->receiver_network);
+    network_behavior = std::move(injection_components_.receiver_network);
   }
   return std::make_unique<test::DirectTransport>(
-      task_queue(),
-      std::make_unique<FakeNetworkPipe>(clock_, std::move(network_behavior)),
+      env_, network_thread(),
+      std::make_unique<FakeNetworkPipe>(&env_.clock(),
+                                        std::move(network_behavior)),
       receiver_call_.get(), payload_type_map_, GetRegisteredExtensions(),
       GetRegisteredExtensions());
 }
@@ -1306,7 +1315,7 @@ void VideoQualityTest::RunWithAnalyzer(const Params& params) {
       test::VideoTestConstants::kSendRtxSsrcs[params_.ss[0].selected_stream],
       static_cast<size_t>(params_.ss[0].selected_stream),
       params.ss[0].selected_sl, params_.video[0].selected_tl,
-      is_quick_test_enabled, clock_, params_.logging.rtp_dump_name,
+      is_quick_test_enabled, &env_.clock(), params_.logging.rtp_dump_name,
       task_queue());
 
   SendTask(task_queue(), [&]() {
@@ -1386,11 +1395,11 @@ scoped_refptr<AudioDeviceModule> VideoQualityTest::CreateAudioDevice() {
   RTC_CHECK(com_initializer_->Succeeded());
   RTC_CHECK(webrtc_win::core_audio_utility::IsSupported());
   RTC_CHECK(webrtc_win::core_audio_utility::IsMMCSSSupported());
-  return CreateWindowsCoreAudioAudioDeviceModule(task_queue_factory_.get());
+  return CreateWindowsCoreAudioAudioDeviceModule(env_);
 #else
   // Use legacy factory method on all platforms except Windows.
-  return AudioDeviceModule::Create(AudioDeviceModule::kPlatformDefaultAudio,
-                                   task_queue_factory_.get());
+  return CreateAudioDeviceModule(env_,
+                                 AudioDeviceModule::kPlatformDefaultAudio);
 #endif
 }
 
@@ -1405,8 +1414,7 @@ void VideoQualityTest::InitializeAudioDevice(CallConfig* send_call_config,
   } else {
     // By default, create a test ADM which fakes audio.
     audio_device = TestAudioDeviceModule::Create(
-        task_queue_factory_.get(),
-        TestAudioDeviceModule::CreatePulsedNoiseCapturer(32000, 48000),
+        env_, TestAudioDeviceModule::CreatePulsedNoiseCapturer(32000, 48000),
         TestAudioDeviceModule::CreateDiscardRenderer(48000), 1.f);
   }
   RTC_CHECK(audio_device);
@@ -1422,7 +1430,7 @@ void VideoQualityTest::InitializeAudioDevice(CallConfig* send_call_config,
     // The real ADM requires extra initialization: setting default devices,
     // setting up number of channels etc. Helper class also calls
     // AudioDeviceModule::Init().
-    webrtc::adm_helpers::Init(audio_device.get());
+    adm_helpers::Init(audio_device.get());
   } else {
     audio_device->Init();
   }
@@ -1447,8 +1455,8 @@ void VideoQualityTest::SetupAudio(Transport* transport) {
 
   if (params_.call.send_side_bwe) {
     audio_send_config.rtp.extensions.push_back(
-        webrtc::RtpExtension(webrtc::RtpExtension::kTransportSequenceNumberUri,
-                             kTransportSequenceNumberExtensionId));
+        RtpExtension(RtpExtension::kTransportSequenceNumberUri,
+                     kTransportSequenceNumberExtensionId));
     audio_send_config.min_bitrate_bps = kOpusMinBitrateBps;
     audio_send_config.max_bitrate_bps = kOpusBitrateFbBps;
     // Only allow ANA when send-side BWE is enabled.

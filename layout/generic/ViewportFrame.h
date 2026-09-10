@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,7 +10,6 @@
 #ifndef mozilla_ViewportFrame_h
 #define mozilla_ViewportFrame_h
 
-#include "mozilla/Attributes.h"
 #include "nsContainerFrame.h"
 
 class nsPresContext;
@@ -49,6 +46,7 @@ class ViewportFrame : public nsContainerFrame {
   void RemoveFrame(DestroyContext&, ChildListID, nsIFrame*) override;
 #endif
 
+  void Destroy(DestroyContext&) override;
   void BuildDisplayList(nsDisplayListBuilder* aBuilder,
                         const nsDisplayListSet& aLists) override;
 
@@ -68,16 +66,9 @@ class ViewportFrame : public nsContainerFrame {
   bool ComputeCustomOverflow(mozilla::OverflowAreas&) override { return false; }
 
   /**
-   * Adjust aReflowInput to account for scrollbars and pres shell
-   * GetVisualViewportSizeSet and
-   * GetContentDocumentFixedPositionMargins adjustments.
-   * @return the rect to use as containing block rect
-   */
-  nsRect AdjustReflowInputAsContainingBlock(ReflowInput& aReflowInput) const;
-
-  /*
-   * This is similar to AdjustReflowInputAsContainingBlock, but it doesn't
-   * change the input ReflowInput. Only return the containing block rect.
+   * Get the containing block rect when ViewportFrame serves as a containing
+   * block. This method accounts for scrollbars, visual viewport, and dynamic
+   * toolbar sizes.
    */
   nsRect GetContainingBlockAdjustedForScrollbars(
       const ReflowInput& aReflowInput) const;
@@ -101,31 +92,13 @@ class ViewportFrame : public nsContainerFrame {
   virtual nsresult GetFrameName(nsAString& aResult) const override;
 #endif
 
-  /**
-   * Calculate how much room is available for fixed frames. That means
-   * determining if the viewport is scrollable and whether the vertical and/or
-   * horizontal scrollbars are visible. Adjust the computed isize/bsize and
-   * available isize for aReflowInput accordingly.
-   * @return the current scroll position, or (0,0) if not scrollable.
-   */
-  nsPoint AdjustReflowInputForScrollbars(ReflowInput& aReflowInput) const;
-
  protected:
   ViewportFrame(ComputedStyle* aStyle, nsPresContext* aPresContext, ClassID aID)
-      : nsContainerFrame(aStyle, aPresContext, aID), mView(nullptr) {}
-
-  nsView* GetViewInternal() const override { return mView; }
-  void SetViewInternal(nsView* aView) override { mView = aView; }
+      : nsContainerFrame(aStyle, aPresContext, aID) {}
 
  private:
   nsDisplayWrapList* MaybeWrapTopLayerList(nsDisplayListBuilder*,
                                            uint16_t aIndex, nsDisplayList&);
-
-  mozilla::FrameChildListID GetAbsoluteListID() const override {
-    return FrameChildListID::Fixed;
-  }
-
-  nsView* mView;
 };
 
 }  // namespace mozilla

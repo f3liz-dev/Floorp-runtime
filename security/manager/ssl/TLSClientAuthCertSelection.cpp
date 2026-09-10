@@ -1,5 +1,4 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- *
+/*
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -33,27 +32,29 @@
 // continue to the TLS connection.
 
 #include "TLSClientAuthCertSelection.h"
+
+#include "NSSCertDBTrustDomain.h"
 #include "cert_storage/src/cert_storage.h"
 #include "mozilla/Logging.h"
 #include "mozilla/dom/BrowsingContext.h"
+#include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/glean/SecurityManagerSslMetrics.h"
 #include "mozilla/ipc/Endpoint.h"
+#include "mozilla/net/DocumentLoadListener.h"
 #include "mozilla/net/SocketProcessBackgroundChild.h"
 #include "mozilla/psm/SelectTLSClientAuthCertChild.h"
 #include "mozilla/psm/SelectTLSClientAuthCertParent.h"
-#include "nsArray.h"
-#include "nsArrayUtils.h"
-#include "nsNSSComponent.h"
-#include "nsIClientAuthDialogService.h"
-#include "nsIMutableArray.h"
-#include "nsINSSComponent.h"
-#include "NSSCertDBTrustDomain.h"
-#include "nsIClientAuthRememberService.h"
-#include "nsIX509CertDB.h"
-#include "nsNSSHelper.h"
+#include "mozpkix/pkix.h"
 #include "mozpkix/pkixnss.h"
 #include "mozpkix/pkixutil.h"
-#include "mozpkix/pkix.h"
+#include "nsArray.h"
+#include "nsArrayUtils.h"
+#include "nsIClientAuthDialogService.h"
+#include "nsIClientAuthRememberService.h"
+#include "nsIMutableArray.h"
+#include "nsINSSComponent.h"
+#include "nsIX509CertDB.h"
+#include "nsNSSComponent.h"
 #include "secerr.h"
 #include "sslerr.h"
 
@@ -187,8 +188,7 @@ class ClientAuthCertNonverifyingTrustDomain final : public TrustDomain {
       EndEntityOrCA endEntityOrCA, const pkix::CertID& certID, Time time,
       mozilla::pkix::Duration validityDuration,
       /*optional*/ const Input* stapledOCSPresponse,
-      /*optional*/ const Input* aiaExtension,
-      /*optional*/ const Input* sctExtension) override {
+      /*optional*/ const Input* aiaExtension) override {
     return pkix::Success;
   }
 
@@ -728,15 +728,36 @@ SelectClientAuthCertificate::Run() {
     DispatchContinuation(std::move(selectedCertBytes));
     return NS_ERROR_FAILURE;
   }
-  nsCOMPtr<nsILoadContext> loadContext = nullptr;
-  if (mBrowserId != 0) {
-    loadContext =
+
+  RefPtr<mozilla::dom::BrowsingContext> browsingContext;
+  if (mBrowserId) {
+    browsingContext =
         mozilla::dom::BrowsingContext::GetCurrentTopByBrowserId(mBrowserId);
   }
+
+  // Prevent HTTPS-Only/-First from downgrading the load in the browsing context
+  // while the dialog is open by setting HTTPS_ONLY_TOP_LEVEL_LOAD_IN_PROGRESS
+  // early. Otherwise this would only get set once
+  // DocumentLoadListener::DoOnStartRequest is reached.
+  if (browsingContext) {
+    RefPtr<net::DocumentLoadListener> loadListener =
+        browsingContext->Canonical()->GetCurrentLoad();
+    if (loadListener) {
+      nsCOMPtr<nsIHttpChannel> channel =
+          do_QueryInterface(loadListener->GetChannel());
+      if (channel) {
+        nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
+        uint32_t httpsOnlyStatus = loadInfo->GetHttpsOnlyStatus();
+        httpsOnlyStatus |= nsILoadInfo::HTTPS_ONLY_TOP_LEVEL_LOAD_IN_PROGRESS;
+        loadInfo->SetHttpsOnlyStatus(httpsOnlyStatus);
+      }
+    }
+  }
+
   RefPtr<nsIClientAuthDialogCallback> callback(
       new ClientAuthDialogCallback(this));
   nsresult rv = clientAuthDialogService->ChooseCertificate(
-      mInfo.HostName(), certArray, loadContext, mCANames, callback);
+      mInfo.HostName(), certArray, browsingContext, mCANames, callback);
   if (NS_FAILED(rv)) {
     DispatchContinuation(std::move(selectedCertBytes));
     return rv;
@@ -862,7 +883,7 @@ void DoSelectClientAuthCertificate(NSSSocketControl* info,
                        serverCertBytes(std::move(serverCertBytes)),
                        caNamesBytes(std::move(caNamesBytes)), browserId](
                           net::SocketProcessBackgroundChild* aActor) mutable {
-                        Unused << aActor->SendInitSelectTLSClientAuthCert(
+                        (void)aActor->SendInitSelectTLSClientAuthCert(
                             std::move(endpoint), hostname, originAttributes,
                             port, providerFlags, providerTlsFlags,
                             ByteArray(serverCertBytes), caNamesBytes,
@@ -890,7 +911,7 @@ void DoSelectClientAuthCertificate(NSSSocketControl* info,
                              rememberedCertBytes, rememberedCertChainBytes)) {
     continuation->SetSelectedClientAuthData(
         std::move(rememberedCertBytes), std::move(rememberedCertChainBytes));
-    (void)NS_DispatchToCurrentThread(continuation);
+    (void)continuation->Run();
     return;
   }
 
@@ -922,7 +943,7 @@ void DoSelectClientAuthCertificate(NSSSocketControl* info,
         ("[%p] no client certificates available after filtering by CA", &info));
     // By default, the continuation will continue the connection with no client
     // auth certificate.
-    (void)NS_DispatchToCurrentThread(continuation);
+    (void)continuation->Run();
     return;
   }
 #endif  // MOZ_WIDGET_ANDROID
@@ -1038,7 +1059,7 @@ bool SelectTLSClientAuthCertParent::Dispatch(
                 std::move(potentialClientCertificates),
                 std::move(potentialClientCertificateChains),
                 std::move(caNamesArray), continuation, browserId));
-        Unused << NS_DispatchToMainThread(selectClientAuthCertificate);
+        (void)NS_DispatchToMainThread(selectClientAuthCertificate);
       }));
   return NS_SUCCEEDED(rv);
 }
@@ -1055,8 +1076,8 @@ void SelectTLSClientAuthCertParent::TLSClientAuthCertSelected(
     selectedCertChainBytes.AppendElement(ByteArray(certBytes));
   }
 
-  Unused << SendTLSClientAuthCertSelected(aSelectedCertBytes,
-                                          selectedCertChainBytes);
+  (void)SendTLSClientAuthCertSelected(aSelectedCertBytes,
+                                      selectedCertChainBytes);
   Close();
 }
 
@@ -1087,7 +1108,7 @@ ipc::IPCResult SelectTLSClientAuthCertChild::RecvTLSClientAuthCertSelected(
     return IPC_OK();
   }
   nsresult rv = socketThread->Dispatch(mContinuation, NS_DISPATCH_NORMAL);
-  Unused << NS_WARN_IF(NS_FAILED(rv));
+  (void)NS_WARN_IF(NS_FAILED(rv));
 
   return IPC_OK();
 }

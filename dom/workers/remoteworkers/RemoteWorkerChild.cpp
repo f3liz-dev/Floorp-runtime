@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,17 +10,18 @@
 #include "RemoteWorkerService.h"
 #include "mozilla/ArrayAlgorithm.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/Attributes.h"
 #include "mozilla/BasePrincipal.h"
+#include "mozilla/Components.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/PermissionManager.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Services.h"
-#include "mozilla/Unused.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/FetchEventOpProxyChild.h"
 #include "mozilla/dom/IndexedDatabaseManager.h"
 #include "mozilla/dom/MessagePort.h"
+#include "mozilla/dom/OffThreadCSPContext.h"
 #include "mozilla/dom/PolicyContainer.h"
 #include "mozilla/dom/RemoteWorkerTypes.h"
 #include "mozilla/dom/ServiceWorkerDescriptor.h"
@@ -32,7 +31,6 @@
 #include "mozilla/dom/ServiceWorkerShutdownState.h"
 #include "mozilla/dom/ServiceWorkerUtils.h"
 #include "mozilla/dom/SharedWorkerOp.h"
-#include "mozilla/dom/WorkerCSPContext.h"
 #include "mozilla/dom/WorkerError.h"
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerRef.h"
@@ -120,8 +118,9 @@ class RemoteWorkerCSPEventListener final : public nsICSPEventListener {
   explicit RemoteWorkerCSPEventListener(RemoteWorkerChild* aActor)
       : mActor(aActor) {};
 
-  NS_IMETHOD OnCSPViolationEvent(const nsAString& aJSON) override {
-    mActor->CSPViolationPropagationOnMainThread(aJSON);
+  NS_IMETHOD OnCSPViolationEvent(const nsAString& aJSON,
+                                 const nsAString& aReportGroupName) override {
+    mActor->CSPViolationPropagationOnMainThread(aJSON, aReportGroupName);
     return NS_OK;
   }
 
@@ -132,6 +131,69 @@ class RemoteWorkerCSPEventListener final : public nsICSPEventListener {
 };
 
 NS_IMPL_ISUPPORTS(RemoteWorkerCSPEventListener, nsICSPEventListener)
+
+// This is used to wait until auxiliary information, like permissions, for a
+// remote worker's origin has arrived in the content process.
+class LoadedOriginAddedObserver final : public nsIObserver {
+ public:
+  NS_DECL_ISUPPORTS
+
+  static constexpr const char* kTopic = "content-loaded-origin-added";
+
+  LoadedOriginAddedObserver(nsIPrincipal* aPrincipal,
+                            nsISerialEventTarget* aWorkerTarget,
+                            nsIRunnable* aWorkerInitRunnable)
+      : mPrincipal(aPrincipal),
+        mWorkerTarget(aWorkerTarget),
+        mWorkerInitRunnable(aWorkerInitRunnable) {}
+
+  nsresult CallWhenReady() {
+    RefPtr<LoadedOriginSet> loadedOrigins = CurrentLoadedOriginSet();
+    if (!loadedOrigins ||
+        loadedOrigins->Has(mPrincipal, LoadedOriginSet::Level::Full)) {
+      return Dispatch();
+    }
+
+    MOZ_ASSERT(
+        loadedOrigins->Has(mPrincipal, LoadedOriginSet::Level::Tentative),
+        "Our caller must have previously marked as tentative");
+
+    // If the origin is only tentatively loaded, add ourselves as an observer to
+    // be notified when new origins are added to CurrentLoadedOriginSet().
+    nsCOMPtr<nsIObserverService> obs = components::Observer::Service();
+    return obs ? obs->AddObserver(this, kTopic, /* ownsWeak */ false)
+               : NS_ERROR_NOT_AVAILABLE;
+  }
+
+  NS_IMETHOD Observe(nsISupports* aSubject, const char* aTopic,
+                     const char16_t* aData) override {
+    MOZ_ASSERT(!strcmp(aTopic, kTopic));
+    nsCOMPtr<nsIPrincipal> principal = do_QueryInterface(aSubject);
+    if (mPrincipal && mPrincipal->Equals(principal)) {
+      Dispatch();
+
+      nsCOMPtr<nsIObserverService> obs = components::Observer::Service();
+      obs->RemoveObserver(this, kTopic);
+    }
+    return NS_OK;
+  }
+
+ private:
+  ~LoadedOriginAddedObserver() = default;
+
+  nsresult Dispatch() {
+    nsresult rv = mWorkerTarget->Dispatch(mWorkerInitRunnable.forget());
+    mWorkerTarget = nullptr;
+    mPrincipal = nullptr;
+    return rv;
+  }
+
+  nsCOMPtr<nsIPrincipal> mPrincipal;
+  nsCOMPtr<nsISerialEventTarget> mWorkerTarget;
+  nsCOMPtr<nsIRunnable> mWorkerInitRunnable;
+};
+
+NS_IMPL_ISUPPORTS(LoadedOriginAddedObserver, nsIObserver)
 
 }  // anonymous namespace
 
@@ -154,7 +216,7 @@ RemoteWorkerChild::~RemoteWorkerChild() {
 void RemoteWorkerChild::ActorDestroy(ActorDestroyReason) {
   auto launcherData = mLauncherData.Access();
 
-  Unused << NS_WARN_IF(!launcherData->mTerminationPromise.IsEmpty());
+  (void)NS_WARN_IF(!launcherData->mTerminationPromise.IsEmpty());
   launcherData->mTerminationPromise.RejectIfExists(NS_ERROR_DOM_ABORT_ERR,
                                                    __func__);
 
@@ -208,7 +270,7 @@ void RemoteWorkerChild::ExecWorker(
 
         // Creation failure will already have been reported via the method
         // above internally using ScopeExit.
-        Unused << NS_WARN_IF(NS_FAILED(rv));
+        (void)NS_WARN_IF(NS_FAILED(rv));
       });
 
   MOZ_ALWAYS_SUCCEEDS(SchedulerGroup::Dispatch(r.forget()));
@@ -225,7 +287,7 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(
   // initialized.
   IndexedDatabaseManager* idm = IndexedDatabaseManager::GetOrCreate();
   if (idm) {
-    Unused << NS_WARN_IF(NS_FAILED(idm->EnsureLocale()));
+    (void)NS_WARN_IF(NS_FAILED(idm->EnsureLocale()));
   } else {
     NS_WARNING("Failed to get IndexedDatabaseManager!");
   }
@@ -239,6 +301,15 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(
   }
 
   nsCOMPtr<nsIPrincipal> principal = principalOrErr.unwrap();
+
+  // It is possible we have reached the main thread in the content process
+  // before messages sent by `ContentParent::AboutToLoadOrigin` have arrived &
+  // been processed.
+  // Tentatively indicate that we anticipate the messages will arrive to ensure
+  // in-process principal validation passes while setting up the remote worker.
+  if (RefPtr<LoadedOriginSet> loadedOrigins = CurrentLoadedOriginSet()) {
+    loadedOrigins->AddTentative(principal);
+  }
 
   auto loadingPrincipalOrErr =
       PrincipalInfoToPrincipal(aData.loadingPrincipalInfo());
@@ -283,6 +354,9 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(
                                       getter_AddRefs(info.mCookieJarSettings));
   info.mCookieJarSettingsArgs = aData.cookieJarSettings();
   info.mIsOn3PCBExceptionList = aData.isOn3PCBExceptionList();
+  info.mLanguageOverrideLocale = aData.languageOverrideLocale();
+  info.mLanguageOverride = aData.languageOverride().Clone();
+  info.mTimezoneOverride = aData.timezoneOverride();
   info.mSecureContext = aData.isSecureContext()
                             ? WorkerLoadInfo::eSecureContext
                             : WorkerLoadInfo::eInsecureContext;
@@ -306,13 +380,24 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(
           clientInfo.ref().GetPolicyContainerArgs();
       if (policyContainerArgs.isSome() && policyContainerArgs->csp().isSome()) {
         info.mCSP = CSPInfoToCSP(*policyContainerArgs->csp(), nullptr);
-        mozilla::Result<UniquePtr<WorkerCSPContext>, nsresult> ctx =
-            WorkerCSPContext::CreateFromCSP(info.mCSP);
+        mozilla::Result<UniquePtr<OffThreadCSPContext>, nsresult> ctx =
+            OffThreadCSPContext::CreateFromCSP(info.mCSP);
         if (ctx.isErr()) {
           return ctx.unwrapErr();
         }
         info.mCSPContext = ctx.unwrap();
       }
+    }
+  }
+
+  // Extract IP address space from clientInfo for all worker types
+  // (shared and service workers) for Local Network Access checks.
+  if (clientInfo.isSome()) {
+    Maybe<mozilla::ipc::PolicyContainerArgs> policyContainerArgs =
+        clientInfo.ref().GetPolicyContainerArgs();
+    if (policyContainerArgs.isSome()) {
+      info.mIPAddressSpace =
+          static_cast<uint16_t>(policyContainerArgs->ipAddressSpace());
     }
   }
 
@@ -406,25 +491,15 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(
     lock->as<Pending>().mWorkerPrivate = std::move(workerPrivate);
   }
 
-  if (mIsServiceWorker) {
-    nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
-        __func__, [workerTarget,
-                   initializeWorkerRunnable = std::move(runnable)]() mutable {
-          Unused << NS_WARN_IF(NS_FAILED(
-              workerTarget->Dispatch(initializeWorkerRunnable.forget())));
-        });
-
-    RefPtr<PermissionManager> permissionManager =
-        PermissionManager::GetInstance();
-    if (!permissionManager) {
-      return NS_ERROR_FAILURE;
-    }
-    permissionManager->WhenPermissionsAvailable(principal, r);
-  } else {
-    if (NS_WARN_IF(NS_FAILED(workerTarget->Dispatch(runnable.forget())))) {
-      rv = NS_ERROR_FAILURE;
-      return rv;
-    }
+  // FIXME: It seems possible that script can run in the worker before this
+  // callback is invoked, and that script could be running without permissions.
+  //
+  // Perhaps we want to move this wait earlier during remote worker creation?
+  auto loadedOriginObs =
+      MakeRefPtr<LoadedOriginAddedObserver>(principal, workerTarget, runnable);
+  if (NS_WARN_IF(NS_FAILED(loadedOriginObs->CallWhenReady()))) {
+    rv = NS_ERROR_FAILURE;
+    return rv;
   }
 
   scopeExit.release();
@@ -505,7 +580,7 @@ void RemoteWorkerChild::CreationSucceededOrFailedOnAnyThread(
           return;
         }
 
-        Unused << self->SendCreated(didCreationSucceed);
+        (void)self->SendCreated(didCreationSucceed);
         launcherData->mDidSendCreated = true;
       });
 
@@ -555,7 +630,7 @@ void RemoteWorkerChild::ErrorPropagation(const ErrorValue& aValue) {
     return;
   }
 
-  Unused << SendError(aValue);
+  (void)SendError(aValue);
 }
 
 void RemoteWorkerChild::ErrorPropagationDispatch(nsresult aError) {
@@ -596,7 +671,7 @@ void RemoteWorkerChild::ErrorPropagationOnMainThread(
 }
 
 void RemoteWorkerChild::CSPViolationPropagationOnMainThread(
-    const nsAString& aJSON) {
+    const nsAString& aJSON, const nsAString& aReportGroupName) {
   AssertIsOnMainThread();
 
   RefPtr<RemoteWorkerChild> self = this;
@@ -617,7 +692,7 @@ void RemoteWorkerChild::NotifyLock(bool aCreated) {
           return;
         }
 
-        Unused << self->SendNotifyLock(aCreated);
+        (void)self->SendNotifyLock(aCreated);
       });
 
   GetActorEventTarget()->Dispatch(r.forget(), NS_DISPATCH_NORMAL);
@@ -630,7 +705,7 @@ void RemoteWorkerChild::NotifyWebTransport(bool aCreated) {
           return;
         }
 
-        Unused << self->SendNotifyWebTransport(aCreated);
+        (void)self->SendNotifyWebTransport(aCreated);
       });
 
   GetActorEventTarget()->Dispatch(r.forget(), NS_DISPATCH_NORMAL);
@@ -711,7 +786,7 @@ void RemoteWorkerChild::TransitionStateFromCanceledToKilled() {
     launcherData->mTerminationPromise.ResolveIfExists(true, __func__);
 
     if (self->CanSend()) {
-      Unused << self->SendClose();
+      (void)self->SendClose();
     }
   });
 
@@ -915,7 +990,7 @@ IPCResult RemoteWorkerChild::RecvPFetchEventOpProxyConstructor(
     const ParentToChildServiceWorkerFetchEventOpArgs& aArgs) {
   MOZ_ASSERT(aActor);
 
-  (static_cast<FetchEventOpProxyChild*>(aActor))->Initialize(aArgs);
+  mozilla::ipc::ActorCast<FetchEventOpProxyChild>(aActor)->Initialize(aArgs);
 
   return IPC_OK();
 }

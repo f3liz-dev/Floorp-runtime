@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="chrome://global/skin/global.css" />
     <script src="chrome://mochikit/content/tests/SimpleTest/EventUtils.js"></script>
     <script src="../../../../../toolkit/content/tests/widgets/lit-test-helpers.js"></script>
+    <script src="./head.js"></script>
     <script
       type="module"
       src="chrome://browser/content/preferences/widgets/setting-group.mjs"
@@ -55,15 +56,6 @@
           );
         }
         return result.querySelector("setting-control");
-      }
-
-      function waitForSettingChange(setting) {
-        return new Promise(resolve => {
-          setting.on("change", function handler() {
-            setting.off("change", handler);
-            resolve();
-          });
-        });
       }
 
       add_setup(async function setup() {
@@ -134,13 +126,18 @@
         });
 
         let settingChanged = waitForSettingChange(setting);
-        let topWindow = window.docShell.chromeEventHandler.ownerGlobal;
+        let topWindow = window.docShell.chromeEventHandler.documentGlobal;
         let pickerOpened = BrowserTestUtils.waitForSelectPopupShown(topWindow);
         control.controlEl.focus();
         synthesizeKey(" ");
-        await pickerOpened;
-        synthesizeKey("KEY_ArrowDown");
-        synthesizeKey("KEY_Enter");
+        const selectPopup = await pickerOpened;
+        if (selectPopup.isNativeMenu) {
+          // Synthesized events are not available with native menus
+          selectPopup.activateItem(selectPopup.childNodes[2]);
+        } else {
+          synthesizeKey("KEY_ArrowDown");
+          synthesizeKey("KEY_Enter");
+        }
         await settingChanged;
 
         is(Services.prefs.getIntPref(PREF), 2, "pref is 2");
@@ -225,6 +222,7 @@
           pref: PREF,
         });
 
+        const CUSTOM_LABEL = "Custom label";
         let itemConfig = {
           control: "moz-button-group",
           id: SETTING,
@@ -232,10 +230,15 @@
             {
               l10nId: LABEL_L10N_ID,
               control: "moz-button",
+              controlAttrs: {
+                type: "primary",
+              },
             },
             {
-              l10nId: LABEL_L10N_ID,
               control: "moz-button",
+              controlAttrs: {
+                label: CUSTOM_LABEL,
+              },
             },
           ],
         };
@@ -252,9 +255,208 @@
           buttons.every(btn => btn.localName == "moz-button"),
           "The buttons are moz-buttons"
         );
+        let primaryButton = buttons.find(btn => btn.slot == "primary");
+        let secondaryButton = buttons.find(btn => !btn.slot);
+        ok(primaryButton, "There is a primary button");
+        ok(secondaryButton, "There is a secondary button");
+        is(primaryButton.type, "primary", "Type was set from controlAttrs");
+        is(
+          secondaryButton.label,
+          CUSTOM_LABEL,
+          "Label was set from controlAttrs"
+        );
+      });
+
+      add_task(async function testNestedControlOptions() {
+        const PREF = "test.setting-control-custom-nested.one";
+        const SETTING = "setting-control-custom-nested-one";
+        await SpecialPowers.pushPrefEnv({
+          set: [[PREF, 1]],
+        });
+        Preferences.addAll([{ id: PREF, type: "int" }]);
+        Preferences.addSetting({
+          id: SETTING,
+          pref: PREF,
+        });
+
+        let itemConfig = {
+          control: "moz-button-group",
+          id: SETTING,
+          options: [
+            {
+              control: "div",
+              options: [
+                {
+                  control: "moz-checkbox",
+                },
+              ],
+            },
+          ],
+        };
+        let control = await renderTemplate(itemConfig);
+
+        is(
+          control.controlEl.localName,
+          "moz-button-group",
+          "The control rendered a moz-button-group as parent control"
+        );
+        const nestedControl = control.controlEl.children[0];
+
+        is(
+          nestedControl.localName,
+          "div",
+          "Rendered the nested div element control under the parent control"
+        );
+
+        const nestedControlOption = nestedControl.children[0];
+
+        is(
+          nestedControlOption.localName,
+          "moz-checkbox",
+          "Rendered the moz-checkbox option under the div element control"
+        );
+      });
+
+      add_task(async function testNestedControlOptionItems() {
+        const PREF = "test.setting-control-custom-nested-items.one";
+        const SETTING = "setting-control-custom-nested-items-one";
+
+        const FIRST_NESTED_ITEM_PREF = "test.settings-group.itemone";
+        const FIRST_NESTED_ITEM_SETTING = "setting-item-one";
+
+        const SECOND_NESTED_ITEM_PREF = "test.settings-group.itemtwo";
+        const SECOND_NESTED_ITEM_SETTING = "setting-item-two";
+
+        await SpecialPowers.pushPrefEnv({
+          set: [
+            [PREF, 1],
+            [FIRST_NESTED_ITEM_PREF, true],
+            [SECOND_NESTED_ITEM_PREF, false],
+          ],
+        });
+        Preferences.addAll([
+          { id: PREF, type: "int" },
+          { id: FIRST_NESTED_ITEM_PREF, type: "bool" },
+          { id: SECOND_NESTED_ITEM_PREF, type: "bool" },
+        ]);
+        Preferences.addSetting({
+          id: SETTING,
+          pref: PREF,
+        });
+
+        Preferences.addSetting({
+          id: FIRST_NESTED_ITEM_SETTING,
+          pref: FIRST_NESTED_ITEM_PREF,
+        });
+        Preferences.addSetting({
+          id: SECOND_NESTED_ITEM_SETTING,
+          pref: SECOND_NESTED_ITEM_PREF,
+        });
+
+        let itemConfig = {
+          control: "moz-radio-group",
+          l10nId: LABEL_L10N_ID,
+          id: SETTING,
+          options: [
+            {
+              control: "moz-radio",
+              l10nId: LABEL_L10N_ID,
+              items: [
+                {
+                  l10nId: LABEL_L10N_ID,
+                  id: FIRST_NESTED_ITEM_SETTING,
+                  control: "moz-box-button",
+                },
+              ],
+            },
+          ],
+        };
+        let control = await renderTemplate(itemConfig);
+
+        is(
+          control.controlEl.localName,
+          "moz-radio-group",
+          "The control rendered a moz-radio-group as parent control"
+        );
+        const nestedOptionControl = control.controlEl.children[0];
+
+        is(
+          nestedOptionControl.localName,
+          "moz-radio",
+          "Rendered moz-radio as the nested control option"
+        );
+
+        const nestedControlItems = nestedOptionControl.children;
+        is(nestedControlItems.length, 1, "Rendered nested control item");
+        const [firstNestedControlItem] = nestedControlItems;
+        is(
+          firstNestedControlItem.localName,
+          "setting-control",
+          "Rendered the first nested setting-control item"
+        );
+        is(
+          firstNestedControlItem.controlEl.id,
+          FIRST_NESTED_ITEM_SETTING,
+          "Rendered the first nested setting ID"
+        );
+        is(
+          firstNestedControlItem.controlEl.localName,
+          "moz-box-button",
+          "Rendered moz-box-button as the first nested control item"
+        );
+      });
+
+      add_task(async function testMozSupportLink() {
+        await SpecialPowers.pushPrefEnv({
+          set: [["app.support.baseURL", "https://support.example.com/"]],
+        });
+        Preferences.addSetting({
+          id: "testMozSupportLink",
+          get: () => true,
+        });
+        let itemConfig = {
+          id: "testMozSupportLink",
+          options: [
+            {
+              control: "a",
+              slot: "support-link",
+              controlAttrs: {
+                href: "https://example.com/",
+                ".textContent": "Link text",
+              },
+            },
+            {
+              control: "a",
+              slot: "support-link",
+              controlAttrs: {
+                is: "moz-support-link",
+                "support-page": "get-help",
+              },
+            },
+          ],
+        };
+        let control = await renderTemplate(itemConfig);
+        let [anchor, mozSupportLink] = control.controlEl.shadowRoot
+          .querySelector('slot[name="support-link"]')
+          .assignedNodes();
+
+        function assertLinkProperties(el, { href, text }) {
+          ok(el, "Got a link element");
+          is(el.href, href, "href is correct");
+          is(el.innerText, text, "text is correct");
+        }
+
+        assertLinkProperties(anchor, {
+          href: "https://example.com/",
+          text: "Link text",
+        });
+        assertLinkProperties(mozSupportLink, {
+          href: "https://support.example.com/get-help",
+          text: "Learn more",
+        });
         ok(
-          buttons.every(btn => !btn.slot),
-          "The buttons are not in a slot"
+          mozSupportLink instanceof customElements.get("moz-support-link"),
+          "moz-support-link is a MozSupportLink"
         );
       });
     </script>

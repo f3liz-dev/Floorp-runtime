@@ -115,6 +115,7 @@ public class WebNotification implements Parcelable {
    */
   public final @NonNull int[] vibrate;
 
+  /** Array of actions available for this notification. */
   public final @NonNull WebNotificationAction[] actions;
 
   /**
@@ -153,6 +154,16 @@ public class WebNotification implements Parcelable {
     this.privateBrowsing = privateBrowsing;
     this.actions = Arrays.copyOf(actions, actions.length, WebNotificationAction[].class);
     this.origin = origin;
+  }
+
+  /**
+   * This should be called when the app starts showing the notification. This is important, as it
+   * tells the result of the notification request to Web Content.
+   */
+  @UiThread
+  public void show() {
+    ThreadUtils.assertOnUiThread();
+    GeckoAppShell.onNotificationShow(tag, mCookie, origin);
   }
 
   /**
@@ -264,6 +275,7 @@ public class WebNotification implements Parcelable {
     origin = Objects.requireNonNull(in.readString());
   }
 
+  /** Parcelable creator for WebNotification instances. */
   public static final Creator<WebNotification> CREATOR =
       new Creator<>() {
         @Override

@@ -16,15 +16,17 @@
 #include <cstring>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/base/nullability.h"
+#include "absl/functional/any_invocable.h"
 #include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
-#include "api/array_view.h"
 #include "api/environment/environment.h"
 #include "api/field_trials_view.h"
 #include "api/sequence_checker.h"
@@ -55,17 +57,13 @@
 #include "rtc_base/experiments/field_trial_parser.h"
 #include "rtc_base/string_utils.h"
 #include "rtc_base/win32.h"
-#elif !defined(__native_client__)
+#else
 #include "rtc_base/ifaddrs_converter.h"
 #endif
 // IWYU pragma: end_keep
 
 namespace webrtc {
 namespace {
-using ::webrtc::Environment;
-using ::webrtc::SafeTask;
-using ::webrtc::SocketFactory;
-using ::webrtc::TimeDelta;
 
 // List of MAC addresses of known VPN (for windows).
 constexpr uint8_t kVpns[3][6] = {
@@ -101,9 +99,8 @@ bool SortNetworks(const Network* a, const Network* b) {
 
   // After type, networks are sorted by IP address precedence values
   // from RFC 3484-bis
-  if (webrtc::IPAddressPrecedence(ip_a) != webrtc::IPAddressPrecedence(ip_b)) {
-    return webrtc::IPAddressPrecedence(ip_a) >
-           webrtc::IPAddressPrecedence(ip_b);
+  if (IPAddressPrecedence(ip_a) != IPAddressPrecedence(ip_b)) {
+    return IPAddressPrecedence(ip_a) > IPAddressPrecedence(ip_b);
   }
 
   // TODO(mallinath) - Add VPN and Link speed conditions while sorting.
@@ -115,40 +112,40 @@ bool SortNetworks(const Network* a, const Network* b) {
 uint16_t ComputeNetworkCostByType(int type,
                                   bool is_vpn,
                                   bool use_differentiated_cellular_costs,
-                                  bool add_network_cost_to_vpn) {
-  // TODO(jonaso) : Rollout support for cellular network cost using A/B
-  // experiment to make sure it does not introduce regressions.
-  int vpnCost =
-      (is_vpn && add_network_cost_to_vpn) ? webrtc::kNetworkCostVpn : 0;
+                                  bool add_network_cost_to_vpn,
+                                  NetworkSlice network_slice,
+                                  bool add_network_cost_for_slice) {
+  int vpnCost = (is_vpn && add_network_cost_to_vpn) ? kNetworkCostVpn : 0;
+  uint16_t slice_cost =
+      (add_network_cost_for_slice && network_slice != NetworkSlice::NO_SLICE)
+          ? kNetworkCostSlice
+          : 0;
+
   switch (type) {
-    case webrtc::ADAPTER_TYPE_ETHERNET:
-    case webrtc::ADAPTER_TYPE_LOOPBACK:
-      return webrtc::kNetworkCostMin + vpnCost;
-    case webrtc::ADAPTER_TYPE_WIFI:
-      return webrtc::kNetworkCostLow + vpnCost;
-    case webrtc::ADAPTER_TYPE_CELLULAR:
-      return webrtc::kNetworkCostCellular + vpnCost;
-    case webrtc::ADAPTER_TYPE_CELLULAR_2G:
-      return (use_differentiated_cellular_costs
-                  ? webrtc::kNetworkCostCellular2G
-                  : webrtc::kNetworkCostCellular) +
+    case ADAPTER_TYPE_ETHERNET:
+    case ADAPTER_TYPE_LOOPBACK:
+      return kNetworkCostMin + vpnCost;
+    case ADAPTER_TYPE_WIFI:
+      return kNetworkCostLow + vpnCost;
+    case ADAPTER_TYPE_CELLULAR:
+      return kNetworkCostCellular + vpnCost + slice_cost;
+    case ADAPTER_TYPE_CELLULAR_2G:
+      return (use_differentiated_cellular_costs ? kNetworkCostCellular2G
+                                                : kNetworkCostCellular) +
              vpnCost;
-    case webrtc::ADAPTER_TYPE_CELLULAR_3G:
-      return (use_differentiated_cellular_costs
-                  ? webrtc::kNetworkCostCellular3G
-                  : webrtc::kNetworkCostCellular) +
+    case ADAPTER_TYPE_CELLULAR_3G:
+      return (use_differentiated_cellular_costs ? kNetworkCostCellular3G
+                                                : kNetworkCostCellular) +
              vpnCost;
-    case webrtc::ADAPTER_TYPE_CELLULAR_4G:
-      return (use_differentiated_cellular_costs
-                  ? webrtc::kNetworkCostCellular4G
-                  : webrtc::kNetworkCostCellular) +
+    case ADAPTER_TYPE_CELLULAR_4G:
+      return (use_differentiated_cellular_costs ? kNetworkCostCellular4G
+                                                : kNetworkCostCellular) +
              vpnCost;
-    case webrtc::ADAPTER_TYPE_CELLULAR_5G:
-      return (use_differentiated_cellular_costs
-                  ? webrtc::kNetworkCostCellular5G
-                  : webrtc::kNetworkCostCellular) +
-             vpnCost;
-    case webrtc::ADAPTER_TYPE_ANY:
+    case ADAPTER_TYPE_CELLULAR_5G:
+      return (use_differentiated_cellular_costs ? kNetworkCostCellular5G
+                                                : kNetworkCostCellular) +
+             vpnCost + slice_cost;
+    case ADAPTER_TYPE_ANY:
       // Candidates gathered from the any-address/wildcard ports, as backups,
       // are given the maximum cost so that if there are other candidates with
       // known interface types, we would not select candidate pairs using these
@@ -158,17 +155,16 @@ uint16_t ComputeNetworkCostByType(int type,
       // ADAPTER_TYPE_CELLULAR would then have a higher cost. See
       // P2PTransportChannel::SortConnectionsAndUpdateState for how we rank and
       // select candidate pairs, where the network cost is among the criteria.
-      return webrtc::kNetworkCostMax + vpnCost;
-    case webrtc::ADAPTER_TYPE_VPN:
+      return kNetworkCostMax + vpnCost;
+    case ADAPTER_TYPE_VPN:
       // The cost of a VPN should be computed using its underlying network type.
       RTC_DCHECK_NOTREACHED();
-      return webrtc::kNetworkCostUnknown;
+      return kNetworkCostUnknown;
     default:
-      return webrtc::kNetworkCostUnknown + vpnCost;
+      return kNetworkCostUnknown + vpnCost;
   }
 }
 
-#if !defined(__native_client__)
 bool IsIgnoredIPv6(bool allow_mac_based_ipv6, const InterfaceAddress& ip) {
   if (ip.family() != AF_INET6) {
     return false;
@@ -177,26 +173,25 @@ bool IsIgnoredIPv6(bool allow_mac_based_ipv6, const InterfaceAddress& ip) {
   // Link-local addresses require scope id to be bound successfully.
   // However, our IPAddress structure doesn't carry that so the
   // information is lost and causes binding failure.
-  if (webrtc::IPIsLinkLocal(ip)) {
+  if (IPIsLinkLocal(ip)) {
     RTC_LOG(LS_VERBOSE) << "Ignore link local IP:" << ip.ToSensitiveString();
     return true;
   }
 
   // Any MAC based IPv6 should be avoided to prevent the MAC tracking.
-  if (webrtc::IPIsMacBased(ip) && !allow_mac_based_ipv6) {
+  if (IPIsMacBased(ip) && !allow_mac_based_ipv6) {
     RTC_LOG(LS_INFO) << "Ignore Mac based IP:" << ip.ToSensitiveString();
     return true;
   }
 
   // Ignore deprecated IPv6.
-  if (ip.ipv6_flags() & webrtc::IPV6_ADDRESS_FLAG_DEPRECATED) {
+  if (ip.ipv6_flags() & IPV6_ADDRESS_FLAG_DEPRECATED) {
     RTC_LOG(LS_INFO) << "Ignore deprecated IP:" << ip.ToSensitiveString();
     return true;
   }
 
   return false;
 }
-#endif  // !defined(__native_client__)
 
 // Note: consider changing to const Network* as arguments
 // if/when considering other changes that should not trigger
@@ -211,15 +206,14 @@ bool ShouldAdapterChangeTriggerNetworkChange(AdapterType old_type,
 }
 
 #if defined(WEBRTC_WIN)
-bool IpAddressAttributesEnabled(const webrtc::FieldTrialsView* field_trials) {
+bool IpAddressAttributesEnabled(const FieldTrialsView* field_trials) {
   // Field trial key reserved in bugs.webrtc.org/14334
   if (field_trials &&
       field_trials->IsEnabled("WebRTC-IPv6NetworkResolutionFixes")) {
-    webrtc::FieldTrialParameter<bool> ip_address_attributes_enabled(
+    FieldTrialParameter<bool> ip_address_attributes_enabled(
         "IpAddressAttributesEnabled", false);
-    webrtc::ParseFieldTrial(
-        {&ip_address_attributes_enabled},
-        field_trials->Lookup("WebRTC-IPv6NetworkResolutionFixes"));
+    ParseFieldTrial({&ip_address_attributes_enabled},
+                    field_trials->Lookup("WebRTC-IPv6NetworkResolutionFixes"));
     return ip_address_attributes_enabled;
   }
   return false;
@@ -275,23 +269,27 @@ AdapterType GetAdapterTypeFromName(absl::string_view network_name) {
     // Note that we have a more robust way to determine if a network interface
     // is a loopback interface by checking the flag IFF_LOOPBACK in ifa_flags of
     // an ifaddr struct. See ConvertIfAddrs in this file.
-    return webrtc::ADAPTER_TYPE_LOOPBACK;
+    return ADAPTER_TYPE_LOOPBACK;
   }
 
   if (MatchTypeNameWithIndexPattern(network_name, "eth")) {
-    return webrtc::ADAPTER_TYPE_ETHERNET;
+    return ADAPTER_TYPE_ETHERNET;
   }
 
   if (MatchTypeNameWithIndexPattern(network_name, "wlan") ||
       MatchTypeNameWithIndexPattern(network_name, "v4-wlan")) {
-    return webrtc::ADAPTER_TYPE_WIFI;
+    return ADAPTER_TYPE_WIFI;
   }
 
   if (MatchTypeNameWithIndexPattern(network_name, "ipsec") ||
       MatchTypeNameWithIndexPattern(network_name, "tun") ||
       MatchTypeNameWithIndexPattern(network_name, "utun") ||
-      MatchTypeNameWithIndexPattern(network_name, "tap")) {
-    return webrtc::ADAPTER_TYPE_VPN;
+      MatchTypeNameWithIndexPattern(network_name, "tap") ||
+      // Tailscale on Linux; on macOS and iOS it uses utun<index>.
+      MatchTypeNameWithIndexPattern(network_name, "tailscale") ||
+      // Tailscale on Windows.
+      MatchTypeNameWithIndexPattern(network_name, "Tailscale")) {
+    return ADAPTER_TYPE_VPN;
   }
 #if defined(WEBRTC_IOS)
   // Cell networks are pdp_ipN on iOS.
@@ -316,7 +314,7 @@ AdapterType GetAdapterTypeFromName(absl::string_view network_name) {
   }
 #endif
 
-  return webrtc::ADAPTER_TYPE_UNKNOWN;
+  return ADAPTER_TYPE_UNKNOWN;
 }
 
 NetworkManager::EnumerationPermission NetworkManager::enumeration_permission()
@@ -333,8 +331,42 @@ MdnsResponderInterface* NetworkManager::GetMdnsResponder() const {
   return nullptr;
 }
 
+NetworkManager::NetworkManager(NetworksChangedCallback callback) {
+  RTC_CHECK(callback.callback != nullptr);
+  networks_changed_callbacks_.AddReceiver(callback.removal_tag,
+                                          std::move(callback.callback));
+}
+
+void NetworkManager::SubscribeNetworksChanged(
+    absl::AnyInvocable<void()> callback) {
+  networks_changed_callbacks_.AddReceiver(std::move(callback));
+}
+
+void NetworkManager::SubscribeNetworksChanged(
+    void* tag,
+    absl::AnyInvocable<void()> callback) {
+  networks_changed_callbacks_.AddReceiver(tag, std::move(callback));
+}
+
+void NetworkManager::UnsubscribeNetworksChanged(void* tag) {
+  networks_changed_callbacks_.RemoveReceivers(tag);
+}
+
+void NetworkManager::SubscribeError(void* tag,
+                                    absl::AnyInvocable<void()> callback) {
+  error_callbacks_.AddReceiver(tag, std::move(callback));
+}
+
+void NetworkManager::UnsubscribeError(void* tag) {
+  error_callbacks_.RemoveReceivers(tag);
+}
+
 NetworkManagerBase::NetworkManagerBase()
     : enumeration_permission_(NetworkManager::ENUMERATION_ALLOWED) {}
+
+NetworkManagerBase::NetworkManagerBase(NetworksChangedCallback callback)
+    : NetworkManager(std::move(callback)),
+      enumeration_permission_(NetworkManager::ENUMERATION_ALLOWED) {}
 
 NetworkManager::EnumerationPermission
 NetworkManagerBase::enumeration_permission() const {
@@ -355,8 +387,8 @@ std::vector<const Network*> NetworkManagerBase::GetAnyAddressNetworks() {
   std::vector<const Network*> networks;
   if (!ipv4_any_address_network_) {
     const IPAddress ipv4_any_address(INADDR_ANY);
-    ipv4_any_address_network_ = CreateNetwork("any", "any", ipv4_any_address, 0,
-                                              webrtc::ADAPTER_TYPE_ANY);
+    ipv4_any_address_network_ =
+        CreateNetwork("any", "any", ipv4_any_address, 0, ADAPTER_TYPE_ANY);
     ipv4_any_address_network_->set_default_local_address_provider(this);
     ipv4_any_address_network_->set_mdns_responder_provider(this);
     ipv4_any_address_network_->AddIP(ipv4_any_address);
@@ -365,8 +397,8 @@ std::vector<const Network*> NetworkManagerBase::GetAnyAddressNetworks() {
 
   if (!ipv6_any_address_network_) {
     const IPAddress ipv6_any_address(in6addr_any);
-    ipv6_any_address_network_ = CreateNetwork("any", "any", ipv6_any_address, 0,
-                                              webrtc::ADAPTER_TYPE_ANY);
+    ipv6_any_address_network_ =
+        CreateNetwork("any", "any", ipv6_any_address, 0, ADAPTER_TYPE_ANY);
     ipv6_any_address_network_->set_default_local_address_provider(this);
     ipv6_any_address_network_->set_mdns_responder_provider(this);
     ipv6_any_address_network_->AddIP(ipv6_any_address);
@@ -446,7 +478,7 @@ void NetworkManagerBase::MergeNetworkList(
       Network* existing_net = existing->second.get();
       *changed = existing_net->SetIPs(kv.second.ips, *changed);
       merged_list.push_back(existing_net);
-      if (net->type() != webrtc::ADAPTER_TYPE_UNKNOWN &&
+      if (net->type() != ADAPTER_TYPE_UNKNOWN &&
           net->type() != existing_net->type()) {
         if (ShouldAdapterChangeTriggerNetworkChange(existing_net->type(),
                                                     net->type())) {
@@ -461,6 +493,10 @@ void NetworkManagerBase::MergeNetworkList(
       if (net->network_preference() != existing_net->network_preference()) {
         existing_net->set_network_preference(net->network_preference());
       }
+      if (net->network_slice() != existing_net->network_slice()) {
+        existing_net->set_network_slice(net->network_slice());
+      }
+
       RTC_DCHECK(net->active());
     }
     networks_map_[key]->set_mdns_responder_provider(this);
@@ -545,8 +581,8 @@ Network* NetworkManagerBase::GetNetworkFromAddress(const IPAddress& ip) const {
   return nullptr;
 }
 
-bool NetworkManagerBase::IsVpnMacAddress(ArrayView<const uint8_t> address) {
-  if (address.data() == nullptr && address.size() == 0) {
+bool NetworkManagerBase::IsVpnMacAddress(std::span<const uint8_t> address) {
+  if (address.data() == nullptr && address.empty()) {
     return false;
   }
   for (const auto& vpn : kVpns) {
@@ -572,6 +608,22 @@ BasicNetworkManager::BasicNetworkManager(
   RTC_DCHECK(socket_factory_);
 }
 
+BasicNetworkManager::BasicNetworkManager(
+    const Environment& env,
+    SocketFactory* absl_nonnull socket_factory,
+    NetworksChangedCallback callback,
+    NetworkMonitorFactory* absl_nullable network_monitor_factory)
+    : NetworkManagerBase(std::move(callback)),
+      env_(env),
+      network_monitor_factory_(network_monitor_factory),
+      socket_factory_(socket_factory),
+      allow_mac_based_ipv6_(
+          env_.field_trials().IsEnabled("WebRTC-AllowMACBasedIPv6")),
+      bind_using_ifname_(
+          !env_.field_trials().IsDisabled("WebRTC-BindUsingInterfaceName")) {
+  RTC_DCHECK(socket_factory_);
+}
+
 BasicNetworkManager::~BasicNetworkManager() {
   if (task_safety_flag_) {
     task_safety_flag_->SetNotAlive();
@@ -584,23 +636,13 @@ void BasicNetworkManager::OnNetworksChanged() {
   UpdateNetworksOnce();
 }
 
-#if defined(__native_client__)
-
-bool BasicNetworkManager::CreateNetworks(
-    bool include_ignored,
-    std::vector<std::unique_ptr<Network>>* networks) const {
-  RTC_DCHECK_NOTREACHED();
-  RTC_LOG(LS_WARNING) << "BasicNetworkManager doesn't work on NaCl yet";
-  return false;
-}
-
-#elif defined(WEBRTC_POSIX)
+#if defined(WEBRTC_POSIX)
 NetworkMonitorInterface::InterfaceInfo BasicNetworkManager::GetInterfaceInfo(
     struct ifaddrs* cursor) const {
   if (cursor->ifa_flags & IFF_LOOPBACK) {
     return {
-        .adapter_type = webrtc::ADAPTER_TYPE_LOOPBACK,
-        .underlying_type_for_vpn = webrtc::ADAPTER_TYPE_UNKNOWN,
+        .adapter_type = ADAPTER_TYPE_LOOPBACK,
+        .underlying_type_for_vpn = ADAPTER_TYPE_UNKNOWN,
         .network_preference = NetworkPreference::NEUTRAL,
         .available = true,
     };
@@ -608,7 +650,7 @@ NetworkMonitorInterface::InterfaceInfo BasicNetworkManager::GetInterfaceInfo(
     return network_monitor_->GetInterfaceInfo(cursor->ifa_name);
   } else {
     return {.adapter_type = GetAdapterTypeFromName(cursor->ifa_name),
-            .underlying_type_for_vpn = webrtc::ADAPTER_TYPE_UNKNOWN,
+            .underlying_type_for_vpn = ADAPTER_TYPE_UNKNOWN,
             .network_preference = NetworkPreference::NEUTRAL,
             .available = true};
   }
@@ -638,7 +680,7 @@ void BasicNetworkManager::ConvertIfAddrs(
       continue;
     }
     // Convert to InterfaceAddress.
-    // TODO(webrtc:13114): Convert ConvertIfAddrs to use webrtc::Netmask.
+    // TODO(webrtc:13114): Convert ConvertIfAddrs to use Netmask.
     if (!ifaddrs_converter->ConvertIfAddrsToIPAddress(cursor, &ip, &mask)) {
       continue;
     }
@@ -658,8 +700,8 @@ void BasicNetworkManager::ConvertIfAddrs(
           reinterpret_cast<sockaddr_in6*>(cursor->ifa_addr)->sin6_scope_id;
     }
 
-    int prefix_length = webrtc::CountIPMaskBits(mask);
-    prefix = webrtc::TruncateIP(ip, prefix_length);
+    int prefix_length = CountIPMaskBits(mask);
+    prefix = TruncateIP(ip, prefix_length);
     std::string key =
         MakeNetworkKey(std::string(cursor->ifa_name), prefix, prefix_length);
 
@@ -694,10 +736,10 @@ void BasicNetworkManager::ConvertIfAddrs(
     NetworkMonitorInterface::InterfaceInfo if_info = GetInterfaceInfo(cursor);
 
     // Check manually configured VPN override.
-    if (if_info.adapter_type != webrtc::ADAPTER_TYPE_VPN &&
+    if (if_info.adapter_type != ADAPTER_TYPE_VPN &&
         IsConfiguredVpn(prefix, prefix_length)) {
       if_info.underlying_type_for_vpn = if_info.adapter_type;
-      if_info.adapter_type = webrtc::ADAPTER_TYPE_VPN;
+      if_info.adapter_type = ADAPTER_TYPE_VPN;
     }
 
     auto network = CreateNetwork(cursor->ifa_name, cursor->ifa_name, prefix,
@@ -712,6 +754,7 @@ void BasicNetworkManager::ConvertIfAddrs(
     }
     network->set_underlying_type_for_vpn(if_info.underlying_type_for_vpn);
     network->set_network_preference(if_info.network_preference);
+    network->set_network_slice(if_info.slice);
     if (include_ignored || !network->ignored()) {
       current_networks[key] = network.get();
       networks->push_back(std::move(network));
@@ -897,7 +940,7 @@ bool BasicNetworkManager::CreateNetworks(
             adapter_type = ADAPTER_TYPE_VPN;
           }
           if (adapter_type != ADAPTER_TYPE_VPN &&
-              IsVpnMacAddress(webrtc::ArrayView<const uint8_t>(
+              IsVpnMacAddress(std::span<const uint8_t>(
                   reinterpret_cast<const uint8_t*>(
                       adapter_addrs->PhysicalAddress),
                   adapter_addrs->PhysicalAddressLength))) {
@@ -907,18 +950,18 @@ bool BasicNetworkManager::CreateNetworks(
             adapter_type = ADAPTER_TYPE_VPN;
           }
 
-          auto network = CreateNetwork(name, description, prefix, prefix_length,
-                                       adapter_type);
-          network->set_underlying_type_for_vpn(underlying_type_for_vpn);
-          network->set_default_local_address_provider(this);
-          network->set_mdns_responder_provider(this);
-          network->set_scope_id(scope_id);
-          network->AddIP(ip);
-          bool ignored = IsIgnoredNetwork(*network);
-          network->set_ignored(ignored);
-          if (include_ignored || !network->ignored()) {
-            current_networks[key] = network.get();
-            networks->push_back(std::move(network));
+          auto new_network = CreateNetwork(name, description, prefix,
+                                           prefix_length, adapter_type);
+          new_network->set_underlying_type_for_vpn(underlying_type_for_vpn);
+          new_network->set_default_local_address_provider(this);
+          new_network->set_mdns_responder_provider(this);
+          new_network->set_scope_id(scope_id);
+          new_network->AddIP(ip);
+          bool ignored = IsIgnoredNetwork(*new_network);
+          new_network->set_ignored(ignored);
+          if (include_ignored || !new_network->ignored()) {
+            current_networks[key] = new_network.get();
+            networks->push_back(std::move(new_network));
           }
         } else {
           (*existing_network).second->AddIP(ip);
@@ -979,7 +1022,7 @@ void BasicNetworkManager::StartUpdating() {
     if (sent_first_update_)
       thread_->PostTask(SafeTask(task_safety_flag_, [this] {
         RTC_DCHECK_RUN_ON(thread_);
-        SignalNetworksChanged();
+        NotifyNetworksChanged();
       }));
   } else {
     RTC_DCHECK(task_safety_flag_ == nullptr);
@@ -1076,7 +1119,7 @@ void BasicNetworkManager::UpdateNetworksOnce() {
 
   std::vector<std::unique_ptr<Network>> list;
   if (!CreateNetworks(false, &list)) {
-    SignalError();
+    NotifyError();
   } else {
     bool changed;
     NetworkManager::Stats stats;
@@ -1084,7 +1127,7 @@ void BasicNetworkManager::UpdateNetworksOnce() {
     set_default_local_addresses(QueryDefaultLocalAddress(AF_INET),
                                 QueryDefaultLocalAddress(AF_INET6));
     if (changed || !sent_first_update_) {
-      SignalNetworksChanged();
+      NotifyNetworksChanged();
       sent_first_update_ = true;
     }
   }
@@ -1140,9 +1183,23 @@ Network::Network(absl::string_view name,
       type_(type),
       preference_(0) {}
 
-Network::Network(const Network&) = default;
-
 Network::~Network() = default;
+
+std::unique_ptr<Network> Network::Clone() const {
+  auto clone = std::make_unique<Network>(name_, description_, prefix_,
+                                         prefix_length_, type_);
+  clone->key_ = key_;
+  clone->ips_ = ips_;
+  clone->scope_id_ = scope_id_;
+  clone->ignored_ = ignored_;
+  clone->underlying_type_for_vpn_ = underlying_type_for_vpn_;
+  clone->preference_ = preference_;
+  clone->active_ = active_;
+  clone->id_ = id_;
+  clone->network_preference_ = network_preference_;
+  clone->network_slice_ = network_slice_;
+  return clone;
+}
 
 // Sets the addresses of this network. Returns true if the address set changed.
 // Change detection is short circuited if the changed argument is true.
@@ -1165,7 +1222,7 @@ bool Network::SetIPs(const std::vector<InterfaceAddress>& ips, bool changed) {
 
 // Select the best IP address to use from this Network.
 IPAddress Network::GetBestIP() const {
-  if (ips_.size() == 0) {
+  if (ips_.empty()) {
     return IPAddress();
   }
 
@@ -1177,32 +1234,32 @@ IPAddress Network::GetBestIP() const {
 
   for (const InterfaceAddress& ip : ips_) {
     // Ignore any address which has been deprecated already.
-    if (ip.ipv6_flags() & webrtc::IPV6_ADDRESS_FLAG_DEPRECATED)
+    if (ip.ipv6_flags() & IPV6_ADDRESS_FLAG_DEPRECATED)
       continue;
 
-    if (webrtc::IPIsLinkLocal(ip)) {
+    if (IPIsLinkLocal(ip)) {
       link_local_ip = ip;
       continue;
     }
 
     // ULA address should only be returned when we have no other
     // global IP.
-    if (webrtc::IPIsULA(static_cast<const IPAddress&>(ip))) {
+    if (IPIsULA(static_cast<const IPAddress&>(ip))) {
       ula_ip = ip;
       continue;
     }
     selected_ip = ip;
 
     // Search could stop once a temporary non-deprecated one is found.
-    if (ip.ipv6_flags() & webrtc::IPV6_ADDRESS_FLAG_TEMPORARY)
+    if (ip.ipv6_flags() & IPV6_ADDRESS_FLAG_TEMPORARY)
       break;
   }
 
-  if (webrtc::IPIsUnspec(selected_ip)) {
-    if (!webrtc::IPIsUnspec(link_local_ip)) {
+  if (IPIsUnspec(selected_ip)) {
+    if (!IPIsUnspec(link_local_ip)) {
       // No proper global IPv6 address found, use link local address instead.
       selected_ip = link_local_ip;
-    } else if (!webrtc::IPIsUnspec(ula_ip)) {
+    } else if (!IPIsUnspec(ula_ip)) {
       // No proper global and link local address found, use ULA instead.
       selected_ip = ula_ip;
     }
@@ -1224,54 +1281,68 @@ uint16_t Network::GetCost(const FieldTrialsView& field_trials) const {
       field_trials.IsEnabled("WebRTC-UseDifferentiatedCellularCosts");
   const bool add_network_cost_to_vpn =
       field_trials.IsEnabled("WebRTC-AddNetworkCostToVpn");
-  return ComputeNetworkCostByType(type, IsVpn(),
-                                  use_differentiated_cellular_costs,
-                                  add_network_cost_to_vpn);
+  const bool add_network_cost_for_slice =
+      field_trials.IsEnabled("WebRTC-UnifiedCommunications");
+  return ComputeNetworkCostByType(
+      type, IsVpn(), use_differentiated_cellular_costs, add_network_cost_to_vpn,
+      network_slice(), add_network_cost_for_slice);
 }
 
 // This is the inverse of ComputeNetworkCostByType().
-std::pair<AdapterType, bool /* vpn */> Network::GuessAdapterFromNetworkCost(
-    int network_cost) {
+std::tuple<AdapterType, bool /* vpn */, NetworkSlice>
+Network::GuessAdapterFromNetworkCost(int network_cost) {
   switch (network_cost) {
-    case webrtc::kNetworkCostMin:
-      return {webrtc::ADAPTER_TYPE_ETHERNET, false};
-    case webrtc::kNetworkCostMin + webrtc::kNetworkCostVpn:
-      return {webrtc::ADAPTER_TYPE_ETHERNET, true};
-    case webrtc::kNetworkCostLow:
-      return {webrtc::ADAPTER_TYPE_WIFI, false};
-    case webrtc::kNetworkCostLow + webrtc::kNetworkCostVpn:
-      return {webrtc::ADAPTER_TYPE_WIFI, true};
-    case webrtc::kNetworkCostCellular:
-      return {webrtc::ADAPTER_TYPE_CELLULAR, false};
-    case webrtc::kNetworkCostCellular + webrtc::kNetworkCostVpn:
-      return {webrtc::ADAPTER_TYPE_CELLULAR, true};
-    case webrtc::kNetworkCostCellular2G:
-      return {webrtc::ADAPTER_TYPE_CELLULAR_2G, false};
-    case webrtc::kNetworkCostCellular2G + webrtc::kNetworkCostVpn:
-      return {webrtc::ADAPTER_TYPE_CELLULAR_2G, true};
-    case webrtc::kNetworkCostCellular3G:
-      return {webrtc::ADAPTER_TYPE_CELLULAR_3G, false};
-    case webrtc::kNetworkCostCellular3G + webrtc::kNetworkCostVpn:
-      return {webrtc::ADAPTER_TYPE_CELLULAR_3G, true};
-    case webrtc::kNetworkCostCellular4G:
-      return {webrtc::ADAPTER_TYPE_CELLULAR_4G, false};
-    case webrtc::kNetworkCostCellular4G + webrtc::kNetworkCostVpn:
-      return {webrtc::ADAPTER_TYPE_CELLULAR_4G, true};
-    case webrtc::kNetworkCostCellular5G:
-      return {webrtc::ADAPTER_TYPE_CELLULAR_5G, false};
-    case webrtc::kNetworkCostCellular5G + webrtc::kNetworkCostVpn:
-      return {webrtc::ADAPTER_TYPE_CELLULAR_5G, true};
-    case webrtc::kNetworkCostUnknown:
-      return {webrtc::ADAPTER_TYPE_UNKNOWN, false};
-    case webrtc::kNetworkCostUnknown + webrtc::kNetworkCostVpn:
-      return {webrtc::ADAPTER_TYPE_UNKNOWN, true};
-    case webrtc::kNetworkCostMax:
-      return {webrtc::ADAPTER_TYPE_ANY, false};
-    case webrtc::kNetworkCostMax + webrtc::kNetworkCostVpn:
-      return {webrtc::ADAPTER_TYPE_ANY, true};
+    case kNetworkCostMin:
+      return {ADAPTER_TYPE_ETHERNET, false, NetworkSlice::NO_SLICE};
+    case kNetworkCostMin + kNetworkCostVpn:
+      return {ADAPTER_TYPE_ETHERNET, true, NetworkSlice::NO_SLICE};
+    case kNetworkCostLow:
+      return {ADAPTER_TYPE_WIFI, false, NetworkSlice::NO_SLICE};
+    case kNetworkCostLow + kNetworkCostVpn:
+      return {ADAPTER_TYPE_WIFI, true, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellular:
+      return {ADAPTER_TYPE_CELLULAR, false, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellular + kNetworkCostVpn:
+      return {ADAPTER_TYPE_CELLULAR, true, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellularSlice:
+      return {ADAPTER_TYPE_CELLULAR, false,
+              NetworkSlice::UNIFIED_COMMUNICATIONS};
+    case kNetworkCostCellularVpnSlice:
+      return {ADAPTER_TYPE_CELLULAR, true,
+              NetworkSlice::UNIFIED_COMMUNICATIONS};
+    case kNetworkCostCellular2G:
+      return {ADAPTER_TYPE_CELLULAR_2G, false, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellular2G + kNetworkCostVpn:
+      return {ADAPTER_TYPE_CELLULAR_2G, true, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellular3G:
+      return {ADAPTER_TYPE_CELLULAR_3G, false, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellular3G + kNetworkCostVpn:
+      return {ADAPTER_TYPE_CELLULAR_3G, true, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellular4G:
+      return {ADAPTER_TYPE_CELLULAR_4G, false, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellular4G + kNetworkCostVpn:
+      return {ADAPTER_TYPE_CELLULAR_4G, true, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellular5G:
+      return {ADAPTER_TYPE_CELLULAR_5G, false, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellular5G + kNetworkCostVpn:
+      return {ADAPTER_TYPE_CELLULAR_5G, true, NetworkSlice::NO_SLICE};
+    case kNetworkCostCellular5GSlice:
+      return {ADAPTER_TYPE_CELLULAR_5G, false,
+              NetworkSlice::UNIFIED_COMMUNICATIONS};
+    case kNetworkCostCellular5GVpnSlice:
+      return {ADAPTER_TYPE_CELLULAR_5G, true,
+              NetworkSlice::UNIFIED_COMMUNICATIONS};
+    case kNetworkCostUnknown:
+      return {ADAPTER_TYPE_UNKNOWN, false, NetworkSlice::NO_SLICE};
+    case kNetworkCostUnknown + kNetworkCostVpn:
+      return {ADAPTER_TYPE_UNKNOWN, true, NetworkSlice::NO_SLICE};
+    case kNetworkCostMax:
+      return {ADAPTER_TYPE_ANY, false, NetworkSlice::NO_SLICE};
+    case kNetworkCostMax + kNetworkCostVpn:
+      return {ADAPTER_TYPE_ANY, true, NetworkSlice::NO_SLICE};
   }
   RTC_LOG(LS_VERBOSE) << "Unknown network cost: " << network_cost;
-  return {webrtc::ADAPTER_TYPE_UNKNOWN, false};
+  return {ADAPTER_TYPE_UNKNOWN, false, NetworkSlice::NO_SLICE};
 }
 
 std::string Network::ToString() const {
@@ -1280,9 +1351,12 @@ std::string Network::ToString() const {
   // the IP address.
   ss << "Net[" << description_.substr(0, description_.find(' ')) << ":"
      << prefix_.ToSensitiveString() << "/" << prefix_length_ << ":"
-     << webrtc::AdapterTypeToString(type_);
+     << AdapterTypeToString(type_);
   if (IsVpn()) {
-    ss << "/" << webrtc::AdapterTypeToString(underlying_type_for_vpn_);
+    ss << "/" << AdapterTypeToString(underlying_type_for_vpn_);
+  }
+  if (network_slice() != NetworkSlice::NO_SLICE) {
+    ss << "/" << NetworkSliceToString(network_slice());
   }
   ss << ":id=" << id_ << "]";
   return ss.Release();
@@ -1301,7 +1375,7 @@ bool BasicNetworkManager::IsConfiguredVpn(IPAddress prefix,
   RTC_DCHECK_RUN_ON(thread_);
   for (const auto& vpn : vpn_) {
     if (prefix_length >= vpn.prefix_length()) {
-      auto copy = webrtc::TruncateIP(prefix, vpn.prefix_length());
+      auto copy = TruncateIP(prefix, vpn.prefix_length());
       if (copy == vpn.address()) {
         return true;
       }

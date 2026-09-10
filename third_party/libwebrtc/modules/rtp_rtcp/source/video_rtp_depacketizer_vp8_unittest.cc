@@ -13,8 +13,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
-#include "api/array_view.h"
 #include "api/video/video_codec_type.h"
 #include "api/video/video_frame_type.h"
 #include "modules/rtp_rtcp/source/rtp_format_vp8.h"
@@ -197,7 +197,7 @@ TEST(VideoRtpDepacketizerVp8Test, TooShortHeader) {
 
 TEST(VideoRtpDepacketizerVp8Test, WithPacketizer) {
   uint8_t data[10] = {0};
-  RtpPacketToSend packet(/*extenions=*/nullptr);
+  RtpPacketToSend packet(/*extensions=*/nullptr);
   RTPVideoHeaderVP8 input_header;
   input_header.nonReference = true;
   input_header.pictureId = 300;
@@ -244,7 +244,7 @@ TEST(VideoRtpDepacketizerVp8Test, ReferencesInputCopyOnWriteBuffer) {
 }
 
 TEST(VideoRtpDepacketizerVp8Test, FailsOnEmptyPayload) {
-  ArrayView<const uint8_t> empty;
+  std::span<const uint8_t> empty;
   RTPVideoHeader video_header;
   EXPECT_EQ(VideoRtpDepacketizerVp8::ParseRtpPayload(empty, &video_header), 0);
 }

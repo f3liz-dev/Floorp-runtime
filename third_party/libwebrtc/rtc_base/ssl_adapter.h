@@ -79,8 +79,6 @@ class SSLAdapter : public AsyncSocketAdapter {
   virtual void SetAlpnProtocols(const std::vector<std::string>& protos) = 0;
   virtual void SetEllipticCurves(const std::vector<std::string>& curves) = 0;
 
-  [[deprecated("Only TLS is supported by the adapter")]] virtual void SetMode(
-      SSLMode mode) = 0;
   // Specify a custom certificate verifier for SSL.
   virtual void SetCertVerifier(SSLCertificateVerifier* ssl_cert_verifier) = 0;
 
@@ -106,7 +104,7 @@ class SSLAdapter : public AsyncSocketAdapter {
   // Create the default SSL adapter for this platform. On failure, returns null
   // and deletes `socket`. Otherwise, the returned SSLAdapter takes ownership
   // of `socket`.
-  static SSLAdapter* Create(Socket* socket);
+  static SSLAdapter* Create(Socket* socket, bool dtls = false);
 
  private:
   // Not supported.
@@ -125,15 +123,5 @@ RTC_EXPORT bool CleanupSSL();
 
 }  //  namespace webrtc
 
-// Re-export symbols from the webrtc namespace for backwards compatibility.
-// TODO(bugs.webrtc.org/4222596): Remove once all references are updated.
-#ifdef WEBRTC_ALLOW_DEPRECATED_NAMESPACES
-namespace rtc {
-using ::webrtc::CleanupSSL;
-using ::webrtc::InitializeSSL;
-using ::webrtc::SSLAdapter;
-using ::webrtc::SSLAdapterFactory;
-}  // namespace rtc
-#endif  // WEBRTC_ALLOW_DEPRECATED_NAMESPACES
 
 #endif  // RTC_BASE_SSL_ADAPTER_H_

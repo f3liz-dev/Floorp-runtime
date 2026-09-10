@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -138,7 +136,7 @@ void SocketTransportServiceTest::SetUp() {
   // Register ourselves as a listener for the read side of the
   // socket. The registration has to happen on the STS thread,
   // hence this event stuff.
-  rv = target_->Dispatch(new RegisterEvent(this), 0);
+  rv = target_->Dispatch(new RegisterEvent(this), NS_DISPATCH_NORMAL);
   ASSERT_TRUE(NS_SUCCEEDED(rv));
   ASSERT_TRUE_WAIT(registered_, 10000);
 }
@@ -155,7 +153,7 @@ void SocketTransportServiceTest::RegisterHandler() {
 void SocketTransportServiceTest::SendEvent() {
   nsresult rv;
 
-  rv = target_->Dispatch(new EventReceived(this), 0);
+  rv = target_->Dispatch(new EventReceived(this), NS_DISPATCH_NORMAL);
   ASSERT_TRUE(NS_SUCCEEDED(rv));
   ASSERT_TRUE_WAIT(Received() == 1, 10000);
 }

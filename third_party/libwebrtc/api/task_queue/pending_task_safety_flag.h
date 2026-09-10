@@ -19,6 +19,7 @@
 #include "api/scoped_refptr.h"
 #include "api/sequence_checker.h"
 #include "api/task_queue/task_queue_base.h"
+#include "rtc_base/checks.h"
 #include "rtc_base/system/no_unique_address.h"
 #include "rtc_base/system/rtc_export.h"
 
@@ -40,7 +41,7 @@ namespace webrtc {
 //
 // class ExampleClass {
 // ....
-//    webrtc::scoped_refptr<PendingTaskSafetyFlag> flag = safety_flag_;
+//    scoped_refptr<PendingTaskSafetyFlag> flag = safety_flag_;
 //    my_task_queue_->PostTask(
 //        [flag = std::move(flag), this] {
 //          // Now running on the main thread.
@@ -165,9 +166,22 @@ class RTC_EXPORT ScopedTaskSafetyDetached final {
 inline absl::AnyInvocable<void() &&> SafeTask(
     scoped_refptr<PendingTaskSafetyFlag> flag,
     absl::AnyInvocable<void() &&> task) {
+  RTC_DCHECK(flag);
   return [flag = std::move(flag), task = std::move(task)]() mutable {
     if (flag->alive()) {
       std::move(task)();
+    }
+  };
+}
+
+// Safely execute an Invocable that can be used multiple times.
+inline absl::AnyInvocable<void()> SafeInvocable(
+    scoped_refptr<PendingTaskSafetyFlag> flag,
+    absl::AnyInvocable<void()> task) {
+  RTC_DCHECK(flag);
+  return [flag = std::move(flag), task = std::move(task)]() mutable {
+    if (flag->alive()) {
+      task();
     }
   };
 }

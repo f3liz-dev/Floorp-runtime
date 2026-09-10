@@ -1,56 +1,52 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#import <QuartzCore/QuartzCore.h>
 #import <UIKit/UIEvent.h>
-#import <UIKit/UIKit.h>
 #import <UIKit/UIGraphics.h>
 #import <UIKit/UIInterface.h>
+#import <UIKit/UIKit.h>
 #import <UIKit/UIScreen.h>
 #import <UIKit/UITapGestureRecognizer.h>
 #import <UIKit/UITouch.h>
 #import <UIKit/UIView.h>
 #import <UIKit/UIViewController.h>
 #import <UIKit/UIWindow.h>
-#import <QuartzCore/QuartzCore.h>
 
-#include <algorithm>
-
-#include "nsWindow.h"
 #include "ScreenHelperUIKit.h"
 #include "nsAppShell.h"
 #include "nsIAppWindow.h"
 #include "nsIWindowWatcher.h"
+#include "nsWindow.h"
 #ifdef ACCESSIBILITY
-#  include "nsAccessibilityService.h"
 #  include "mozilla/a11y/LocalAccessible.h"
+#  include "nsAccessibilityService.h"
 #endif
 
-#include "nsWidgetsCID.h"
 #include "nsGfxCIID.h"
+#include "nsWidgetsCID.h"
 
+#include "TextInputHandler.h"
+#include "UIKitUtils.h"
+#include "gfxContext.h"
+#include "gfxImageSurface.h"
 #include "gfxPlatform.h"
 #include "gfxQuartzSurface.h"
 #include "gfxUtils.h"
-#include "gfxImageSurface.h"
-#include "gfxContext.h"
 #include "nsObjCExceptions.h"
 #include "nsQueryObject.h"
 #include "nsRegion.h"
 #include "nsTArray.h"
-#include "TextInputHandler.h"
-#include "UIKitUtils.h"
 
 #include "mozilla/BasicEvents.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/TouchEvents.h"
-#include "mozilla/Unused.h"
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/gfx/Logging.h"
-#include "mozilla/widget/GeckoViewSupport.h"
 #include "mozilla/layers/NativeLayerCA.h"
+#include "mozilla/widget/GeckoViewSupport.h"
 #ifdef ACCESSIBILITY
 #  include "mozilla/a11y/MUIRootAccessibleProtocol.h"
 #endif
@@ -250,8 +246,7 @@ class nsAutoRetainUIKitObject {
   event.mButton = MouseButton::ePrimary;
   event.mInputSource = mozilla::dom::MouseEvent_Binding::MOZ_SOURCE_UNKNOWN;
 
-  nsEventStatus status;
-  aWindow->DispatchEvent(&event, status);
+  aWindow->DispatchEvent(&event);
 }
 
 - (void)handleTap:(UITapGestureRecognizer*)sender {
@@ -285,7 +280,7 @@ class nsAutoRetainUIKitObject {
       continue;
     }
     int id = [value intValue];
-    RefPtr<Touch> t = new Touch(id, loc, radius, 0.0f, 1.0f);
+    auto t = MakeRefPtr<Touch>(id, loc, radius, 0.0f, 1.0f);
     event.mRefPoint = loc;
     event.mTouches.AppendElement(t);
   }
@@ -346,10 +341,10 @@ class nsAutoRetainUIKitObject {
   }
 
   CGFloat scaleFactor = [self contentScaleFactor];
-  mGeckoChild->Resize(self.frame.origin.x * scaleFactor,
-                      self.frame.origin.y * scaleFactor,
-                      self.frame.size.width * scaleFactor,
-                      self.frame.size.height * scaleFactor, false);
+  mGeckoChild->DoResize(self.frame.origin.x * scaleFactor,
+                        self.frame.origin.y * scaleFactor,
+                        self.frame.size.width * scaleFactor,
+                        self.frame.size.height * scaleFactor, false);
 }
 
 - (BOOL)canBecomeFirstResponder {
@@ -416,11 +411,7 @@ class nsAutoRetainUIKitObject {
   if (!mGeckoChild->IsVisible()) return;
 
   mWaitingForPaint = NO;
-
-  LayoutDeviceIntRect geckoBounds = mGeckoChild->GetBounds();
-  LayoutDeviceIntRegion region(geckoBounds);
-
-  mGeckoChild->PaintWindow(region);
+  mGeckoChild->PaintWindow();
 }
 
 // Called asynchronously after setNeedsDisplay in order to avoid entering the
@@ -745,7 +736,7 @@ class nsAutoRetainUIKitObject {
 
 @end
 
-NS_IMPL_ISUPPORTS_INHERITED(nsWindow, nsBaseWidget, nsWindow);
+NS_IMPL_ISUPPORTS_INHERITED(nsWindow, nsIWidget, nsWindow);
 
 nsWindow::nsWindow()
     : mNativeView(nullptr),
@@ -778,7 +769,7 @@ bool nsWindow::IsTopLevel() {
 //
 
 nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
-                          widget::InitData* aInitData) {
+                          const widget::InitData& aInitData) {
   ALOG("nsWindow[%p]::Create %p [%d %d %d %d]", (void*)this, (void*)aParent,
        aRect.x, aRect.y, aRect.width, aRect.height);
   nsWindow* parent = (nsWindow*)aParent;
@@ -792,7 +783,7 @@ nsresult nsWindow::Create(nsIWidget* aParent, const LayoutDeviceIntRect& aRect,
   mWindowType = WindowType::TopLevel;
   mBorderStyle = BorderStyle::Default;
 
-  nsBaseWidget::BaseCreate(aParent, aInitData);
+  nsIWidget::BaseCreate(aParent, aInitData);
 
   NS_ASSERTION(IsTopLevel() || parent,
                "non top level window doesn't have a parent!");
@@ -839,13 +830,13 @@ void nsWindow::Destroy() {
 
   nsCOMPtr<nsIWidget> kungFuDeathGrip(this);
 
-  nsBaseWidget::Destroy();
+  nsIWidget::Destroy();
 
   // ReportDestroyEvent();
 
   TearDownView();
 
-  nsBaseWidget::OnDestroy();
+  nsIWidget::OnDestroy();
 }
 
 void nsWindow::Show(bool aState) {
@@ -861,14 +852,16 @@ void nsWindow::Show(bool aState) {
   }
 }
 
-void nsWindow::Move(double aX, double aY) {
-  if (!mNativeView || (mBounds.x == aX && mBounds.y == aY)) return;
+void nsWindow::Move(const DesktopPoint& aPoint) {
+  if (!mNativeView || (mBounds.x == aPoint.x && mBounds.y == aPoint.y)) {
+    return;
+  }
 
   // XXX: handle this
   // The point we have is in Gecko coordinates (origin top-left). Convert
   // it to Cocoa ones (origin bottom-left).
-  mBounds.x = aX;
-  mBounds.y = aY;
+  mBounds.x = aPoint.x;
+  mBounds.y = aPoint.y;
 
   if (mWindowType != WindowType::TopLevel) {
     mNativeView.frame = DevPixelsToUIKitPoints(mBounds, BackingScaleFactor());
@@ -879,11 +872,19 @@ void nsWindow::Move(double aX, double aY) {
   ReportMoveEvent();
 }
 
-void nsWindow::Resize(double aX, double aY, double aWidth, double aHeight,
-                      bool aRepaint) {
-  BOOL isMoving = (mBounds.x != aX || mBounds.y != aY);
-  BOOL isResizing = (mBounds.width != aWidth || mBounds.height != aHeight);
-  if (!mNativeView || (!isMoving && !isResizing)) return;
+void nsWindow::Resize(const DesktopRect& aRect, bool aRepaint) {
+  DoResize(aRect.x, aRect.y, aRect.width, aRect.height, aRepaint);
+}
+
+void nsWindow::DoResize(double aX, double aY, double aWidth, double aHeight,
+                        bool aRepaint) {
+  // FIXME: This code is confused about integers vs. double coords, and desktop
+  // vs. device pixels.
+  BOOL isMoving = mBounds.x != aX || mBounds.y != aY;
+  BOOL isResizing = mBounds.width != aWidth || mBounds.height != aHeight;
+  if (!mNativeView || (!isMoving && !isResizing)) {
+    return;
+  }
 
   if (isMoving) {
     mBounds.x = aX;
@@ -906,12 +907,14 @@ void nsWindow::Resize(double aX, double aY, double aWidth, double aHeight,
   if (isResizing) ReportSizeEvent();
 }
 
-void nsWindow::Resize(double aWidth, double aHeight, bool aRepaint) {
-  if (!mNativeView || (mBounds.width == aWidth && mBounds.height == aHeight))
+void nsWindow::Resize(const DesktopSize& aSize, bool aRepaint) {
+  if (!mNativeView ||
+      (mBounds.width == aSize.width && mBounds.height == aSize.height)) {
     return;
+  }
 
-  mBounds.width = aWidth;
-  mBounds.height = aHeight;
+  mBounds.width = aSize.width;
+  mBounds.height = aSize.height;
 
   if (mWindowType != WindowType::TopLevel) {
     [mNativeView
@@ -932,7 +935,7 @@ void nsWindow::SetSizeMode(nsSizeMode aMode) {
   mSizeMode = static_cast<nsSizeMode>(aMode);
   if (aMode == nsSizeMode_Maximized || aMode == nsSizeMode_Fullscreen) {
     // Resize to fill screen
-    nsBaseWidget::InfallibleMakeFullScreen(true);
+    nsIWidget::InfallibleMakeFullScreen(true);
   }
   ReportSizeModeEvent(aMode);
 }
@@ -950,26 +953,13 @@ void nsWindow::SetFocus(Raise, mozilla::dom::CallerType) {
   [mNativeView becomeFirstResponder];
 }
 
-void nsWindow::WillPaintWindow() {
+void nsWindow::PaintWindow() {
   if (mWidgetListener) {
-    mWidgetListener->WillPaintWindow(this);
+    mWidgetListener->PaintWindow(this);
   }
 }
 
-bool nsWindow::PaintWindow(LayoutDeviceIntRegion aRegion) {
-  if (!mWidgetListener) return false;
-
-  bool returnValue = false;
-  returnValue = mWidgetListener->PaintWindow(this, aRegion);
-
-  if (mWidgetListener) {
-    mWidgetListener->DidPaintWindow();
-  }
-
-  return returnValue;
-}
-
-void nsWindow::ReportMoveEvent() { NotifyWindowMoved(mBounds.x, mBounds.y); }
+void nsWindow::ReportMoveEvent() { NotifyWindowMoved(mBounds.TopLeft()); }
 
 void nsWindow::ReportSizeModeEvent(nsSizeMode aMode) {
   if (mWidgetListener) {
@@ -993,12 +983,11 @@ void nsWindow::ReportSizeEvent() {
   LayoutDeviceIntRect innerBounds = GetClientBounds();
 
   if (mWidgetListener) {
-    mWidgetListener->WindowResized(this, innerBounds.width, innerBounds.height);
+    mWidgetListener->WindowResized(this, innerBounds.Size());
   }
 
   if (mAttachedWidgetListener) {
-    mAttachedWidgetListener->WindowResized(this, innerBounds.width,
-                                           innerBounds.height);
+    mAttachedWidgetListener->WindowResized(this, innerBounds.Size());
   }
 }
 
@@ -1023,21 +1012,6 @@ LayoutDeviceIntPoint nsWindow::WidgetToScreenOffset() {
   offset.y += static_cast<int32_t>(temp.y);
 
   return offset;
-}
-
-nsresult nsWindow::DispatchEvent(mozilla::WidgetGUIEvent* aEvent,
-                                 nsEventStatus& aStatus) {
-  aStatus = nsEventStatus_eIgnore;
-  nsCOMPtr<nsIWidget> kungFuDeathGrip(aEvent->mWidget);
-  mozilla::Unused << kungFuDeathGrip;  // Not used within this function
-
-  if (mAttachedWidgetListener) {
-    aStatus = mAttachedWidgetListener->HandleEvent(aEvent, mUseAttachedEvents);
-  } else if (mWidgetListener) {
-    aStatus = mWidgetListener->HandleEvent(aEvent, mUseAttachedEvents);
-  }
-
-  return NS_OK;
 }
 
 void nsWindow::SetInputContext(const InputContext& aContext,
@@ -1143,18 +1117,16 @@ int32_t nsWindow::RoundsWidgetCoordinatesTo() {
   return 1;
 }
 
-RefPtr<layers::NativeLayerRoot> nsWindow::GetNativeLayerRoot() {
+layers::NativeLayerRoot* nsWindow::GetNativeLayerRoot() {
   return mNativeLayerRoot;
 }
 
 void nsWindow::HandleMainThreadCATransaction() {
-  WillPaintWindow();
-
   // Trigger a synchronous OMTC composite. This will call NextSurface and
   // NotifySurfaceReady on the compositor thread to update mNativeLayerRoot's
   // contents, and the main thread (this thread) will wait inside PaintWindow
   // during that time.
-  PaintWindow(LayoutDeviceIntRegion(GetBounds()));
+  PaintWindow();
 
   {
     // Apply the changes inside mNativeLayerRoot to the underlying CALayers. Now
@@ -1283,9 +1255,9 @@ nsresult IOSView::GetInitData(JSContext* aCx,
     mWindow = nullptr;
   }
 
-  if (mOuterWindow) {
-    mOuterWindow->ForceClose();
-    mOuterWindow = nullptr;
+  if (const nsCOMPtr<nsPIDOMWindowOuter> outerWin = std::move(mOuterWindow)) {
+    MOZ_ASSERT(!mOuterWindow);
+    outerWin->ForceClose();
   }
 }
 @end
@@ -1308,11 +1280,11 @@ id<GeckoViewWindow> GeckoViewOpenWindow(NSString* aId,
   }
 
   // Prepare an nsIGeckoViewView to pass as argument to the window.
-  RefPtr<IOSView> iosView = new IOSView();
+  auto iosView = MakeRefPtr<IOSView>();
   iosView->mEventDispatcher->Attach(aDispatcher);
   iosView->mInitData.AssignUnderGetRule((CFDictionaryRef)aInitData);
 
-  nsAutoCString chromeFlags("chrome,dialog=0,remote,resizable,scrollbars");
+  nsAutoCString chromeFlags("chrome,dialog=0,remote,resizable");
   if (aPrivateMode) {
     chromeFlags += ",private";
   }

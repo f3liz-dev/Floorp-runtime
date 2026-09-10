@@ -1,5 +1,3 @@
-/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
-/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -342,6 +340,31 @@ export var ExtensionStorage = {
   async get(extensionId, keys) {
     let jsonFile = await this.getFile(extensionId);
     return this._filterProperties(extensionId, jsonFile.data, keys);
+  },
+
+  /**
+   * Asynchronously retrieves the bytes in use for the given storage items.
+   *
+   * @param {string} extensionId
+   * @param {Array<string>|string|null} [keys]
+   * @returns {Promise<number>}
+   */
+  async getBytesInUse(extensionId, keys) {
+    const jsonFile = await this.getFile(extensionId);
+    const dataObj = Object.assign({}, jsonFile.data.toJSON());
+    if (typeof keys === "string") {
+      keys = [keys];
+    }
+    let bytesInUse = 0;
+    const utf8Encoder = new TextEncoder();
+    for (let key in dataObj) {
+      if (keys === null || keys.includes(key)) {
+        bytesInUse += utf8Encoder.encode(
+          key + JSON.stringify(dataObj[key])
+        ).length;
+      }
+    }
+    return bytesInUse;
   },
 
   /**

@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=2 et tw=80 : */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,6 +5,7 @@
 #include "CocoaCompositorWidget.h"
 
 #include "mozilla/gfx/Logging.h"
+#include "mozilla/layers/NativeLayer.h"
 #include "mozilla/layers/NativeLayerRootRemoteMacChild.h"
 #include "mozilla/widget/PlatformWidgetTypes.h"
 #include "nsIWidget.h"
@@ -32,8 +31,7 @@ void CocoaCompositorWidget::Init(CompositorWidgetInitData&& aInitData) {
   mChildEndpoint = std::move(cocoaInitData.childEndpoint());
 }
 
-RefPtr<mozilla::layers::NativeLayerRoot>
-CocoaCompositorWidget::GetNativeLayerRoot() {
+mozilla::layers::NativeLayerRoot* CocoaCompositorWidget::GetNativeLayerRoot() {
   if (!mNativeLayerRoot) {
     CreateNativeLayerRoot();
     MOZ_ASSERT(mNativeLayerRoot);

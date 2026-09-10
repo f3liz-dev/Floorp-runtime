@@ -1,40 +1,45 @@
-/* -*- Mode: Java; c-basic-offset: 4; tab-width: 4; indent-tabs-mode: nil; -*-
- * Any copyright is dedicated to the Public Domain.
-   http://creativecommons.org/publicdomain/zero/1.0/ */
+/* Any copyright is dedicated to the Public Domain.
+http://creativecommons.org/publicdomain/zero/1.0/ */
 
 package org.mozilla.geckoview.test
 
 import android.content.ClipData
-import android.os.Build
 import android.os.Parcel
 import android.os.SystemClock
 import android.view.DragEvent
 import android.view.MotionEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.MediumTest
-import androidx.test.filters.SdkSuppress
 import org.hamcrest.Matchers.equalTo
 import org.json.JSONObject
+import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule.WithDisplay
 
 @RunWith(AndroidJUnit4::class)
-@SdkSuppress(minSdkVersion = Build.VERSION_CODES.N)
 @MediumTest
 class DragAndDropTest : BaseSessionTest() {
-    // DragEvent has no constructor, so we create it via Java reflection.
+    /* DragEvent has no constructor, so we create it via Java reflection.
+     * Attention: this method might get broken when targeting different Android version.
+     * Make sure to verify the shape of the Parceleable against current API in case of any timeouts.
+     */
     fun createDragEvent(action: Int, x: Float = 0.0F, y: Float = 0.0F): DragEvent {
         val p = Parcel.obtain()
         p.writeInt(action) // mAction
 
-        if (listOf(DragEvent.ACTION_DRAG_STARTED, DragEvent.ACTION_DRAG_LOCATION, DragEvent.ACTION_DROP).contains(action)) {
+        if (
+            listOf(DragEvent.ACTION_DRAG_STARTED, DragEvent.ACTION_DRAG_LOCATION, DragEvent.ACTION_DROP)
+                .contains(action)
+        ) {
             p.writeFloat(x) // mX
             p.writeFloat(y) // mY
         } else {
             p.writeFloat(0.0F) // mX
             p.writeFloat(0.0F) // mY
         }
+        p.writeFloat(0.0F) // mOffsetX
+        p.writeFloat(0.0F) // mOffsetY
         p.writeInt(0) // mDragResult
 
         val clipData = ClipData.newPlainText("label", "foo")
@@ -81,11 +86,13 @@ class DragAndDropTest : BaseSessionTest() {
         mainSession.loadTestPath(DND_HTML_PATH)
         sessionRule.waitForPageStop()
 
-        val promise = mainSession.evaluatePromiseJS(
-            """
-            new Promise(r => document.querySelector('#drag').addEventListener('dragstart', r, { once: true }))
-            """.trimIndent(),
-        )
+        val promise =
+            mainSession.evaluatePromiseJS(
+                """
+                new Promise(r => document.querySelector('#drag').addEventListener('dragstart', r, { once: true }))
+                """
+                    .trimIndent()
+            )
         val downTime = SystemClock.uptimeMillis()
         mainSession.synthesizeMouse(downTime, MotionEvent.ACTION_DOWN, 50, 20, MotionEvent.BUTTON_PRIMARY)
         for (y in 30..50) {
@@ -103,15 +110,17 @@ class DragAndDropTest : BaseSessionTest() {
         mainSession.loadTestPath(DND_HTML_PATH)
         sessionRule.waitForPageStop()
 
-        val promise = mainSession.evaluatePromiseJS(
-            """
-          new Promise(
-              r => document.querySelector('#drop').addEventListener(
-                       'drop',
-                       e => r(e.dataTransfer.getData('text/plain')),
-                       { once: true }))
-            """.trimIndent(),
-        )
+        val promise =
+            mainSession.evaluatePromiseJS(
+                """
+                new Promise(
+                    r => document.querySelector('#drop').addEventListener(
+                             'drop',
+                             e => r(e.dataTransfer.getData('text/plain')),
+                             { once: true }))
+                """
+                    .trimIndent()
+            )
 
         sendDragEvent(100.0F, 150.0F, 250.0F)
 
@@ -124,25 +133,29 @@ class DragAndDropTest : BaseSessionTest() {
         mainSession.loadTestPath(DND_HTML_PATH)
         sessionRule.waitForPageStop()
 
-        val promiseDragOver = mainSession.evaluatePromiseJS(
-            """
-          new Promise(
-              r => document.querySelector('textarea').addEventListener(
-                       'dragover',
-                       e => r({ types: e.dataTransfer.types, data: e.dataTransfer.getData('text/plain') }),
-                       { once: true }))
-            """.trimIndent(),
-        )
+        val promiseDragOver =
+            mainSession.evaluatePromiseJS(
+                """
+                new Promise(
+                    r => document.querySelector('textarea').addEventListener(
+                             'dragover',
+                             e => r({ types: e.dataTransfer.types, data: e.dataTransfer.getData('text/plain') }),
+                             { once: true }))
+                """
+                    .trimIndent()
+            )
 
-        val promiseSetValue = mainSession.evaluatePromiseJS(
-            """
-          new Promise(
-              r => document.querySelector('textarea').addEventListener(
-                       'input',
-                       e => r(document.querySelector('textarea').value),
-                       { once: true }))
-            """.trimIndent(),
-        )
+        val promiseSetValue =
+            mainSession.evaluatePromiseJS(
+                """
+                new Promise(
+                    r => document.querySelector('textarea').addEventListener(
+                             'input',
+                             e => r(document.querySelector('textarea').value),
+                             { once: true }))
+                """
+                    .trimIndent()
+            )
 
         sendDragEvent(100.0F, 250.0F, 450.0F)
 
@@ -152,17 +165,20 @@ class DragAndDropTest : BaseSessionTest() {
         assertThat("input event is fired correctly", promiseSetValue.value as String, equalTo("foo"))
     }
 
+    @Ignore("https://bugzilla.mozilla.org/show_bug.cgi?id=1988041")
     @WithDisplay(width = 300, height = 300)
     @Test
     fun dragStartXOriginTest() {
         mainSession.loadTestPath(DND_XORIGIN_HTML_PATH)
         sessionRule.waitForPageStop()
 
-        val promise = mainSession.evaluatePromiseJS(
-            """
-            new Promise(r => window.addEventListener('message', r, { once: true }))
-            """.trimIndent(),
-        )
+        val promise =
+            mainSession.evaluatePromiseJS(
+                """
+                new Promise(r => window.addEventListener('message', r, { once: true }))
+                """
+                    .trimIndent()
+            )
 
         val downTime = SystemClock.uptimeMillis()
         mainSession.synthesizeMouse(downTime, MotionEvent.ACTION_DOWN, 50, 70, MotionEvent.BUTTON_PRIMARY)

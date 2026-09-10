@@ -15,18 +15,21 @@
 
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "absl/base/nullability.h"
+#include "absl/functional/any_invocable.h"
 #include "absl/strings/string_view.h"
-#include "api/array_view.h"
 #include "api/environment/environment.h"
 #include "api/field_trials_view.h"
 #include "api/scoped_refptr.h"
 #include "api/sequence_checker.h"
 #include "api/task_queue/pending_task_safety_flag.h"
+#include "rtc_base/callback_list.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/ip_address.h"
 #include "rtc_base/mdns_responder_interface.h"
@@ -35,7 +38,6 @@
 #include "rtc_base/network_monitor_factory.h"
 #include "rtc_base/socket_factory.h"
 #include "rtc_base/system/rtc_export.h"
-#include "rtc_base/third_party/sigslot/sigslot.h"
 #include "rtc_base/thread.h"
 #include "rtc_base/thread_annotations.h"
 
@@ -52,7 +54,7 @@ extern const char kPublicIPv6Host[];
 class Network;
 
 // By default, ignore loopback interfaces on the host.
-const int kDefaultNetworkIgnoreMask = webrtc::ADAPTER_TYPE_LOOPBACK;
+const int kDefaultNetworkIgnoreMask = ADAPTER_TYPE_LOOPBACK;
 
 namespace webrtc_network_internal {
 bool CompareNetworks(const std::unique_ptr<Network>& a,
@@ -69,7 +71,6 @@ std::string MakeNetworkKey(absl::string_view name,
 // Utility function that attempts to determine an adapter type by an interface
 // name (e.g., "wlan0"). Can be used by NetworkManager subclasses when other
 // mechanisms fail to determine the type.
-RTC_EXPORT AdapterType GetAdapterTypeFromName(absl::string_view network_name);
 RTC_EXPORT AdapterType GetAdapterTypeFromName(absl::string_view network_name);
 
 class DefaultLocalAddressProvider {
@@ -124,6 +125,14 @@ class NetworkMask {
 class RTC_EXPORT NetworkManager : public DefaultLocalAddressProvider,
                                   public MdnsResponderProvider {
  public:
+  NetworkManager() = default;
+  // NetworksChangedCallback joins the removal tag and the callable.
+  struct NetworksChangedCallback {
+    const void* removal_tag;
+    absl::AnyInvocable<void()> callback;
+  };
+
+  explicit NetworkManager(NetworksChangedCallback callback);
   // This enum indicates whether adapter enumeration is allowed.
   enum EnumerationPermission {
     ENUMERATION_ALLOWED,  // Adapter enumeration is allowed. Getting 0 network
@@ -132,12 +141,6 @@ class RTC_EXPORT NetworkManager : public DefaultLocalAddressProvider,
     ENUMERATION_BLOCKED,  // Adapter enumeration is disabled.
                           // GetAnyAddressNetworks() should be used instead.
   };
-
-  // Called when network list is updated.
-  sigslot::signal0<> SignalNetworksChanged;
-
-  // Indicates a failure when getting list of network interfaces.
-  sigslot::signal0<> SignalError;
 
   // This should be called on the NetworkManager's thread before the
   // NetworkManager is used. Subclasses may override this if necessary.
@@ -188,6 +191,23 @@ class RTC_EXPORT NetworkManager : public DefaultLocalAddressProvider,
   MdnsResponderInterface* GetMdnsResponder() const override;
 
   virtual void set_vpn_list(const std::vector<NetworkMask>& /* vpn */) {}
+
+  // The implementation of the Subscribe methods is in the .cc file due
+  // to linking issues with Chrome.
+
+  [[deprecated]] void SubscribeNetworksChanged(
+      absl::AnyInvocable<void()> callback);
+  void SubscribeNetworksChanged(void* tag, absl::AnyInvocable<void()> callback);
+  void UnsubscribeNetworksChanged(void* tag);
+  void NotifyNetworksChanged() { networks_changed_callbacks_.Send(); }
+
+  void SubscribeError(void* tag, absl::AnyInvocable<void()> callback);
+  void UnsubscribeError(void* tag);
+  void NotifyError() { error_callbacks_.Send(); }
+
+ private:
+  CallbackList<> networks_changed_callbacks_;
+  CallbackList<> error_callbacks_;
 };
 
 // Represents a Unix-type network interface, with a name and single address.
@@ -201,24 +221,63 @@ class RTC_EXPORT Network {
                 description,
                 prefix,
                 prefix_length,
-                webrtc::ADAPTER_TYPE_UNKNOWN) {}
+                ADAPTER_TYPE_UNKNOWN) {}
 
   Network(absl::string_view name,
           absl::string_view description,
           const IPAddress& prefix,
           int prefix_length,
           AdapterType type);
-
-  Network(const Network&);
+  // A Network is immovable.
+  Network(const Network&) = delete;
+  Network& operator=(const Network&) = delete;
+  Network(Network&&) = delete;
+  Network& operator=(Network&&) = delete;
   ~Network();
 
+  // The Clone operator creates a new network
+  // with the same configuration, but no connected signals.
+  std::unique_ptr<Network> Clone() const;
+
   // This signal is fired whenever type() or underlying_type_for_vpn() changes.
-  // Mutable, to support connecting on the const Network passed to webrtc::Port
-  // constructor.
-  mutable sigslot::signal1<const Network*> SignalTypeChanged;
+
+  void SubscribeTypeChanged(void* tag,
+                            absl::AnyInvocable<void(const Network*)> callback) {
+    type_changed_callbacks_.AddReceiver(tag, std::move(callback));
+  }
+  void UnsubscribeTypeChanged(void* tag) {
+    type_changed_callbacks_.RemoveReceivers(tag);
+  }
+  void NotifyTypeChanged(const Network* network) {
+    type_changed_callbacks_.Send(network);
+  }
 
   // This signal is fired whenever network preference changes.
-  sigslot::signal1<const Network*> SignalNetworkPreferenceChanged;
+
+  void SubscribeNetworkPreferenceChanged(
+      void* tag,
+      absl::AnyInvocable<void(const Network*)> callback) {
+    network_preference_changed_callbacks_.AddReceiver(tag, std::move(callback));
+  }
+  void UnsubscribeNetworkPreferenceChanged(void* tag) {
+    network_preference_changed_callbacks_.RemoveReceivers(tag);
+  }
+  void NotifyNetworkPreferenceChanged(Network* network) {
+    network_preference_changed_callbacks_.Send(network);
+  }
+
+  // This signal is fired whenever network slice changes.
+  void SubscribeNetworkSliceChanged(
+      void* tag,
+      absl::AnyInvocable<void(const Network*)> callback) {
+    network_slice_changed_callbacks_.AddReceiver(tag, std::move(callback));
+  }
+  void UnsubscribeNetworkSliceChanged(void* tag) {
+    network_slice_changed_callbacks_.RemoveReceivers(tag);
+  }
+  void NotifyNetworkSliceChanged(const Network* network) {
+    network_slice_changed_callbacks_.Send(network);
+  }
 
   const DefaultLocalAddressProvider* default_local_address_provider() const {
     return default_local_address_provider_;
@@ -314,10 +373,10 @@ class RTC_EXPORT Network {
       return;
     }
     type_ = type;
-    if (type != webrtc::ADAPTER_TYPE_VPN) {
-      underlying_type_for_vpn_ = webrtc::ADAPTER_TYPE_UNKNOWN;
+    if (type != ADAPTER_TYPE_VPN) {
+      underlying_type_for_vpn_ = ADAPTER_TYPE_UNKNOWN;
     }
-    SignalTypeChanged(this);
+    NotifyTypeChanged(this);
   }
 
   void set_underlying_type_for_vpn(AdapterType type) {
@@ -325,20 +384,20 @@ class RTC_EXPORT Network {
       return;
     }
     underlying_type_for_vpn_ = type;
-    SignalTypeChanged(this);
+    NotifyTypeChanged(this);
   }
 
-  bool IsVpn() const { return type_ == webrtc::ADAPTER_TYPE_VPN; }
+  bool IsVpn() const { return type_ == ADAPTER_TYPE_VPN; }
 
   bool IsCellular() const { return IsCellular(type_); }
 
   static bool IsCellular(AdapterType type) {
     switch (type) {
-      case webrtc::ADAPTER_TYPE_CELLULAR:
-      case webrtc::ADAPTER_TYPE_CELLULAR_2G:
-      case webrtc::ADAPTER_TYPE_CELLULAR_3G:
-      case webrtc::ADAPTER_TYPE_CELLULAR_4G:
-      case webrtc::ADAPTER_TYPE_CELLULAR_5G:
+      case ADAPTER_TYPE_CELLULAR:
+      case ADAPTER_TYPE_CELLULAR_2G:
+      case ADAPTER_TYPE_CELLULAR_3G:
+      case ADAPTER_TYPE_CELLULAR_4G:
+      case ADAPTER_TYPE_CELLULAR_5G:
         return true;
       default:
         return false;
@@ -377,11 +436,20 @@ class RTC_EXPORT Network {
       return;
     }
     network_preference_ = val;
-    SignalNetworkPreferenceChanged(this);
+    NotifyNetworkPreferenceChanged(this);
   }
 
-  static std::pair<AdapterType, bool /* vpn */> GuessAdapterFromNetworkCost(
-      int network_cost);
+  NetworkSlice network_slice() const { return network_slice_; }
+  void set_network_slice(NetworkSlice slice) {
+    if (network_slice_ == slice) {
+      return;
+    }
+    network_slice_ = slice;
+    NotifyNetworkSliceChanged(this);
+  }
+
+  static std::tuple<AdapterType, bool /* vpn */, NetworkSlice>
+  GuessAdapterFromNetworkCost(int network_cost);
 
   // Debugging description of this network
   std::string ToString() const;
@@ -398,12 +466,15 @@ class RTC_EXPORT Network {
   int scope_id_;
   bool ignored_;
   AdapterType type_;
-  AdapterType underlying_type_for_vpn_ = webrtc::ADAPTER_TYPE_UNKNOWN;
+  AdapterType underlying_type_for_vpn_ = ADAPTER_TYPE_UNKNOWN;
   int preference_;
   bool active_ = true;
   uint16_t id_ = 0;
   NetworkPreference network_preference_ = NetworkPreference::NEUTRAL;
-
+  NetworkSlice network_slice_ = NetworkSlice::NO_SLICE;
+  CallbackList<const Network*> type_changed_callbacks_;
+  CallbackList<const Network*> network_preference_changed_callbacks_;
+  CallbackList<const Network*> network_slice_changed_callbacks_;
   friend class NetworkManager;
 };
 
@@ -411,6 +482,7 @@ class RTC_EXPORT Network {
 class RTC_EXPORT NetworkManagerBase : public NetworkManager {
  public:
   NetworkManagerBase();
+  explicit NetworkManagerBase(NetworksChangedCallback callback);
 
   std::vector<const Network*> GetNetworks() const override;
   std::vector<const Network*> GetAnyAddressNetworks() override;
@@ -421,7 +493,7 @@ class RTC_EXPORT NetworkManagerBase : public NetworkManager {
 
   // Check if MAC address in |bytes| is one of the pre-defined
   // MAC addresses for know VPNs.
-  static bool IsVpnMacAddress(ArrayView<const uint8_t> address);
+  static bool IsVpnMacAddress(std::span<const uint8_t> address);
 
  protected:
   // Updates `networks_` with the networks listed in `list`. If
@@ -479,12 +551,17 @@ class RTC_EXPORT NetworkManagerBase : public NetworkManager {
 // Basic implementation of the NetworkManager interface that gets list
 // of networks using OS APIs.
 class RTC_EXPORT BasicNetworkManager : public NetworkManagerBase,
-                                       public NetworkBinderInterface,
-                                       public sigslot::has_slots<> {
+                                       public NetworkBinderInterface {
  public:
   BasicNetworkManager(
       const Environment& env,
       SocketFactory* absl_nonnull socket_factory,
+      NetworkMonitorFactory* absl_nullable network_monitor_factory = nullptr);
+
+  BasicNetworkManager(
+      const Environment& env,
+      SocketFactory* absl_nonnull socket_factory,
+      NetworksChangedCallback callback,
       NetworkMonitorFactory* absl_nullable network_monitor_factory = nullptr);
 
   ~BasicNetworkManager() override;
@@ -577,24 +654,5 @@ class RTC_EXPORT BasicNetworkManager : public NetworkManagerBase,
 };
 
 }  //  namespace webrtc
-
-// Re-export symbols from the webrtc namespace for backwards compatibility.
-// TODO(bugs.webrtc.org/4222596): Remove once all references are updated.
-#ifdef WEBRTC_ALLOW_DEPRECATED_NAMESPACES
-namespace rtc {
-using ::webrtc::BasicNetworkManager;
-using ::webrtc::DefaultLocalAddressProvider;
-using ::webrtc::GetAdapterTypeFromName;
-using ::webrtc::kDefaultNetworkIgnoreMask;
-using ::webrtc::kPublicIPv4Host;
-using ::webrtc::kPublicIPv6Host;
-using ::webrtc::MakeNetworkKey;
-using ::webrtc::MdnsResponderProvider;
-using ::webrtc::Network;
-using ::webrtc::NetworkManager;
-using ::webrtc::NetworkManagerBase;
-using ::webrtc::NetworkMask;
-}  // namespace rtc
-#endif  // WEBRTC_ALLOW_DEPRECATED_NAMESPACES
 
 #endif  // RTC_BASE_NETWORK_H_

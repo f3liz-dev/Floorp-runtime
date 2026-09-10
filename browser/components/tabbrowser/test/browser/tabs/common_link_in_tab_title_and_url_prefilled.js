@@ -88,7 +88,11 @@ async function doTestInSameWindow({
   });
 }
 
-async function doTestWithNewWindow({ link, expectedSetURICalled }) {
+async function doTestWithNewWindow({
+  link,
+  expectedSetURICalled,
+  actionWhileLoading = async p => await p,
+}) {
   await SpecialPowers.pushPrefEnv({
     set: [["browser.link.open_newwindow", 2]],
   });
@@ -116,21 +120,21 @@ async function doTestWithNewWindow({ link, expectedSetURICalled }) {
     sandbox.stub(win.gURLBar, "setURI").callsFake(uri => {
       if (
         !uri &&
-        win.gBrowser.selectedBrowser.browsingContext.nonWebControlledBlankURI
+        win.gBrowser.selectedBrowser.browsingContext.nonWebControlledLoadingURI
       ) {
         isSetURIWhileLoading = true;
       }
     });
-    await BrowserTestUtils.browserLoaded(
-      win.gBrowser.selectedBrowser,
-      false,
-      href || (() => true)
+    await actionWhileLoading(
+      BrowserTestUtils.browserLoaded(win.gBrowser.selectedBrowser, {
+        wantLoad: href || (() => true),
+      })
     );
     sandbox.restore();
 
     Assert.equal(isSetURIWhileLoading, expectedSetURICalled);
     Assert.equal(
-      !!win.gBrowser.selectedBrowser.browsingContext.nonWebControlledBlankURI,
+      !!win.gBrowser.selectedBrowser.browsingContext.nonWebControlledLoadingURI,
       expectedSetURICalled
     );
 
@@ -159,7 +163,7 @@ async function doSessionRestoreTest({
     const onNewTabCreated = waitForNewTabWithLoadRequest();
     const href = await openLink(browser, link, openBy, openAs);
     const target = await onNewTabCreated;
-    await BrowserTestUtils.waitForCondition(
+    await TestUtils.waitForCondition(
       () =>
         target.linkedBrowser.browsingContext
           .mostRecentLoadingSessionHistoryEntry

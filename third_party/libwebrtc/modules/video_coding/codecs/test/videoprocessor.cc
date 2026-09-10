@@ -10,11 +10,10 @@
 
 #include "modules/video_coding/codecs/test/videoprocessor.h"
 
-#include <string.h>
-
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -70,13 +69,13 @@ size_t GetMaxNaluSizeBytes(const EncodedImage& encoded_frame,
   if (config.codec_settings.codecType != kVideoCodecH264)
     return 0;
 
-  std::vector<webrtc::H264::NaluIndex> nalu_indices =
-      webrtc::H264::FindNaluIndices(encoded_frame);
+  std::vector<H264::NaluIndex> nalu_indices =
+      H264::FindNaluIndices(encoded_frame);
 
   RTC_CHECK(!nalu_indices.empty());
 
   size_t max_size = 0;
-  for (const webrtc::H264::NaluIndex& index : nalu_indices)
+  for (const H264::NaluIndex& index : nalu_indices)
     max_size = std::max(max_size, index.payload_size);
 
   return max_size;
@@ -155,14 +154,15 @@ void CalculateFrameQuality(const I420BufferInterface& ref_buffer,
 }  // namespace
 
 VideoProcessor::VideoProcessor(const Environment& env,
-                               webrtc::VideoEncoder* encoder,
+                               VideoEncoder* encoder,
                                VideoDecoderList* decoders,
                                FrameReader* input_frame_reader,
                                const VideoCodecTestFixture::Config& config,
                                VideoCodecTestStatsImpl* stats,
                                IvfFileWriterMap* encoded_frame_writers,
                                FrameWriterList* decoded_frame_writers)
-    : config_(config),
+    : env_(env),
+      config_(config),
       num_simulcast_or_spatial_layers_(
           std::max(config_.NumberOfSimulcastStreams(),
                    config_.NumberOfSpatialLayers())),
@@ -275,7 +275,7 @@ void VideoProcessor::ProcessFrame() {
           .set_video_frame_buffer(buffer)
           .set_rtp_timestamp(static_cast<uint32_t>(timestamp))
           .set_timestamp_ms(static_cast<int64_t>(timestamp / kMsToRtpTimestamp))
-          .set_rotation(webrtc::kVideoRotation_0)
+          .set_rotation(kVideoRotation_0)
           .build();
   // Store input frame as a reference for quality calculations.
   if (config_.decode && !config_.measure_cpu) {
@@ -316,7 +316,7 @@ void VideoProcessor::ProcessFrame() {
 
   // For the highest measurement accuracy of the encode time, the start/stop
   // time recordings should wrap the Encode call as tightly as possible.
-  const int64_t encode_start_ns = TimeNanos();
+  const int64_t encode_start_ns = env_.clock().CurrentTime().ns();
   for (size_t i = 0; i < num_simulcast_or_spatial_layers_; ++i) {
     FrameStatistics* frame_stat = stats_->GetFrame(frame_number, i);
     frame_stat->encode_start_ns = encode_start_ns;
@@ -382,14 +382,13 @@ int32_t VideoProcessor::VideoProcessorDecodeCompleteCallback::Decoded(
   return 0;
 }
 
-void VideoProcessor::FrameEncoded(
-    const webrtc::EncodedImage& encoded_image,
-    const webrtc::CodecSpecificInfo& codec_specific) {
+void VideoProcessor::FrameEncoded(const EncodedImage& encoded_image,
+                                  const CodecSpecificInfo& codec_specific) {
   RTC_DCHECK_RUN_ON(&sequence_checker_);
 
   // For the highest measurement accuracy of the encode time, the start/stop
   // time recordings should wrap the Encode call as tightly as possible.
-  const int64_t encode_stop_ns = TimeNanos();
+  const int64_t encode_stop_ns = env_.clock().CurrentTime().ns();
 
   const VideoCodecType codec_type = codec_specific.codecType;
   if (config_.encoded_frame_checker) {
@@ -442,7 +441,7 @@ void VideoProcessor::FrameEncoded(
       bitrate_allocation.GetTemporalLayerSum(stream_idx, temporal_idx) / 1000;
   frame_stat->target_framerate_fps = target_rate.input_fps;
   frame_stat->length_bytes = encoded_image.size();
-  frame_stat->frame_type = encoded_image._frameType;
+  frame_stat->frame_type = encoded_image.frame_type();
   frame_stat->temporal_idx = temporal_idx;
   frame_stat->max_nalu_size_bytes = GetMaxNaluSizeBytes(encoded_image, config_);
   frame_stat->qp = encoded_image.qp_;
@@ -457,7 +456,7 @@ void VideoProcessor::FrameEncoded(
     frame_stat->non_ref_for_inter_layer_pred = true;
   }
 
-  const webrtc::EncodedImage* encoded_image_for_decode = &encoded_image;
+  const EncodedImage* encoded_image_for_decode = &encoded_image;
   if (config_.decode || !encoded_frame_writers_->empty()) {
     if (num_spatial_layers > 1) {
       encoded_image_for_decode = BuildAndStoreSuperframe(
@@ -511,7 +510,7 @@ void VideoProcessor::FrameEncoded(
   if (!config_.encode_in_real_time) {
     // To get pure encode time for next layers, measure time spent in encode
     // callback and subtract it from encode time of next layers.
-    post_encode_time_ns_ += TimeNanos() - encode_stop_ns;
+    post_encode_time_ns_ += env_.clock().CurrentTime().ns() - encode_stop_ns;
   }
 }
 
@@ -571,7 +570,7 @@ void VideoProcessor::FrameDecoded(const VideoFrame& decoded_frame,
 
   // For the highest measurement accuracy of the decode time, the start/stop
   // time recordings should wrap the Decode call as tightly as possible.
-  const int64_t decode_stop_ns = TimeNanos();
+  const int64_t decode_stop_ns = env_.clock().CurrentTime().ns();
 
   FrameStatistics* frame_stat =
       stats_->GetFrameWithTimestamp(decoded_frame.rtp_timestamp(), spatial_idx);
@@ -655,12 +654,12 @@ void VideoProcessor::DecodeFrame(const EncodedImage& encoded_image,
   FrameStatistics* frame_stat =
       stats_->GetFrameWithTimestamp(encoded_image.RtpTimestamp(), spatial_idx);
 
-  frame_stat->decode_start_ns = TimeNanos();
+  frame_stat->decode_start_ns = env_.clock().CurrentTime().ns();
   frame_stat->decode_return_code =
       decoders_->at(spatial_idx)->Decode(encoded_image, 0);
 }
 
-const webrtc::EncodedImage* VideoProcessor::BuildAndStoreSuperframe(
+const EncodedImage* VideoProcessor::BuildAndStoreSuperframe(
     const EncodedImage& encoded_image,
     const VideoCodecType /* codec */,
     size_t /* frame_number */,
@@ -697,7 +696,7 @@ const webrtc::EncodedImage* VideoProcessor::BuildAndStoreSuperframe(
   EncodedImage copied_image = encoded_image;
   copied_image.SetEncodedData(buffer);
   if (base_image.size())
-    copied_image._frameType = base_image._frameType;
+    copied_image.set_frame_type(base_image.frame_type());
 
   // Replace previous EncodedImage for this spatial layer.
   merged_encoded_frames_.at(spatial_idx) = std::move(copied_image);

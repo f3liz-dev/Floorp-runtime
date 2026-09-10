@@ -1,11 +1,9 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "txPatternParser.h"
 
-#include "mozilla/UniquePtrExtensions.h"
 #include "nsError.h"
 #include "nsGkAtoms.h"
 #include "txExprLexer.h"
@@ -26,7 +24,7 @@ nsresult txPatternParser::createPattern(const nsString& aPattern,
     return rv;
   }
   UniquePtr<txPattern> pattern;
-  rv = createUnionPattern(lexer, aContext, *getter_Transfers(pattern));
+  rv = createUnionPattern(lexer, aContext, *mozilla::getter_Transfers(pattern));
   if (NS_FAILED(rv)) {
     // XXX error report parsing error
     return rv;
@@ -45,7 +43,7 @@ nsresult txPatternParser::createUnionPattern(txExprLexer& aLexer,
                                              txIParseContext* aContext,
                                              txPattern*& aPattern) {
   nsresult rv = NS_OK;
-  txPattern* locPath = 0;
+  txPattern* locPath = nullptr;
 
   rv = createLocPathPattern(aLexer, aContext, locPath);
   if (NS_FAILED(rv)) return rv;
@@ -91,8 +89,8 @@ nsresult txPatternParser::createLocPathPattern(txExprLexer& aLexer,
 
   bool isChild = true;
   bool isAbsolute = false;
-  txPattern* stepPattern = 0;
-  txLocPathPattern* pathPattern = 0;
+  txPattern* stepPattern = nullptr;
+  txLocPathPattern* pathPattern = nullptr;
 
   Token::Type type = aLexer.peek()->mType;
   switch (type) {
@@ -147,7 +145,7 @@ nsresult txPatternParser::createLocPathPattern(txExprLexer& aLexer,
   }
 
   pathPattern->addStep(stepPattern, isChild);
-  stepPattern = 0;  // stepPattern is part of pathPattern now
+  stepPattern = nullptr;  // stepPattern is part of pathPattern now
 
   while (type == Token::PARENT_OP || type == Token::ANCESTOR_OP) {
     isChild = type == Token::PARENT_OP;
@@ -158,7 +156,7 @@ nsresult txPatternParser::createLocPathPattern(txExprLexer& aLexer,
       return rv;
     }
     pathPattern->addStep(stepPattern, isChild);
-    stepPattern = 0;  // stepPattern is part of pathPattern now
+    stepPattern = nullptr;  // stepPattern is part of pathPattern now
     type = aLexer.peek()->mType;
   }
   aPattern = pathPattern;

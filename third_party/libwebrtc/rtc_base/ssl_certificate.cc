@@ -13,24 +13,27 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/algorithm/container.h"
 #include "absl/strings/string_view.h"
-#include "api/array_view.h"
+#include "rtc_base/base64.h"
 #include "rtc_base/buffer.h"
 #include "rtc_base/openssl.h"
+#include "rtc_base/ssl_fingerprint.h"
+
 // IWYU pragma: begin_keep
 #ifdef OPENSSL_IS_BORINGSSL
+#include "rtc_base/boringssl_certificate.h"
 #include "rtc_base/boringssl_identity.h"
 #else
+#include "rtc_base/openssl_certificate.h"
 #include "rtc_base/openssl_identity.h"
 #endif
 // IWYU pragma: end_keep
-#include "rtc_base/base64.h"
-#include "rtc_base/ssl_fingerprint.h"
 
 namespace webrtc {
 
@@ -80,7 +83,7 @@ std::unique_ptr<SSLCertificateStats> SSLCertificate::GetStats() const {
 
   Buffer der_buffer;
   ToDER(&der_buffer);
-  ArrayView<const uint8_t> der_view(der_buffer);
+  std::span<const uint8_t> der_view(der_buffer);
   std::string der_base64 = Base64Encode(der_view);
 
   return std::make_unique<SSLCertificateStats>(std::move(fingerprint),
@@ -138,7 +141,7 @@ std::unique_ptr<SSLCertificate> SSLCertificate::FromPEMString(
 #ifdef OPENSSL_IS_BORINGSSL
   return BoringSSLCertificate::FromPEMString(pem_string);
 #else
-  return webrtc::OpenSSLCertificate::FromPEMString(pem_string);
+  return OpenSSLCertificate::FromPEMString(pem_string);
 #endif
 }
 

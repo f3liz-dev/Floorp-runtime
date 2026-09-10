@@ -9,10 +9,15 @@
 COMPILE_FLAGS["OS_INCLUDES"] = []
 AllowCompilerWarnings()
 
-DEFINES["ABSL_ALLOCATOR_NOTHROW"] = "1"
-DEFINES["_LIBCPP_HARDENING_MODE"] = "_LIBCPP_HARDENING_MODE_NONE"
+CXXFLAGS += [
+    "-Wno-comma",
+    "-Wno-unused-template",
+    "-Wno-tautological-type-limit-compare"
+]
 
-FINAL_LIBRARY = "xul"
+DEFINES["ABSL_ALLOCATOR_NOTHROW"] = "1"
+
+FINAL_LIBRARY = "abseil"
 
 
 LOCAL_INCLUDES += [
@@ -49,6 +54,12 @@ if CONFIG["OS_TARGET"] == "Android":
         "log"
     ]
 
+if CONFIG["OS_TARGET"] == "Darwin":
+
+    OS_LIBS += [
+        "-framework Foundation"
+    ]
+
 if CONFIG["OS_TARGET"] == "Linux":
 
     DEFINES["USE_AURA"] = "1"
@@ -56,7 +67,6 @@ if CONFIG["OS_TARGET"] == "Linux":
     DEFINES["USE_OZONE"] = "1"
     DEFINES["USE_UDEV"] = True
     DEFINES["_FILE_OFFSET_BITS"] = "64"
-    DEFINES["_GLIBCXX_ASSERTIONS"] = "1"
     DEFINES["_LARGEFILE64_SOURCE"] = True
     DEFINES["_LARGEFILE_SOURCE"] = True
 

@@ -4,6 +4,7 @@
 
 //! Specified types for CSS values related to effects.
 
+use crate::derives::*;
 use crate::parser::{Parse, ParserContext};
 use crate::values::computed::effects::BoxShadow as ComputedBoxShadow;
 use crate::values::computed::effects::SimpleShadow as ComputedSimpleShadow;
@@ -14,22 +15,24 @@ use crate::values::computed::CSSPixelLength as ComputedCSSPixelLength;
 use crate::values::computed::Filter as ComputedFilter;
 use crate::values::computed::NonNegativeLength as ComputedNonNegativeLength;
 use crate::values::computed::NonNegativeNumber as ComputedNonNegativeNumber;
+use crate::values::computed::Number as ComputedNumber;
+use crate::values::computed::NumberOrPercentage as ComputedNumberOrPercentage;
 use crate::values::computed::ZeroToOneNumber as ComputedZeroToOneNumber;
 use crate::values::computed::{Context, ToComputedValue};
 use crate::values::generics::effects::BoxShadow as GenericBoxShadow;
 use crate::values::generics::effects::Filter as GenericFilter;
 use crate::values::generics::effects::SimpleShadow as GenericSimpleShadow;
-use crate::values::generics::NonNegative;
+use crate::values::generics::{NonNegative, ZeroToOne};
 use crate::values::specified::color::Color;
 use crate::values::specified::length::{Length, NonNegativeLength};
 #[cfg(feature = "gecko")]
 use crate::values::specified::url::SpecifiedUrl;
-use crate::values::specified::{Angle, Number, NumberOrPercentage};
+use crate::values::specified::{Angle, NonNegativeNumberOrPercentage, Number, NumberOrPercentage};
 #[cfg(feature = "servo")]
 use crate::values::Impossible;
 use crate::Zero;
-use cssparser::{BasicParseErrorKind, Parser, Token};
-use style_traits::{ParseError, StyleParseErrorKind, ValueParseErrorKind};
+use cssparser::{match_ignore_ascii_case, Parser};
+use style_traits::{ParseError, StyleParseErrorKind};
 
 /// A specified value for a single shadow of the `box-shadow` property.
 pub type BoxShadow =
@@ -37,99 +40,77 @@ pub type BoxShadow =
 
 /// A specified value for a single `filter`.
 #[cfg(feature = "gecko")]
-pub type SpecifiedFilter = GenericFilter<
-    Angle,
-    NonNegativeFactor,
-    ZeroToOneFactor,
-    NonNegativeLength,
-    SimpleShadow,
-    SpecifiedUrl,
->;
+pub type SpecifiedFilter = GenericFilter<Angle, FilterFactor, Length, SimpleShadow, SpecifiedUrl>;
 
 /// A specified value for a single `filter`.
 #[cfg(feature = "servo")]
-pub type SpecifiedFilter = GenericFilter<
-    Angle,
-    NonNegativeFactor,
-    ZeroToOneFactor,
-    NonNegativeLength,
-    SimpleShadow,
-    Impossible,
->;
+pub type SpecifiedFilter = GenericFilter<Angle, FilterFactor, Length, SimpleShadow, Impossible>;
 
 pub use self::SpecifiedFilter as Filter;
 
-/// A value for the `<factor>` parts in `Filter`.
+/// The factor for a filter function.
 #[derive(Clone, Debug, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToCss, ToShmem)]
-pub struct NonNegativeFactor(NumberOrPercentage);
+pub struct FilterFactor(NumberOrPercentage);
 
-/// A value for the `<factor>` parts in `Filter` which clamps to one.
-#[derive(Clone, Debug, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToCss, ToShmem)]
-pub struct ZeroToOneFactor(NumberOrPercentage);
+impl FilterFactor {
+    fn to_computed_value_without_context(&self) -> Result<ComputedNumberOrPercentage, ()> {
+        self.0.to_computed_value_without_context()
+    }
+}
+
+impl ToComputedValue for FilterFactor {
+    type ComputedValue = ComputedNumber;
+    fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
+        self.0.to_computed_value(context).value()
+    }
+    fn from_computed_value(computed: &Self::ComputedValue) -> Self {
+        Self(NumberOrPercentage::Number(Number::new(*computed)))
+    }
+}
 
 /// Clamp the value to 1 if the value is over 100%.
 #[inline]
 fn clamp_to_one(number: NumberOrPercentage) -> NumberOrPercentage {
     match number {
-        NumberOrPercentage::Percentage(percent) => {
-            NumberOrPercentage::Percentage(percent.clamp_to_hundred())
+        NumberOrPercentage::Percentage(mut percent) => {
+            percent.clamp_to_hundred();
+            NumberOrPercentage::Percentage(percent)
         },
-        NumberOrPercentage::Number(number) => NumberOrPercentage::Number(number.clamp_to_one()),
+        NumberOrPercentage::Number(mut number) => {
+            number.clamp_to_one();
+            NumberOrPercentage::Number(number)
+        },
     }
 }
 
-macro_rules! factor_impl_common {
-    ($ty:ty, $computed_ty:ty) => {
-        impl $ty {
-            #[inline]
-            fn one() -> Self {
-                Self(NumberOrPercentage::Number(Number::new(1.)))
-            }
-        }
-
-        impl ToComputedValue for $ty {
-            type ComputedValue = $computed_ty;
-
-            #[inline]
-            fn to_computed_value(&self, context: &Context) -> Self::ComputedValue {
-                use crate::values::computed::NumberOrPercentage;
-                match self.0.to_computed_value(context) {
-                    NumberOrPercentage::Number(n) => n.into(),
-                    NumberOrPercentage::Percentage(p) => p.0.into(),
-                }
-            }
-
-            #[inline]
-            fn from_computed_value(computed: &Self::ComputedValue) -> Self {
-                Self(NumberOrPercentage::Number(
-                    ToComputedValue::from_computed_value(&computed.0),
-                ))
-            }
-        }
-    };
+type NonNegativeFactor = NonNegative<FilterFactor>;
+impl NonNegativeFactor {
+    fn one() -> Self {
+        Self(FilterFactor(NumberOrPercentage::Number(Number::new(1.))))
+    }
 }
-factor_impl_common!(NonNegativeFactor, ComputedNonNegativeNumber);
-factor_impl_common!(ZeroToOneFactor, ComputedZeroToOneNumber);
 
 impl Parse for NonNegativeFactor {
-    #[inline]
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        NumberOrPercentage::parse_non_negative(context, input).map(Self)
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
+        Ok(Self(FilterFactor(
+            NonNegativeNumberOrPercentage::parse(context, input)?.0,
+        )))
+    }
+}
+
+type ZeroToOneFactor = ZeroToOne<FilterFactor>;
+impl ZeroToOneFactor {
+    fn one() -> Self {
+        Self(FilterFactor(NumberOrPercentage::Number(Number::new(1.))))
     }
 }
 
 impl Parse for ZeroToOneFactor {
     #[inline]
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        NumberOrPercentage::parse_non_negative(context, input)
-            .map(clamp_to_one)
-            .map(Self)
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
+        Ok(Self(FilterFactor(clamp_to_one(
+            NumberOrPercentage::parse_non_negative(context, input)?,
+        ))))
     }
 }
 
@@ -137,10 +118,7 @@ impl Parse for ZeroToOneFactor {
 pub type SimpleShadow = GenericSimpleShadow<Option<Color>, Length, Option<NonNegativeLength>>;
 
 impl Parse for BoxShadow {
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let mut lengths = None;
         let mut color = None;
         let mut inset = false;
@@ -183,8 +161,7 @@ impl Parse for BoxShadow {
             break;
         }
 
-        let lengths =
-            lengths.ok_or(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))?;
+        let lengths = lengths.ok_or(ParseError::custom(StyleParseErrorKind::UnspecifiedError))?;
         Ok(BoxShadow {
             base: SimpleShadow {
                 color: color,
@@ -234,41 +211,49 @@ impl Filter {
             Filter::Blur(ref length) => Ok(ComputedFilter::Blur(ComputedNonNegativeLength::new(
                 length.0.to_computed_pixel_length_without_context()?,
             ))),
-            Filter::Brightness(ref factor) => Ok(ComputedFilter::Brightness(
-                ComputedNonNegativeNumber::from(factor.0.to_number().get()),
-            )),
-            Filter::Contrast(ref factor) => Ok(ComputedFilter::Contrast(
-                ComputedNonNegativeNumber::from(factor.0.to_number().get()),
-            )),
-            Filter::Grayscale(ref factor) => Ok(ComputedFilter::Grayscale(
-                ComputedZeroToOneNumber::from(factor.0.to_number().get()),
-            )),
+            Filter::Brightness(ref factor) => {
+                Ok(ComputedFilter::Brightness(ComputedNonNegativeNumber::from(
+                    factor.0.to_computed_value_without_context()?.value(),
+                )))
+            },
+            Filter::Contrast(ref factor) => {
+                Ok(ComputedFilter::Contrast(ComputedNonNegativeNumber::from(
+                    factor.0.to_computed_value_without_context()?.value(),
+                )))
+            },
+            Filter::Grayscale(ref factor) => {
+                Ok(ComputedFilter::Grayscale(ComputedZeroToOneNumber::from(
+                    factor.0.to_computed_value_without_context()?.value(),
+                )))
+            },
             Filter::HueRotate(ref angle) => Ok(ComputedFilter::HueRotate(
-                ComputedAngle::from_degrees(angle.degrees()),
+                ComputedAngle::from_degrees(angle.degrees().ok_or(())?),
             )),
-            Filter::Invert(ref factor) => Ok(ComputedFilter::Invert(
-                ComputedZeroToOneNumber::from(factor.0.to_number().get()),
-            )),
-            Filter::Opacity(ref factor) => Ok(ComputedFilter::Opacity(
-                ComputedZeroToOneNumber::from(factor.0.to_number().get()),
-            )),
-            Filter::Saturate(ref factor) => Ok(ComputedFilter::Saturate(
-                ComputedNonNegativeNumber::from(factor.0.to_number().get()),
-            )),
+            Filter::Invert(ref factor) => {
+                Ok(ComputedFilter::Invert(ComputedZeroToOneNumber::from(
+                    factor.0.to_computed_value_without_context()?.value(),
+                )))
+            },
+            Filter::Opacity(ref factor) => {
+                Ok(ComputedFilter::Opacity(ComputedZeroToOneNumber::from(
+                    factor.0.to_computed_value_without_context()?.value(),
+                )))
+            },
+            Filter::Saturate(ref factor) => {
+                Ok(ComputedFilter::Saturate(ComputedNonNegativeNumber::from(
+                    factor.0.to_computed_value_without_context()?.value(),
+                )))
+            },
             Filter::Sepia(ref factor) => Ok(ComputedFilter::Sepia(ComputedZeroToOneNumber::from(
-                factor.0.to_number().get(),
+                factor.0.to_computed_value_without_context()?.value(),
             ))),
             Filter::DropShadow(ref shadow) => {
                 if cfg!(feature = "gecko") {
-                    let color = match shadow
+                    let color = shadow
                         .color
                         .as_ref()
                         .unwrap_or(&Color::currentcolor())
-                        .to_computed_color(None)
-                    {
-                        Some(c) => c,
-                        None => return Err(()),
-                    };
+                        .to_computed_color(None)?;
 
                     let horizontal = ComputedCSSPixelLength::new(
                         shadow
@@ -307,23 +292,15 @@ impl Filter {
 
 impl Parse for Filter {
     #[inline]
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         #[cfg(feature = "gecko")]
         {
             if let Ok(url) = input.try_parse(|i| SpecifiedUrl::parse(context, i)) {
                 return Ok(GenericFilter::Url(url));
             }
         }
-        let location = input.current_source_location();
         let function = match input.expect_function() {
             Ok(f) => f.clone(),
-            Err(cssparser::BasicParseError {
-                kind: BasicParseErrorKind::UnexpectedToken(t),
-                location,
-            }) => return Err(location.new_custom_error(ValueParseErrorKind::InvalidFilter(t))),
             Err(e) => return Err(e.into()),
         };
         input.parse_nested_block(|i| {
@@ -385,9 +362,7 @@ impl Parse for Filter {
                     ))
                 },
                 "drop-shadow" => Ok(GenericFilter::DropShadow(Parse::parse(context, i)?)),
-                _ => Err(location.new_custom_error(
-                    ValueParseErrorKind::InvalidFilter(Token::Function(function.clone()))
-                )),
+                _ => Err(ParseError::custom(StyleParseErrorKind::UnspecifiedError)),
             }
         })
     }
@@ -395,10 +370,7 @@ impl Parse for Filter {
 
 impl Parse for SimpleShadow {
     #[inline]
-    fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let color = input.try_parse(|i| Color::parse(context, i)).ok();
         let horizontal = Length::parse(context, input)?;
         let vertical = Length::parse(context, input)?;

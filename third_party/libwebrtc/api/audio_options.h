@@ -40,7 +40,7 @@ struct RTC_EXPORT AudioOptions {
   // (until Apple fixes the bug) for a device with non-functioning AEC. May
   // improve performance on that particular device, but will cause unpredictable
   // behavior in all other cases. See http://bugs.webrtc.org/8682.
-  std::optional<bool> ios_force_software_aec_HACK;
+  [[deprecated]] std::optional<bool> ios_force_software_aec_HACK;
 #endif
   // Audio processing to adjust the sensitivity of the local mic dynamically.
   std::optional<bool> auto_gain_control;
@@ -70,12 +70,5 @@ struct RTC_EXPORT AudioOptions {
 
 }  //  namespace webrtc
 
-// Re-export symbols from the webrtc namespace for backwards compatibility.
-// TODO(bugs.webrtc.org/4222596): Remove once all references are updated.
-#ifdef WEBRTC_ALLOW_DEPRECATED_NAMESPACES
-namespace cricket {
-using ::webrtc::AudioOptions;
-}  // namespace cricket
-#endif  // WEBRTC_ALLOW_DEPRECATED_NAMESPACES
 
 #endif  // API_AUDIO_OPTIONS_H_

@@ -127,7 +127,13 @@ var gChannel;
 var gDebugTest = false;
 
 /* import-globals-from sharedUpdateXML.js */
-Services.scriptloader.loadSubScript(DATA_URI_SPEC + "sharedUpdateXML.js", this);
+Services.scriptloader.loadSubScriptWithOptions(
+  DATA_URI_SPEC + "sharedUpdateXML.js",
+  {
+    target: this,
+    allowUnsafeURL: true,
+  }
+);
 
 const PERMS_FILE = FileUtils.PERMS_FILE;
 const PERMS_DIRECTORY = FileUtils.PERMS_DIRECTORY;
@@ -152,14 +158,14 @@ XPCOMUtils.defineLazyServiceGetter(
   this,
   "gUpdateManager",
   "@mozilla.org/updates/update-manager;1",
-  "nsIUpdateManager"
+  Ci.nsIUpdateManager
 );
 
 XPCOMUtils.defineLazyServiceGetter(
   this,
   "gUpdateChecker",
   "@mozilla.org/updates/update-checker;1",
-  "nsIUpdateChecker"
+  Ci.nsIUpdateChecker
 );
 
 ChromeUtils.defineLazyGetter(this, "gDefaultPrefBranch", function test_gDPB() {
@@ -361,6 +367,7 @@ function writeFile(aFile, aText) {
 
 /**
  * Attempts to remove a file. Does not fail if the file does not exist.
+ *
  * @param  file
  *         The `nsIFile` to remove.
  */

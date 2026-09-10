@@ -14,8 +14,11 @@ ChromeUtils.defineESModuleGetters(lazy, {
   Capabilities: "chrome://remote/content/shared/webdriver/Capabilities.sys.mjs",
   Certificates: "chrome://remote/content/shared/webdriver/Certificates.sys.mjs",
   error: "chrome://remote/content/shared/webdriver/Errors.sys.mjs",
+  FilePickerHandler:
+    "chrome://remote/content/shared/webdriver/FilePickerHandler.sys.mjs",
   generateUUID: "chrome://remote/content/shared/UUID.sys.mjs",
   Log: "chrome://remote/content/shared/Log.sys.mjs",
+  NavigableManager: "chrome://remote/content/shared/NavigableManager.sys.mjs",
   registerProcessDataActor:
     "chrome://remote/content/shared/webdriver/process-actors/WebDriverProcessDataParent.sys.mjs",
   RootMessageHandler:
@@ -29,6 +32,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
     "chrome://remote/content/webdriver-bidi/WebDriverBiDiConnection.sys.mjs",
   WebSocketHandshake:
     "chrome://remote/content/server/WebSocketHandshake.sys.mjs",
+  windowManager: "chrome://remote/content/shared/WindowManager.sys.mjs",
 });
 
 ChromeUtils.defineLazyGetter(lazy, "logger", () => lazy.Log.get());
@@ -37,11 +41,14 @@ XPCOMUtils.defineLazyServiceGetter(
   lazy,
   "aomStartup",
   "@mozilla.org/addons/addon-manager-startup;1",
-  "amIAddonManagerStartup"
+  Ci.amIAddonManagerStartup
 );
 
 // Global singleton that holds active WebDriver sessions
 const webDriverSessions = new Map();
+
+// Notification emitted when a session is created or destroyed.
+const NOTIFY_WEBDRIVER_SESSION_CHANGED = "webdriver-session-changed";
 
 /**
  * @typedef {Set} SessionConfigurationFlags
@@ -68,6 +75,7 @@ export class WebDriverSession {
   #http;
   #id;
   #messageHandler;
+  #navigableSeenNodes;
   #path;
 
   static SESSION_FLAG_BIDI = "bidi";
@@ -275,21 +283,38 @@ export class WebDriverSession {
 
     // Maps a Navigable (browsing context or content browser for top-level
     // browsing contexts) to a Set of nodeId's.
-    this.navigableSeenNodes = new WeakMap();
+    this.#navigableSeenNodes = new WeakMap();
 
     lazy.registerProcessDataActor();
 
+    // Start the tracking of browsing contexts to create Navigable ids.
+    lazy.NavigableManager.startTracking();
+    lazy.windowManager.startTracking();
+
+    if (this.#shouldDismissFileDialog()) {
+      lazy.FilePickerHandler.dismissFilePickers(this);
+    }
+
     webDriverSessions.set(this.#id, this);
+
+    Services.obs.notifyObservers(null, NOTIFY_WEBDRIVER_SESSION_CHANGED);
   }
 
   destroy() {
     webDriverSessions.delete(this.#id);
 
+    // Stop the tracking of browsing contexts when no WebDriver
+    // session exists anymore.
+    lazy.NavigableManager.stopTracking();
+    lazy.windowManager.stopTracking();
+
     lazy.unregisterProcessDataActor();
 
-    this.navigableSeenNodes = null;
+    this.#navigableSeenNodes = null;
 
-    lazy.Certificates.enableSecurityChecks();
+    if (this.acceptInsecureCerts) {
+      lazy.Certificates.enableSecurityChecks();
+    }
 
     // Close all open connections which unregister themselves.
     this.#connections.forEach(connection => connection.close());
@@ -310,11 +335,19 @@ export class WebDriverSession {
         this._onMessageHandlerProtocolEvent
       );
       this.#messageHandler.destroy();
+
+      // allowFilePickers(this) is safe to call. If there was no call to
+      // dismissFilePickers(this), it will be a no-op.
+      // Only needed if BiDi was enabled (and therefore a messageHandler
+      // instance was created).
+      lazy.FilePickerHandler.allowFilePickers(this);
     }
 
     for (const id of this.#chromeProtocolHandles.keys()) {
       this.unregisterChromeHandler(id);
     }
+
+    Services.obs.notifyObservers(null, NOTIFY_WEBDRIVER_SESSION_CHANGED);
   }
 
   get a11yChecks() {
@@ -331,6 +364,9 @@ export class WebDriverSession {
 
   set bidi(value) {
     this.#bidi = value;
+    if (this.#shouldDismissFileDialog()) {
+      lazy.FilePickerHandler.dismissFilePickers(this);
+    }
   }
 
   get capabilities() {
@@ -358,6 +394,10 @@ export class WebDriverSession {
     }
 
     return this.#messageHandler;
+  }
+
+  get navigableSeenNodes() {
+    return this.#navigableSeenNodes;
   }
 
   get pageLoadStrategy() {
@@ -391,6 +431,28 @@ export class WebDriverSession {
   get webSocketUrl() {
     return this.#capabilities.get("webSocketUrl");
   }
+
+  /**
+   * Implements the last steps of https://w3c.github.io/webdriver-bidi/#webdriver-bidi-file-dialog-opened
+   *
+   * Compared to the spec, this is only invoked to setup the FilePickerHandler and
+   * not on each file dialog opened event. This allows to keep the FilePickerHandler
+   * simple and simply cancel the picker.
+   */
+  #shouldDismissFileDialog = () => {
+    // Only relevant for active BiDi sessions.
+    if (!this.bidi) {
+      return false;
+    }
+
+    // Unlike other prompt handlers, the default behavior is to allow the file
+    // dialog to be opened. Only dismiss if the capability was explicitly set.
+    if (this.userPromptHandler.activePromptHandlers === null) {
+      return false;
+    }
+
+    return this.userPromptHandler.getPromptHandler("file").handler !== "ignore";
+  };
 
   async execute(module, command, params) {
     // XXX: At the moment, commands do not describe consistently their destination,
@@ -538,7 +600,7 @@ export function getSeenNodesForBrowsingContext(sessionId, browsingContext) {
   }
 
   const navigable =
-    lazy.TabManager.getNavigableForBrowsingContext(browsingContext);
+    lazy.NavigableManager.getNavigableForBrowsingContext(browsingContext);
   const session = getWebDriverSessionById(sessionId);
 
   if (!session.navigableSeenNodes.has(navigable)) {
@@ -559,4 +621,15 @@ export function getSeenNodesForBrowsingContext(sessionId, browsingContext) {
  */
 export function getWebDriverSessionById(sessionId) {
   return webDriverSessions.get(sessionId);
+}
+
+/**
+ * Check if at least one WebDriver session is currently active, which means that
+ * a remote application is connected to this browser instance.
+ *
+ * @returns {boolean}
+ *     True if a WebDriver session is active, false otherwise.
+ */
+export function hasActiveWebDriverSession() {
+  return webDriverSessions.size > 0;
 }

@@ -1,16 +1,16 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef nsURLHelper_h__
-#define nsURLHelper_h__
+#ifndef nsURLHelper_h_
+#define nsURLHelper_h_
 
+#include <mozilla/CompactPair.h>
+#include <mozilla/Maybe.h>
+
+#include "nsASCIIMask.h"
 #include "nsString.h"
 #include "nsTArray.h"
-#include "nsASCIIMask.h"
-#include <mozilla/Maybe.h>
-#include <mozilla/CompactPair.h>
 
 class nsIFile;
 class nsIURLParser;
@@ -21,9 +21,6 @@ class nsIURLParser;
 
 /* shutdown frees URL parser */
 void net_ShutdownURLHelper();
-#ifdef XP_MACOSX
-void net_ShutdownURLHelperOSX();
-#endif
 
 /* access URL parsers */
 already_AddRefed<nsIURLParser> net_GetAuthURLParser();
@@ -358,4 +355,4 @@ class URLParams final {
 };
 }  // namespace mozilla
 
-#endif  // !nsURLHelper_h__
+#endif  // !nsURLHelper_h_

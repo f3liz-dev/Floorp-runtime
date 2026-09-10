@@ -11,16 +11,21 @@
 #ifndef AUDIO_CHANNEL_RECEIVE_FRAME_TRANSFORMER_DELEGATE_H_
 #define AUDIO_CHANNEL_RECEIVE_FRAME_TRANSFORMER_DELEGATE_H_
 
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <span>
 #include <string>
 
+#include "absl/base/nullability.h"
 #include "api/frame_transformer_interface.h"
 #include "api/rtp_headers.h"
+#include "api/scoped_refptr.h"
 #include "api/sequence_checker.h"
 #include "api/task_queue/task_queue_base.h"
 #include "api/units/timestamp.h"
 #include "rtc_base/system/no_unique_address.h"
-#include "rtc_base/thread.h"
+#include "rtc_base/thread_annotations.h"
 
 namespace webrtc {
 
@@ -30,13 +35,13 @@ namespace webrtc {
 class ChannelReceiveFrameTransformerDelegate : public TransformedFrameCallback {
  public:
   using ReceiveFrameCallback =
-      std::function<void(webrtc::ArrayView<const uint8_t> packet,
+      std::function<void(std::span<const uint8_t> packet,
                          const RTPHeader& header,
                          Timestamp receive_time)>;
   ChannelReceiveFrameTransformerDelegate(
       ReceiveFrameCallback receive_frame_callback,
       scoped_refptr<FrameTransformerInterface> frame_transformer,
-      TaskQueueBase* channel_receive_thread);
+      TaskQueueBase* absl_nonnull channel_receive_thread);
 
   // Registers `this` as callback for `frame_transformer_`, to get the
   // transformed frames.
@@ -50,7 +55,7 @@ class ChannelReceiveFrameTransformerDelegate : public TransformedFrameCallback {
 
   // Delegates the call to FrameTransformerInterface::Transform, to transform
   // the frame asynchronously.
-  void Transform(ArrayView<const uint8_t> packet,
+  void Transform(std::span<const uint8_t> packet,
                  const RTPHeader& header,
                  uint32_t ssrc,
                  const std::string& codec_mime_type,

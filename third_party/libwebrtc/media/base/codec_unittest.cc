@@ -65,7 +65,7 @@ TEST(CodecTest, TestCodecOperators) {
   EXPECT_TRUE(c0 != c1);
 
   TestCodec c5;
-  TestCodec c6(Codec::kIdNotSet, "", 0);
+  TestCodec c6(Codec::kIdNotSet, "", kDefaultAudioClockRateHz);
   EXPECT_TRUE(c5 == c6);
 }
 
@@ -83,7 +83,7 @@ TEST(CodecTest, TestAudioCodecOperators) {
   EXPECT_NE(c0, c4);
   EXPECT_NE(c0, c5);
 
-  Codec c8 = CreateAudioCodec(0, "", 0, 0);
+  Codec c8 = CreateAudioCodec(0, "", kDefaultAudioClockRateHz, 0);
   Codec c9 = c0;
   EXPECT_EQ(c9, c0);
 
@@ -234,29 +234,29 @@ TEST(CodecTest, TestValidateCodecFormat) {
 
   // Reject codecs with min bitrate > max bitrate.
   Codec incorrect_bitrates = codec;
-  incorrect_bitrates.params[kCodecParamMinBitrate] = "100";
-  incorrect_bitrates.params[kCodecParamMaxBitrate] = "80";
+  incorrect_bitrates.SetParam(kCodecParamMinBitrate, "100");
+  incorrect_bitrates.SetParam(kCodecParamMaxBitrate, "80");
   EXPECT_FALSE(incorrect_bitrates.ValidateCodecFormat());
 
   // Accept min bitrate == max bitrate.
   Codec equal_bitrates = codec;
-  equal_bitrates.params[kCodecParamMinBitrate] = "100";
-  equal_bitrates.params[kCodecParamMaxBitrate] = "100";
+  equal_bitrates.SetParam(kCodecParamMinBitrate, "100");
+  equal_bitrates.SetParam(kCodecParamMaxBitrate, "100");
   EXPECT_TRUE(equal_bitrates.ValidateCodecFormat());
 
   // Accept min bitrate < max bitrate.
   Codec different_bitrates = codec;
-  different_bitrates.params[kCodecParamMinBitrate] = "99";
-  different_bitrates.params[kCodecParamMaxBitrate] = "100";
+  different_bitrates.SetParam(kCodecParamMinBitrate, "99");
+  different_bitrates.SetParam(kCodecParamMaxBitrate, "100");
   EXPECT_TRUE(different_bitrates.ValidateCodecFormat());
 }
 
 TEST(CodecTest, TestToCodecParameters) {
   Codec v = CreateVideoCodec(96, "V");
   v.SetParam("p1", "v1");
-  webrtc::RtpCodecParameters codec_params_1 = v.ToCodecParameters();
+  RtpCodecParameters codec_params_1 = v.ToCodecParameters();
   EXPECT_EQ(96, codec_params_1.payload_type);
-  EXPECT_EQ(webrtc::MediaType::VIDEO, codec_params_1.kind);
+  EXPECT_EQ(MediaType::VIDEO, codec_params_1.kind);
   EXPECT_EQ("V", codec_params_1.name);
   EXPECT_EQ(kVideoCodecClockrate, codec_params_1.clock_rate);
   EXPECT_EQ(std::nullopt, codec_params_1.num_channels);
@@ -266,9 +266,9 @@ TEST(CodecTest, TestToCodecParameters) {
 
   Codec a = CreateAudioCodec(97, "A", 44100, 2);
   a.SetParam("p1", "a1");
-  webrtc::RtpCodecParameters codec_params_2 = a.ToCodecParameters();
+  RtpCodecParameters codec_params_2 = a.ToCodecParameters();
   EXPECT_EQ(97, codec_params_2.payload_type);
-  EXPECT_EQ(webrtc::MediaType::AUDIO, codec_params_2.kind);
+  EXPECT_EQ(MediaType::AUDIO, codec_params_2.kind);
   EXPECT_EQ("A", codec_params_2.name);
   EXPECT_EQ(44100, codec_params_2.clock_rate);
   EXPECT_EQ(2, codec_params_2.num_channels);
@@ -278,22 +278,21 @@ TEST(CodecTest, TestToCodecParameters) {
 }
 
 TEST(CodecTest, H264CostrainedBaselineIsAddedIfH264IsSupported) {
-  const std::vector<webrtc::SdpVideoFormat> kExplicitlySupportedFormats = {
-      webrtc::CreateH264Format(webrtc::H264Profile::kProfileBaseline,
-                               webrtc::H264Level::kLevel3_1, "1"),
-      webrtc::CreateH264Format(webrtc::H264Profile::kProfileBaseline,
-                               webrtc::H264Level::kLevel3_1, "0")};
+  const std::vector<SdpVideoFormat> kExplicitlySupportedFormats = {
+      CreateH264Format(H264Profile::kProfileBaseline, H264Level::kLevel3_1,
+                       "1"),
+      CreateH264Format(H264Profile::kProfileBaseline, H264Level::kLevel3_1,
+                       "0")};
 
-  std::vector<webrtc::SdpVideoFormat> supported_formats =
-      kExplicitlySupportedFormats;
+  std::vector<SdpVideoFormat> supported_formats = kExplicitlySupportedFormats;
   AddH264ConstrainedBaselineProfileToSupportedFormats(&supported_formats);
 
-  const webrtc::SdpVideoFormat kH264ConstrainedBasedlinePacketization1 =
-      webrtc::CreateH264Format(webrtc::H264Profile::kProfileConstrainedBaseline,
-                               webrtc::H264Level::kLevel3_1, "1");
-  const webrtc::SdpVideoFormat kH264ConstrainedBasedlinePacketization0 =
-      webrtc::CreateH264Format(webrtc::H264Profile::kProfileConstrainedBaseline,
-                               webrtc::H264Level::kLevel3_1, "0");
+  const SdpVideoFormat kH264ConstrainedBasedlinePacketization1 =
+      CreateH264Format(H264Profile::kProfileConstrainedBaseline,
+                       H264Level::kLevel3_1, "1");
+  const SdpVideoFormat kH264ConstrainedBasedlinePacketization0 =
+      CreateH264Format(H264Profile::kProfileConstrainedBaseline,
+                       H264Level::kLevel3_1, "0");
 
   EXPECT_EQ(supported_formats[0], kExplicitlySupportedFormats[0]);
   EXPECT_EQ(supported_formats[1], kExplicitlySupportedFormats[1]);
@@ -302,13 +301,11 @@ TEST(CodecTest, H264CostrainedBaselineIsAddedIfH264IsSupported) {
 }
 
 TEST(CodecTest, H264CostrainedBaselineIsNotAddedIfH264IsUnsupported) {
-  const std::vector<webrtc::SdpVideoFormat> kExplicitlySupportedFormats = {
+  const std::vector<SdpVideoFormat> kExplicitlySupportedFormats = {
       {kVp9CodecName,
-       {{webrtc::kVP9FmtpProfileId,
-         VP9ProfileToString(webrtc::VP9Profile::kProfile0)}}}};
+       {{kVP9FmtpProfileId, VP9ProfileToString(VP9Profile::kProfile0)}}}};
 
-  std::vector<webrtc::SdpVideoFormat> supported_formats =
-      kExplicitlySupportedFormats;
+  std::vector<SdpVideoFormat> supported_formats = kExplicitlySupportedFormats;
   AddH264ConstrainedBaselineProfileToSupportedFormats(&supported_formats);
 
   EXPECT_EQ(supported_formats[0], kExplicitlySupportedFormats[0]);
@@ -316,18 +313,17 @@ TEST(CodecTest, H264CostrainedBaselineIsNotAddedIfH264IsUnsupported) {
 }
 
 TEST(CodecTest, H264CostrainedBaselineNotAddedIfAlreadySpecified) {
-  const std::vector<webrtc::SdpVideoFormat> kExplicitlySupportedFormats = {
-      webrtc::CreateH264Format(webrtc::H264Profile::kProfileBaseline,
-                               webrtc::H264Level::kLevel3_1, "1"),
-      webrtc::CreateH264Format(webrtc::H264Profile::kProfileBaseline,
-                               webrtc::H264Level::kLevel3_1, "0"),
-      webrtc::CreateH264Format(webrtc::H264Profile::kProfileConstrainedBaseline,
-                               webrtc::H264Level::kLevel3_1, "1"),
-      webrtc::CreateH264Format(webrtc::H264Profile::kProfileConstrainedBaseline,
-                               webrtc::H264Level::kLevel3_1, "0")};
+  const std::vector<SdpVideoFormat> kExplicitlySupportedFormats = {
+      CreateH264Format(H264Profile::kProfileBaseline, H264Level::kLevel3_1,
+                       "1"),
+      CreateH264Format(H264Profile::kProfileBaseline, H264Level::kLevel3_1,
+                       "0"),
+      CreateH264Format(H264Profile::kProfileConstrainedBaseline,
+                       H264Level::kLevel3_1, "1"),
+      CreateH264Format(H264Profile::kProfileConstrainedBaseline,
+                       H264Level::kLevel3_1, "0")};
 
-  std::vector<webrtc::SdpVideoFormat> supported_formats =
-      kExplicitlySupportedFormats;
+  std::vector<SdpVideoFormat> supported_formats = kExplicitlySupportedFormats;
   AddH264ConstrainedBaselineProfileToSupportedFormats(&supported_formats);
 
   EXPECT_EQ(supported_formats[0], kExplicitlySupportedFormats[0]);
@@ -335,6 +331,34 @@ TEST(CodecTest, H264CostrainedBaselineNotAddedIfAlreadySpecified) {
   EXPECT_EQ(supported_formats[2], kExplicitlySupportedFormats[2]);
   EXPECT_EQ(supported_formats[3], kExplicitlySupportedFormats[3]);
   EXPECT_EQ(supported_formats.size(), kExplicitlySupportedFormats.size());
+}
+
+TEST(CodecTest, CreateH264ConstrainedBaselineProfileReturnsCbpForBaseline) {
+  SdpVideoFormat baseline_format = CreateH264Format(
+      H264Profile::kProfileBaseline, H264Level::kLevel3_1, "1");
+  SdpVideoFormat expected_cbp_format = CreateH264Format(
+      H264Profile::kProfileConstrainedBaseline, H264Level::kLevel3_1, "1");
+
+  std::optional<SdpVideoFormat> cbp_format =
+      CreateH264ConstrainedBaselineProfile(baseline_format);
+
+  ASSERT_TRUE(cbp_format.has_value());
+  EXPECT_EQ(*cbp_format, expected_cbp_format);
+}
+
+TEST(CodecTest, CreateH264ConstrainedBaselineProfileReturnsNulloptForCbp) {
+  SdpVideoFormat cbp_format = CreateH264Format(
+      H264Profile::kProfileConstrainedBaseline, H264Level::kLevel3_1, "1");
+
+  EXPECT_FALSE(CreateH264ConstrainedBaselineProfile(cbp_format).has_value());
+}
+
+TEST(CodecTest, CreateH264ConstrainedBaselineProfileReturnsNulloptForVp9) {
+  SdpVideoFormat vp9_format = {
+      kVp9CodecName,
+      {{kVP9FmtpProfileId, VP9ProfileToString(VP9Profile::kProfile0)}}};
+
+  EXPECT_FALSE(CreateH264ConstrainedBaselineProfile(vp9_format).has_value());
 }
 
 TEST(CodecTest, AbslStringify) {

@@ -1,6 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -10,12 +8,9 @@
 #define js_Debug_h
 
 #include "mozilla/Assertions.h"
-#include "mozilla/Attributes.h"
 #include "mozilla/BaseProfilerUtils.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Vector.h"
-
-#include <utility>
 
 #include "jstypes.h"
 
@@ -31,6 +26,8 @@ class Debugger;
 /* Defined in vm/Debugger.cpp. */
 extern JS_PUBLIC_API bool JS_DefineDebuggerObject(JSContext* cx,
                                                   JS::HandleObject obj);
+
+extern JS_PUBLIC_API const char* JS_GetLastOOMStackTrace(JSContext* cx);
 
 // If the JS execution tracer is running, this will generate a
 // ENTRY_KIND_LABEL_ENTER entry with the specified label.
@@ -178,7 +175,11 @@ struct ValueSummary {
   // This value is written to the start of the value summaries buffer (see
   // TracedJSContext::valueBuffer), and should be bumped every time the format
   // is changed.
-  static const uint32_t VERSION = 1;
+  //
+  // Keep in mind to update
+  // js/src/jit-test/tests/debug/ExecutionTracer-traced-values.js
+  // VALUE_SUMMARY_VERSION value.
+  static const uint32_t VERSION = 2;
 
   // If the type is an int and flags != Flags::NUMBER_IS_OUT_OF_LINE_MAGIC,
   // the value is MIN_INLINE_INT + flags.
@@ -253,6 +254,14 @@ struct ValueSummary {
 //      externalSize field with the amount written.
 //      NOTE: it is the embedders' responsibility to manage the versioning of
 //      their format.
+//    Kind::Error ->
+//      shapeSummaryId:     uint32_t (summary will only contain class name)
+//      name:               SmallString
+//      message:            SmallString
+//      stack:              SmallString
+//      filename:           SmallString
+//      lineNumber:         uint32_t
+//      columnNumber        uint32_t
 //
 // WrappedPrimitiveObjects and GenericObjects make use of a PropertySummary
 // type, defined here:
@@ -268,7 +277,7 @@ struct ValueSummary {
 struct ObjectSummary {
   // This is a special value for ValueSummary::typeAndFlags. It should be noted
   // that this only works as long as 0xf is not a valid JS::ValueType.
-  static const uint8_t GETTER_SETTER_MAGIC = 0xf0;
+  static const uint8_t GETTER_SETTER_MAGIC = 0x0f;
 
   enum class Kind : uint8_t {
     NotImplemented,
@@ -279,6 +288,7 @@ struct ObjectSummary {
     GenericObject,
     ProxyObject,
     External,
+    Error,
   };
 
   Kind kind;
@@ -357,10 +367,15 @@ struct ExecutionTrace {
         //      values here, but this is not implemented yet.)
         //
         // If this value is non-negative, this is an index into the
-        // TracedJSContext::valueBuffer. At the specified index, if
-        // kind == EventKind::FunctionEnter, there will be a uint32_t
-        // containing the argument count of the function call (argc), followed
-        // by min(argc, MAX_ARGUMENTS_TO_RECORD) ValueSummary entries.
+        // TracedJSContext::valueBuffer.
+        // At the specified index, if kind == EventKind::FunctionEnter, the
+        // call's arguments will be listed in the following format:
+        //      argc:     uint32_t
+        //      values:   ValueSummary[min(argc, MAX_ARGUMENTS_TO_RECORD)]
+        //
+        // Additionally, immediately preceding argc will be a uint16_t header
+        // containing the size of all of the serialized arguments plus
+        // the size of argc and the size of the uint16_t header itself.
         int32_t values;
       } functionEvent;
 

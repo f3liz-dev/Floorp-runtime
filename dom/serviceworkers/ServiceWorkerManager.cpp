@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -28,19 +26,16 @@
 #include "mozilla/AppShutdown.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/ClearOnShutdown.h"
+#include "mozilla/Components.h"
 #include "mozilla/ContentBlockingAllowList.h"
-#include "mozilla/EnumSet.h"
 #include "mozilla/ErrorNames.h"
 #include "mozilla/LoadContext.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/PermissionManager.h"
 #include "mozilla/Result.h"
-#include "mozilla/ResultExtensions.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_extensions.h"
-#include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/StoragePrincipalHelper.h"
-#include "mozilla/Unused.h"
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/ClientHandle.h"
 #include "mozilla/dom/ClientManager.h"
@@ -71,6 +66,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
 #include "nsDebug.h"
+#include "nsIClearDataService.h"
 #include "nsICookieJarSettings.h"
 #include "nsIDUtils.h"
 #include "nsIHttpChannel.h"
@@ -185,6 +181,7 @@ nsresult PopulateRegistrationData(
   }
 
   aData.scope() = aRegistration->Scope();
+  aData.type() = aRegistration->Type();
 
   // TODO: When bug 1426401 is implemented we will need to handle more
   //       than just the active worker here.
@@ -207,6 +204,13 @@ nsresult PopulateRegistrationData(
   aData.lastUpdateTime() = aRegistration->GetLastUpdateTime();
 
   aData.navigationPreloadState() = aRegistration->GetNavigationPreloadState();
+
+  aData.numberOfAttemptedActivations() =
+      aRegistration->GetNumberOfAttemptedActivations();
+
+  aData.isBroken() = aRegistration->IsBroken();
+
+  aData.cacheAPIId() = aRegistration->GetCacheAPIId();
 
   MOZ_ASSERT(ServiceWorkerRegistrationDataIsValid(aData));
 
@@ -239,10 +243,41 @@ constexpr char kPrivateBrowsingExited[] = "last-pb-context-exited";
 constexpr auto kPrivateBrowsingOriginPattern =
     u"{ \"privateBrowsingId\": 1 }"_ns;
 
+// Ref-counted barrier that calls nsIPBMCleanupCallback::Complete() when all
+// references are released (i.e. when the caller and all async unregister jobs
+// are done). Passed as the nsIServiceWorkerUnregisterCallback to each
+// ForceUnregister call; each Unregister job holds a ref and calls back when
+// finished, releasing its ref. The destructor fires Complete() once the last
+// ref (from the caller or the last job) is released.
+class PBMUnregisterBarrier final : public nsIServiceWorkerUnregisterCallback {
+ public:
+  NS_DECL_ISUPPORTS
+
+  explicit PBMUnregisterBarrier(nsIPBMCleanupCallback* aCb) : mCallback(aCb) {}
+
+  NS_IMETHOD UnregisterSucceeded(bool) override { return NS_OK; }
+  NS_IMETHOD UnregisterFailed() override {
+    mStatus = NS_ERROR_FAILURE;
+    return NS_OK;
+  }
+
+ private:
+  ~PBMUnregisterBarrier() {
+    if (mCallback) {
+      mCallback->Complete(mStatus);
+    }
+  }
+
+  nsCOMPtr<nsIPBMCleanupCallback> mCallback;
+  nsresult mStatus = NS_OK;
+};
+
+NS_IMPL_ISUPPORTS(PBMUnregisterBarrier, nsIServiceWorkerUnregisterCallback)
+
 already_AddRefed<nsIAsyncShutdownClient> GetAsyncShutdownBarrier() {
   AssertIsOnMainThread();
 
-  nsCOMPtr<nsIAsyncShutdownService> svc = services::GetAsyncShutdownService();
+  nsCOMPtr<nsIAsyncShutdownService> svc = components::AsyncShutdown::Service();
   MOZ_ASSERT(svc);
 
   nsCOMPtr<nsIAsyncShutdownClient> barrier;
@@ -705,7 +740,7 @@ void ServiceWorkerManager::MaybeFinishShutdown() {
 
   RefPtr<TeardownRunnable> runnable = new TeardownRunnable(mActor);
   nsresult rv = NS_DispatchToMainThread(runnable);
-  Unused << NS_WARN_IF(NS_FAILED(rv));
+  (void)NS_WARN_IF(NS_FAILED(rv));
   mActor = nullptr;
   mETPPermissionObserver = nullptr;
 
@@ -811,14 +846,16 @@ ServiceWorkerManager::RegisterForTest(nsIPrincipal* aPrincipal,
   auto scope = NS_ConvertUTF16toUTF8(aScopeURL);
   auto scriptURL = NS_ConvertUTF16toUTF8(aScriptURL);
 
-  auto regPromise = Register(clientInfo.ref(), scope, scriptURL,
-                             dom::ServiceWorkerUpdateViaCache::Imports);
+  auto regPromise =
+      Register(clientInfo.ref(), scope, WorkerType::Classic, scriptURL,
+               dom::ServiceWorkerUpdateViaCache::Imports);
+
   const RefPtr<ServiceWorkerManager> self(this);
   const nsCOMPtr<nsIPrincipal> principal(aPrincipal);
   regPromise->Then(
       GetMainThreadSerialEventTarget(), __func__,
-      [self, outer, principal,
-       scope](const ServiceWorkerRegistrationDescriptor& regDesc) {
+      [self, outer, principal, scope = std::move(scope)](
+          const ServiceWorkerRegistrationDescriptor& regDesc) {
         RefPtr<ServiceWorkerRegistrationInfo> registration =
             self->GetRegistration(principal, NS_ConvertUTF16toUTF8(scope));
         if (registration) {
@@ -840,7 +877,8 @@ ServiceWorkerManager::RegisterForTest(nsIPrincipal* aPrincipal,
 
 RefPtr<ServiceWorkerRegistrationPromise> ServiceWorkerManager::Register(
     const ClientInfo& aClientInfo, const nsACString& aScopeURL,
-    const nsACString& aScriptURL, ServiceWorkerUpdateViaCache aUpdateViaCache) {
+    const WorkerType& aType, const nsACString& aScriptURL,
+    ServiceWorkerUpdateViaCache aUpdateViaCache) {
   AUTO_PROFILER_MARKER_UNTYPED("SWM Register", DOM, {});
 
   nsCOMPtr<nsIURI> scopeURI;
@@ -892,9 +930,17 @@ RefPtr<ServiceWorkerRegistrationPromise> ServiceWorkerManager::Register(
 
   auto lifetime = DetermineLifetimeForClient(aClientInfo);
 
+  uint16_t ipAddressSpace = 0;
+  const auto& policyContainerArgs = aClientInfo.GetPolicyContainerArgs();
+  if (policyContainerArgs.isSome()) {
+    ipAddressSpace =
+        static_cast<uint16_t>(policyContainerArgs->ipAddressSpace());
+  }
+
   RefPtr<ServiceWorkerRegisterJob> job = new ServiceWorkerRegisterJob(
-      principal, aScopeURL, aScriptURL,
-      static_cast<ServiceWorkerUpdateViaCache>(aUpdateViaCache), lifetime);
+      principal, aScopeURL, aType, aScriptURL,
+      static_cast<ServiceWorkerUpdateViaCache>(aUpdateViaCache), lifetime,
+      ipAddressSpace);
 
   job->AppendResultCallback(cb);
   queue->ScheduleJob(job);
@@ -1095,8 +1141,8 @@ ServiceWorkerManager::SendPushEvent(const nsACString& aOriginAttributes,
 nsresult ServiceWorkerManager::SendCookieChangeEvent(
     const OriginAttributes& aOriginAttributes, const nsACString& aScope,
     const net::CookieStruct& aCookie, bool aCookieDeleted) {
-  nsCOMPtr<nsIPrincipal> principal;
-  MOZ_TRY_VAR(principal, ScopeToPrincipal(aScope, aOriginAttributes));
+  nsCOMPtr<nsIPrincipal> principal =
+      MOZ_TRY(ScopeToPrincipal(aScope, aOriginAttributes));
 
   RefPtr<ServiceWorkerRegistrationInfo> registration =
       GetRegistration(principal, aScope);
@@ -1123,8 +1169,7 @@ nsresult ServiceWorkerManager::SendPushEvent(
     return NS_ERROR_INVALID_ARG;
   }
 
-  nsCOMPtr<nsIPrincipal> principal;
-  MOZ_TRY_VAR(principal, ScopeToPrincipal(aScope, attrs));
+  nsCOMPtr<nsIPrincipal> principal = MOZ_TRY(ScopeToPrincipal(aScope, attrs));
 
   // The registration handling a push notification must have an exact scope
   // match. This will try to find an exact match, unlike how fetch may find the
@@ -1561,7 +1606,7 @@ void ServiceWorkerManager::LocalizeAndReportToAllClients(
 
   nsresult rv;
   nsAutoString message;
-  rv = nsContentUtils::FormatLocalizedString(nsContentUtils::eDOM_PROPERTIES,
+  rv = nsContentUtils::FormatLocalizedString(PropertiesFile::DOM_PROPERTIES,
                                              aStringKey, aParamArray, message);
   if (NS_SUCCEEDED(rv)) {
     swm->ReportToAllClients(aScope, message, aFilename, aLine, aLineNumber,
@@ -1637,11 +1682,11 @@ void ServiceWorkerManager::LoadRegistration(
   RefPtr<ServiceWorkerRegistrationInfo> registration =
       GetRegistration(principal, aRegistration.scope());
   if (!registration) {
-    registration =
-        CreateNewRegistration(aRegistration.scope(), principal,
-                              static_cast<ServiceWorkerUpdateViaCache>(
-                                  aRegistration.updateViaCache()),
-                              aRegistration.navigationPreloadState());
+    registration = CreateNewRegistration(
+        aRegistration.scope(), aRegistration.type(), principal,
+        static_cast<ServiceWorkerUpdateViaCache>(
+            aRegistration.updateViaCache()),
+        aRegistration.navigationPreloadState());
   } else {
     // If active worker script matches our expectations for a "current worker",
     // then we are done. Since scripts with the same URL might have different
@@ -1666,9 +1711,9 @@ void ServiceWorkerManager::LoadRegistration(
   const nsCString& currentWorkerURL = aRegistration.currentWorkerURL();
   if (!currentWorkerURL.IsEmpty()) {
     registration->SetActive(new ServiceWorkerInfo(
-        registration->Principal(), registration->Scope(), registration->Id(),
-        registration->Version(), currentWorkerURL, aRegistration.cacheName(),
-        importsLoadFlags));
+        registration->Principal(), registration->Scope(), registration->Type(),
+        registration->Id(), registration->Version(), currentWorkerURL,
+        aRegistration.cacheName(), importsLoadFlags));
     registration->GetActive()->SetHandlesFetch(
         aRegistration.currentWorkerHandlesFetch());
     registration->GetActive()->SetInstalledTime(
@@ -1826,7 +1871,7 @@ nsresult ServiceWorkerManager::PrincipalInfoToScopeKey(
     return NS_ERROR_FAILURE;
   }
 
-  auto content = aPrincipalInfo.get_ContentPrincipalInfo();
+  const auto& content = aPrincipalInfo.get_ContentPrincipalInfo();
 
   nsAutoCString suffix;
   content.attrs().CreateSuffix(suffix);
@@ -2202,11 +2247,9 @@ void ServiceWorkerManager::DispatchFetchEvent(nsIInterceptedChannel* aChannel,
 
     // non-subresource request means the URI contains the principal
     OriginAttributes attrs = loadInfo->GetOriginAttributes();
-    if (StaticPrefs::privacy_partition_serviceWorkers()) {
-      StoragePrincipalHelper::GetOriginAttributes(
-          internalChannel, attrs,
-          StoragePrincipalHelper::eForeignPartitionedPrincipal);
-    }
+    StoragePrincipalHelper::GetOriginAttributes(
+        internalChannel, attrs,
+        StoragePrincipalHelper::eForeignPartitionedPrincipal);
 
     nsCOMPtr<nsIPrincipal> principal =
         BasePrincipal::CreateContentPrincipal(uri, attrs);
@@ -2316,20 +2359,16 @@ void ServiceWorkerManager::DispatchFetchEvent(nsIInterceptedChannel* aChannel,
 
   MOZ_DIAGNOSTIC_ASSERT(serviceWorker);
 
+  // FIXME: This doesn't need to be a runnable anymore. Previously, this code
+  // was part of the child-intercept code path for content process workers, and
+  // used a runnable here to wait for the parent process to send permissions.
+  //
+  // Nowadays this is only ever called in the parent process, so the potential
+  // dispatch is unnecessary.
   RefPtr<ContinueDispatchFetchEventRunnable> continueRunnable =
       new ContinueDispatchFetchEventRunnable(serviceWorker->WorkerPrivate(),
                                              aChannel, loadGroup);
-
-  // When this service worker was registered, we also sent down the permissions
-  // for the runnable. They should have arrived by now, but we still need to
-  // wait for them if they have not.
-  RefPtr<PermissionManager> permMgr = PermissionManager::GetInstance();
-  if (permMgr) {
-    permMgr->WhenPermissionsAvailable(serviceWorker->Principal(),
-                                      continueRunnable);
-  } else {
-    continueRunnable->HandleError();
-  }
+  continueRunnable->Run();
 }
 
 ServiceWorkerLifetimeExtension ServiceWorkerManager::DetermineLifetimeForClient(
@@ -2394,10 +2433,6 @@ bool ServiceWorkerManager::IsAvailable(nsIPrincipal* aPrincipal, nsIURI* aURI,
     nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
 
     if (storageAccess <= StorageAccess::eDeny) {
-      if (!StaticPrefs::privacy_partition_serviceWorkers()) {
-        return false;
-      }
-
       nsCOMPtr<nsICookieJarSettings> cookieJarSettings;
       loadInfo->GetCookieJarSettings(getter_AddRefs(cookieJarSettings));
 
@@ -2932,15 +2967,16 @@ ServiceWorkerManager::RegisterForAddonPrincipal(nsIPrincipal* aPrincipal,
     return NS_OK;
   }
 
-  auto regPromise =
-      Register(clientInfo.ref(), scope, NS_ConvertUTF16toUTF8(scriptURL),
-               dom::ServiceWorkerUpdateViaCache::Imports);
+  auto regPromise = Register(clientInfo.ref(), scope, WorkerType::Classic,
+                             NS_ConvertUTF16toUTF8(scriptURL),
+                             dom::ServiceWorkerUpdateViaCache::Imports);
+
   const RefPtr<ServiceWorkerManager> self(this);
   const nsCOMPtr<nsIPrincipal> principal(aPrincipal);
   regPromise->Then(
       GetMainThreadSerialEventTarget(), __func__,
-      [self, outer, principal,
-       scope](const ServiceWorkerRegistrationDescriptor& regDesc) {
+      [self, outer, principal, scope = std::move(scope)](
+          const ServiceWorkerRegistrationDescriptor& regDesc) {
         RefPtr<ServiceWorkerRegistrationInfo> registration =
             self->GetRegistration(principal, scope);
         if (registration) {
@@ -3027,8 +3063,7 @@ ServiceWorkerManager::WakeForExtensionAPIEvent(
     return NS_OK;
   }
 
-  nsCOMPtr<nsIPrincipal> principal;
-  MOZ_TRY_VAR(principal, ScopeToPrincipal(scopeURI, {}));
+  nsCOMPtr<nsIPrincipal> principal = MOZ_TRY(ScopeToPrincipal(scopeURI, {}));
 
   auto* addonPolicy = BasePrincipal::Cast(principal)->AddonPolicy();
   if (NS_WARN_IF(!addonPolicy)) {
@@ -3108,7 +3143,7 @@ ServiceWorkerManager::GetRegistration(const nsACString& aScopeKey,
 
 already_AddRefed<ServiceWorkerRegistrationInfo>
 ServiceWorkerManager::CreateNewRegistration(
-    const nsCString& aScope, nsIPrincipal* aPrincipal,
+    const nsCString& aScope, const WorkerType& aType, nsIPrincipal* aPrincipal,
     ServiceWorkerUpdateViaCache aUpdateViaCache,
     IPCNavigationPreloadState aNavigationPreloadState) {
 #ifdef DEBUG
@@ -3123,7 +3158,8 @@ ServiceWorkerManager::CreateNewRegistration(
 #endif
 
   RefPtr<ServiceWorkerRegistrationInfo> registration =
-      new ServiceWorkerRegistrationInfo(aScope, aPrincipal, aUpdateViaCache,
+      new ServiceWorkerRegistrationInfo(aScope, aType, aPrincipal,
+                                        aUpdateViaCache,
                                         std::move(aNavigationPreloadState));
 
   // From now on ownership of registration is with
@@ -3180,7 +3216,7 @@ ServiceWorkerManager::GetAllRegistrations(nsIArray** aResult) {
 
 NS_IMETHODIMP
 ServiceWorkerManager::RemoveRegistrationsByOriginAttributes(
-    const nsAString& aPattern) {
+    const nsAString& aPattern, nsIServiceWorkerUnregisterCallback* aCallback) {
   MOZ_ASSERT(XRE_IsParentProcess());
   MOZ_ASSERT(NS_IsMainThread());
 
@@ -3197,12 +3233,9 @@ ServiceWorkerManager::RemoveRegistrationsByOriginAttributes(
       MOZ_ASSERT(reg);
       MOZ_ASSERT(reg->Principal());
 
-      bool matches = pattern.Matches(reg->Principal()->OriginAttributesRef());
-      if (!matches) {
-        continue;
+      if (pattern.Matches(reg->Principal()->OriginAttributesRef())) {
+        ForceUnregister(data.get(), reg, aCallback);
       }
-
-      ForceUnregister(data.get(), reg);
     }
   }
 
@@ -3211,7 +3244,8 @@ ServiceWorkerManager::RemoveRegistrationsByOriginAttributes(
 
 void ServiceWorkerManager::ForceUnregister(
     RegistrationDataPerPrincipal* aRegistrationData,
-    ServiceWorkerRegistrationInfo* aRegistration) {
+    ServiceWorkerRegistrationInfo* aRegistration,
+    nsIServiceWorkerUnregisterCallback* aCallback) {
   MOZ_ASSERT(aRegistrationData);
   MOZ_ASSERT(aRegistration);
 
@@ -3229,7 +3263,7 @@ void ServiceWorkerManager::ForceUnregister(
   }
 
   // Since Unregister is async, it is ok to call it in an enumeration.
-  Unregister(aRegistration->Principal(), nullptr,
+  Unregister(aRegistration->Principal(), aCallback,
              NS_ConvertUTF8toUTF16(aRegistration->Scope()));
 }
 
@@ -3269,7 +3303,21 @@ ServiceWorkerManager::Observe(nsISupports* aSubject, const char* aTopic,
   }
 
   if (strcmp(aTopic, kPrivateBrowsingExited) == 0) {
-    RemoveRegistrationsByOriginAttributes(kPrivateBrowsingOriginPattern);
+    nsCOMPtr<nsIPBMCleanupCollector> collector = do_QueryInterface(aSubject);
+    RefPtr<PBMUnregisterBarrier> barrier;
+    if (collector) {
+      nsCOMPtr<nsIPBMCleanupCallback> cb;
+      collector->AddPendingCleanup(getter_AddRefs(cb));
+      if (cb) {
+        barrier = new PBMUnregisterBarrier(cb);
+      }
+    }
+
+    // barrier ref is held here and by each Unregister job; Complete() fires
+    // in the destructor when the last ref (this scope or last job) drops.
+    RemoveRegistrationsByOriginAttributes(kPrivateBrowsingOriginPattern,
+                                          barrier);
+
     return NS_OK;
   }
 
@@ -3481,8 +3529,7 @@ void ServiceWorkerManager::MaybeSendUnregister(nsIPrincipal* aPrincipal,
     return;
   }
 
-  Unused << mActor->SendUnregister(principalInfo,
-                                   NS_ConvertUTF8toUTF16(aScope));
+  (void)mActor->SendUnregister(principalInfo, NS_ConvertUTF8toUTF16(aScope));
 }
 
 void ServiceWorkerManager::AddOrphanedRegistration(

@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -162,7 +161,8 @@ MATCHER_P(
 VideoChunk GenerateChunk(int32_t aWidth, int32_t aHeight, TimeStamp aTime) {
   YUVBufferGenerator generator;
   generator.Init(gfx::IntSize(aWidth, aHeight));
-  VideoFrame f(generator.GenerateI420Image(), gfx::IntSize(aWidth, aHeight));
+  mozilla::VideoFrame f(generator.GenerateI420Image(),
+                        gfx::IntSize(aWidth, aHeight));
   VideoChunk c;
   c.mFrame.TakeFrom(&f);
   c.mTimeStamp = aTime;
@@ -460,7 +460,7 @@ TEST_F(VideoFrameConverterTest, ClearFutureFramesOnJumpingBack) {
   TimeStamp future3 = step1 + TimeDuration::FromMilliseconds(10);
   mConverter->QueueVideoChunk(GenerateChunk(800, 600, future2), false);
   VideoChunk nullChunk;
-  nullChunk.mFrame = VideoFrame(nullptr, gfx::IntSize(800, 600));
+  nullChunk.mFrame = mozilla::VideoFrame(nullptr, gfx::IntSize(800, 600));
   nullChunk.mTimeStamp = step1;
   mConverter->QueueVideoChunk(nullChunk, false);
 
@@ -511,7 +511,7 @@ TEST_F(VideoFrameConverterTest, NoConversionsWhileInactive) {
   auto frames = WaitFor(framesPromise).unwrap();
   ASSERT_EQ(frames.size(), 1U);
   const auto& [frame, conversionTime] = frames[0];
-  Unused << conversionTime;
+  (void)conversionTime;
   EXPECT_EQ(frame.width(), 800);
   EXPECT_EQ(frame.height(), 600);
   EXPECT_GT(frame.timestamp_us(), dom::RTCStatsTimestamp::FromMozTime(
@@ -573,7 +573,7 @@ TEST_F(VideoFrameConverterTest, IgnoreOldFrames) {
   framesPromise = TakeNConvertedFrames(2);
 
   mConverter->SetIdleFrameDuplicationInterval(duplicationInterval);
-  Unused << WaitFor(InvokeAsync(mConverter->mTarget, __func__, [&] {
+  (void)WaitFor(InvokeAsync(mConverter->mTarget, __func__, [&] {
     // Time is now ~t1. This processes an extra frame similar to what
     // `SetActive(false); SetActive(true);` (using t=now()) would do.
     mConverter->mLastFrameQueuedForProcessing.mTime = now + d2;

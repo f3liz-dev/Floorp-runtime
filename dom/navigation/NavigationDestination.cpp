@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -24,11 +22,9 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(NavigationDestination)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
-NavigationDestination::NavigationDestination(nsIGlobalObject* aGlobal,
-                                             nsIURI* aURI,
-                                             NavigationHistoryEntry* aEntry,
-                                             nsStructuredCloneContainer* aState,
-                                             bool aIsSameDocument)
+NavigationDestination::NavigationDestination(
+    nsIGlobalObject* aGlobal, nsIURI* aURI, NavigationHistoryEntry* aEntry,
+    nsIStructuredCloneContainer* aState, bool aIsSameDocument)
     : mGlobal(aGlobal),
       mURL(aURI),
       mEntry(aEntry),
@@ -92,9 +88,14 @@ void NavigationDestination::GetState(JSContext* aCx,
     // the best we can do is just re-throw the NS_ERROR_DOM_DATA_CLONE_ERR. When
     // nsStructuredCloneContainer::DeserializeToJsval throws better exceptions
     // this should too.
+    // See also: NavigationHistoryEntry::GetState
     aRv.Throw(rv);
     return;
   }
+}
+
+void NavigationDestination::SetState(nsIStructuredCloneContainer* aState) {
+  mState = aState;
 }
 
 JSObject* NavigationDestination::WrapObject(JSContext* aCx,
@@ -108,6 +109,8 @@ NavigationHistoryEntry* NavigationDestination::GetEntry() const {
   return mEntry;
 }
 
-nsIURI* NavigationDestination::GetURI() const { return mURL; }
+nsIURI* NavigationDestination::GetURL() const { return mURL; }
+
+void NavigationDestination::SetURL(nsIURI* aURI) { mURL = aURI; }
 
 }  // namespace mozilla::dom

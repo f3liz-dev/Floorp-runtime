@@ -6,16 +6,15 @@ package org.mozilla.fenix.settings.sitepermissions
 
 import android.content.Context
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.os.bundleOf
-import androidx.fragment.app.FragmentActivity
 import androidx.preference.Preference
 import io.mockk.MockKAnnotations
+import io.mockk.Runs
 import io.mockk.every
-import io.mockk.impl.annotations.MockK
+import io.mockk.impl.annotations.RelaxedMockK
+import io.mockk.just
 import io.mockk.spyk
 import io.mockk.verify
 import mozilla.components.concept.engine.permission.SitePermissions
-import mozilla.components.support.test.robolectric.createAddedTestFragment
 import mozilla.components.support.test.robolectric.createAddedTestFragmentWithActivity
 import mozilla.components.support.test.robolectric.testContext
 import org.junit.Assert.assertEquals
@@ -24,22 +23,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.mozilla.fenix.HomeActivity
 import org.mozilla.fenix.R
-import org.mozilla.fenix.ext.settings
 import org.mozilla.fenix.settings.PhoneFeature
 import org.mozilla.fenix.settings.requirePreference
 import org.mozilla.fenix.utils.Settings
-import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 
 @RunWith(RobolectricTestRunner::class)
 class SitePermissionsDetailsExceptionsFragmentTest {
-    @MockK(relaxed = true)
-    private lateinit var settings: Settings
+    @RelaxedMockK private lateinit var settings: Settings
 
-    @MockK(relaxed = true)
-    private lateinit var permissions: SitePermissions
+    @RelaxedMockK private lateinit var permissions: SitePermissions
 
     private lateinit var fragment: SitePermissionsDetailsExceptionsFragment
     private lateinit var context: Context
@@ -52,28 +46,27 @@ class SitePermissionsDetailsExceptionsFragmentTest {
             createAddedTestFragmentWithActivity<SitePermissionsDetailsExceptionsFragment, AppCompatActivity>(
                 fragmentFactory = {
                     SitePermissionsDetailsExceptionsFragment().apply {
-                        arguments = SitePermissionsDetailsExceptionsFragmentArgs(
-                            sitePermissions = permissions,
-                        ).toBundle()
+                        arguments =
+                            SitePermissionsDetailsExceptionsFragmentArgs(sitePermissions = permissions).toBundle()
                     }
-                },
+                }
             )
         fragment = spyk(realFragment)
 
         fragment.sitePermissions = permissions
 
         every { permissions.origin } returns "mozilla.org"
-        every { settings.isLnaBlockingEnabled } returns false
+        every { settings.isLnaFeatureEnabled } returns false
         every { fragment.provideContext() } returns context
         every { fragment.provideSettings() } returns settings
     }
 
     @Test
     fun `WHEN bindCategoryPhoneFeatures is called THEN all categories must be initialized`() {
-        every { fragment.initPhoneFeature(any()) } returns Unit
-        every { fragment.initPhoneFeature(any(), any()) } returns Unit
-        every { fragment.initAutoplayFeature() } returns Unit
-        every { fragment.bindClearPermissionsButton() } returns Unit
+        every { fragment.initPhoneFeature(any()) } just Runs
+        every { fragment.initPhoneFeature(any(), any()) } just Runs
+        every { fragment.initAutoplayFeature() } just Runs
+        every { fragment.bindClearPermissionsButton() } just Runs
 
         fragment.bindCategoryPhoneFeatures()
 
@@ -91,41 +84,33 @@ class SitePermissionsDetailsExceptionsFragmentTest {
 
     @Test
     fun `WHEN bindCategoryPhoneFeatures is called AND LNA is not enabled THEN LNA preference is hidden`() {
-        every { settings.isLnaBlockingEnabled } returns false
+        every { settings.isLnaFeatureEnabled } returns false
 
         fragment.bindCategoryPhoneFeatures()
 
         assertFalse(
             "Expected Local Network Access preference to be invisible",
-            fragment.requirePreference<Preference>(
-                PhoneFeature.LOCAL_NETWORK_ACCESS.getPreferenceId(),
-            ).isVisible,
+            fragment.requirePreference<Preference>(PhoneFeature.LOCAL_NETWORK_ACCESS.getPreferenceId()).isVisible,
         )
         assertFalse(
             "Expected Local Device Access preference to be invisible",
-            fragment.requirePreference<Preference>(
-                PhoneFeature.LOCAL_DEVICE_ACCESS.getPreferenceId(),
-            ).isVisible,
+            fragment.requirePreference<Preference>(PhoneFeature.LOCAL_DEVICE_ACCESS.getPreferenceId()).isVisible,
         )
     }
 
     @Test
     fun `WHEN bindCategoryPhoneFeatures is called AND LNA is enabled THEN LNA preference is shown`() {
-        every { settings.isLnaBlockingEnabled } returns true
+        every { settings.isLnaFeatureEnabled } returns true
 
         fragment.bindCategoryPhoneFeatures()
 
         assertTrue(
             "Expected Local Network Access preference to be visible",
-            fragment.requirePreference<Preference>(
-                PhoneFeature.LOCAL_NETWORK_ACCESS.getPreferenceId(),
-            ).isVisible,
+            fragment.requirePreference<Preference>(PhoneFeature.LOCAL_NETWORK_ACCESS.getPreferenceId()).isVisible,
         )
         assertTrue(
             "Expected Local Device Access preference to be visible",
-            fragment.requirePreference<Preference>(
-                PhoneFeature.LOCAL_DEVICE_ACCESS.getPreferenceId(),
-            ).isVisible,
+            fragment.requirePreference<Preference>(PhoneFeature.LOCAL_DEVICE_ACCESS.getPreferenceId()).isVisible,
         )
     }
 
@@ -137,7 +122,7 @@ class SitePermissionsDetailsExceptionsFragmentTest {
 
         every { context.getString(R.string.phone_feature_blocked_by_android) } returns label
         every { fragment.getPreference((any())) } returns preference
-        every { fragment.navigateToPhoneFeature((any())) } returns Unit
+        every { fragment.navigateToPhoneFeature((any())) } just Runs
 
         fragment.initPhoneFeature(feature)
 
@@ -157,7 +142,7 @@ class SitePermissionsDetailsExceptionsFragmentTest {
 
         every { fragment.getAutoplayLabel() } returns label
         every { fragment.getPreference((any())) } returns preference
-        every { fragment.navigateToPhoneFeature((any())) } returns Unit
+        every { fragment.navigateToPhoneFeature((any())) } just Runs
 
         fragment.initAutoplayFeature()
 

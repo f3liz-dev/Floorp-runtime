@@ -6,6 +6,7 @@ package mozilla.components.compose.browser.toolbar.ui
 
 import android.view.SoundEffectConstants
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Row
@@ -16,7 +17,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
@@ -32,11 +35,10 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.google.accompanist.drawablepainter.rememberDrawablePainter
-import mozilla.components.compose.base.Divider
 import mozilla.components.compose.base.modifier.thenConditional
 import mozilla.components.compose.base.theme.AcornTheme
 import mozilla.components.compose.browser.toolbar.store.BrowserToolbarInteraction
@@ -54,11 +56,12 @@ import mozilla.components.compose.browser.toolbar.store.BrowserToolbarMenuItem.B
 import mozilla.components.compose.browser.toolbar.store.BrowserToolbarMenuItem.BrowserToolbarMenuDivider
 
 @Stable
-internal fun BrowserToolbarInteraction.toMenuItems(): List<BrowserToolbarMenuItem> = when (this) {
-    is BrowserToolbarMenu -> items()
-    is CombinedEventAndMenu -> menu.items()
-    else -> emptyList()
-}
+internal fun BrowserToolbarInteraction.toMenuItems(): List<BrowserToolbarMenuItem> =
+    when (this) {
+        is BrowserToolbarMenu -> items()
+        is CombinedEventAndMenu -> menu.items()
+        else -> emptyList()
+    }
 
 @Composable
 @Suppress("LongMethod")
@@ -74,27 +77,31 @@ internal fun menuItemComposable(
 
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .thenConditional(
-                            Modifier.clickable(
-                                role = Role.Button,
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = ripple(
-                                    bounded = true,
-                                    color = AcornTheme.colors.ripple,
-                                ),
-                                onClick = {
-                                    view.playSoundEffect(SoundEffectConstants.CLICK)
-                                    source.onClick?.let { onInteraction(it) }
-                                },
-                            ),
-                        ) { source.onClick != null }
-                        .semantics(mergeDescendants = true) {
-                            this.contentDescription = contentDescription
-                        }
-                        .fillMaxWidth()
-                        .minimumInteractiveComponentSize()
-                        .padding(horizontal = 16.dp),
+                    modifier =
+                        Modifier.background(MaterialTheme.colorScheme.surfaceBright)
+                            .thenConditional(
+                                Modifier.clickable(
+                                    role = Role.Button,
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication =
+                                        ripple(
+                                            bounded = true,
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                        ),
+                                    onClick = {
+                                        view.playSoundEffect(SoundEffectConstants.CLICK)
+                                        source.onClick?.let { onInteraction(it) }
+                                    },
+                                )
+                            ) {
+                                source.onClick != null
+                            }
+                            .clearAndSetSemantics {
+                                this.contentDescription = contentDescription
+                            }
+                            .fillMaxWidth()
+                            .minimumInteractiveComponentSize()
+                            .padding(horizontal = 16.dp),
                 ) {
                     when (source.icon) {
                         is DrawableIcon -> {
@@ -103,10 +110,11 @@ internal fun menuItemComposable(
                                 contentDescription = null,
                                 modifier = Modifier.size(24.dp),
                                 contentScale = ContentScale.Crop,
-                                colorFilter = when (source.icon.shouldTint) {
-                                    true -> ColorFilter.tint(AcornTheme.colors.iconPrimary)
-                                    else -> null
-                                },
+                                colorFilter =
+                                    when (source.icon.shouldTint) {
+                                        true -> ColorFilter.tint(MaterialTheme.colorScheme.onSurface)
+                                        else -> null
+                                    },
                             )
                         }
                         is DrawableResIcon -> {
@@ -114,7 +122,7 @@ internal fun menuItemComposable(
                                 painter = painterResource(source.icon.resourceId),
                                 contentDescription = null,
                                 modifier = Modifier.size(24.dp),
-                                tint = AcornTheme.colors.iconPrimary,
+                                tint = MaterialTheme.colorScheme.onSurface,
                             )
                         }
                         null -> {}
@@ -126,10 +134,8 @@ internal fun menuItemComposable(
 
                     Text(
                         text = source.text(),
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .wrapContentSize(Alignment.CenterStart),
-                        color = AcornTheme.colors.textPrimary,
+                        modifier = Modifier.fillMaxSize().wrapContentSize(Alignment.CenterStart),
+                        color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         style = AcornTheme.typography.subtitle1,
                     )
@@ -139,9 +145,7 @@ internal fun menuItemComposable(
 
         is BrowserToolbarMenuDivider -> {
             @Composable {
-                Divider(
-                    color = AcornTheme.colors.borderSecondary,
-                )
+                HorizontalDivider()
             }
         }
     }
@@ -149,14 +153,16 @@ internal fun menuItemComposable(
 
 @Composable
 @ReadOnlyComposable
-private fun BrowserToolbarMenuButton.text() = when (text) {
-    is StringText -> text.text
-    is StringResText -> stringResource(text.resourceId)
-}
+private fun BrowserToolbarMenuButton.text() =
+    when (text) {
+        is StringText -> text.text
+        is StringResText -> stringResource(text.resourceId)
+    }
 
 @Composable
 @ReadOnlyComposable
-private fun BrowserToolbarMenuButton.contentDescription() = when (contentDescription) {
-    is StringContentDescription -> contentDescription.text
-    is StringResContentDescription -> stringResource(contentDescription.resourceId)
-}
+private fun BrowserToolbarMenuButton.contentDescription() =
+    when (contentDescription) {
+        is StringContentDescription -> contentDescription.text
+        is StringResContentDescription -> stringResource(contentDescription.resourceId)
+    }

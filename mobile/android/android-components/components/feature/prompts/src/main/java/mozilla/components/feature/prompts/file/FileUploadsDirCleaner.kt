@@ -5,6 +5,8 @@
 package mozilla.components.feature.prompts.file
 
 import androidx.annotation.VisibleForTesting
+import java.io.File
+import java.io.IOException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -14,38 +16,27 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import mozilla.components.concept.engine.prompt.PromptRequest.File.Companion.DEFAULT_UPLOADS_DIR_NAME
 import mozilla.components.support.base.log.logger.Logger
-import java.io.File
-import java.io.IOException
 
-/**
- * A storage implementation for organizing temporal uploads metadata to be clean up.
- */
+/** A storage implementation for organizing temporal uploads metadata to be clean up. */
 @OptIn(DelicateCoroutinesApi::class)
 class FileUploadsDirCleaner(
     private val scope: CoroutineScope = GlobalScope,
+    private val ioDispatcher: CoroutineDispatcher = IO,
     private val cacheDirectory: () -> File,
 ) {
     private val logger = Logger("FileUploadsDirCleaner")
 
     private val cacheDir by lazy { cacheDirectory() }
 
-    @VisibleForTesting
-    internal var fileNamesToBeDeleted: List<String> = emptyList()
+    @VisibleForTesting internal var fileNamesToBeDeleted: List<String> = emptyList()
 
-    @VisibleForTesting
-    internal var dispatcher: CoroutineDispatcher = IO
-
-    /**
-     * Enqueue the [fileName] for future clean up.
-     */
+    /** Enqueue the [fileName] for future clean up. */
     internal fun enqueueForCleanup(fileName: String) {
         fileNamesToBeDeleted += (fileName)
         logger.info("File $fileName added to the upload cleaning queue.")
     }
 
-    /**
-     * Remove all the temporary file uploads.
-     */
+    /** Remove all the temporary file uploads. */
     internal fun cleanRecentUploads() {
         // Don't do anything if we don't have any files to delete.
         if (fileNamesToBeDeleted.isEmpty()) {
@@ -56,7 +47,7 @@ class FileUploadsDirCleaner(
 
     @VisibleForTesting
     internal fun performCleanRecentUploads() {
-        scope.launch(dispatcher) {
+        scope.launch(ioDispatcher) {
             val cacheUploadDirectory = File(getCacheDir(), DEFAULT_UPLOADS_DIR_NAME)
             fileNamesToBeDeleted = fileNamesToBeDeleted.filter { fileName ->
                 try {
@@ -71,11 +62,9 @@ class FileUploadsDirCleaner(
         }
     }
 
-    /**
-     * Remove the file uploads directory if exists.
-     */
+    /** Remove the file uploads directory if exists. */
     suspend fun cleanUploadsDirectory() {
-        withContext(dispatcher) {
+        withContext(ioDispatcher) {
             val cacheUploadDirectory = File(getCacheDir(), DEFAULT_UPLOADS_DIR_NAME)
             if (cacheUploadDirectory.exists()) {
                 // To not collide with users uploading while, we are cleaning
@@ -89,7 +78,8 @@ class FileUploadsDirCleaner(
         }
     }
 
-    private suspend fun getCacheDir(): File = withContext(dispatcher) {
-        cacheDir
-    }
+    private suspend fun getCacheDir(): File =
+        withContext(ioDispatcher) {
+            cacheDir
+        }
 }

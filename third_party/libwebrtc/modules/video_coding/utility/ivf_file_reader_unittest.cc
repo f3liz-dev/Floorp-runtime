@@ -38,10 +38,9 @@ constexpr uint8_t kDummyPayload[4] = {'0', '1', '2', '3'};
 class IvfFileReaderTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    file_name_ =
-        webrtc::test::TempFilename(webrtc::test::OutputPath(), "test_file.ivf");
+    file_name_ = test::TempFilename(test::OutputPath(), "test_file.ivf");
   }
-  void TearDown() override { webrtc::test::RemoveFile(file_name_); }
+  void TearDown() override { test::RemoveFile(file_name_); }
 
   bool WriteDummyTestFrames(IvfFileWriter* file_writer,
                             VideoCodecType codec_type,
@@ -78,7 +77,7 @@ class IvfFileReaderTest : public ::testing::Test {
                       bool use_capture_tims_ms,
                       int spatial_layers_count) {
     std::unique_ptr<IvfFileWriter> file_writer =
-        IvfFileWriter::Wrap(FileWrapper::OpenWriteOnly(file_name_), 0);
+        IvfFileWriter::Wrap(file_name_, /*byte_limit=*/0);
     ASSERT_TRUE(file_writer.get());
     ASSERT_TRUE(WriteDummyTestFrames(file_writer.get(), codec_type, kWidth,
                                      kHeight, kNumFrames, use_capture_tims_ms,

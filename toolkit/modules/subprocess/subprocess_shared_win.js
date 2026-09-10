@@ -1,5 +1,3 @@
-/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
-/* vim: set sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -88,6 +86,8 @@ Object.assign(win32, {
   ERROR_BROKEN_PIPE: 109,
   ERROR_INSUFFICIENT_BUFFER: 122,
   ERROR_ABANDONED_WAIT_0: 735,
+  ERROR_IO_INCOMPLETE: 996,
+  ERROR_IO_PENDING: 997,
 
   FILE_ATTRIBUTE_NORMAL: 0x00000080,
   FILE_FLAG_OVERLAPPED: 0x40000000,
@@ -227,6 +227,8 @@ var libc = new Library("libc", LIBC_CHOICES, {
     win32.HANDLE /* hJob */,
     win32.HANDLE /* hProcess */,
   ],
+
+  CancelIo: [win32.WINAPI, win32.BOOL, win32.HANDLE /* hFile */],
 
   CloseHandle: [win32.WINAPI, win32.BOOL, win32.HANDLE /* hObject */],
 

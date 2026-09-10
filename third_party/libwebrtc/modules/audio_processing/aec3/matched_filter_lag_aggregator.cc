@@ -10,8 +10,16 @@
 #include "modules/audio_processing/aec3/matched_filter_lag_aggregator.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <iterator>
+#include <memory>
+#include <optional>
+#include <span>
 
+#include "api/audio/echo_canceller3_config.h"
+#include "modules/audio_processing/aec3/aec3_common.h"
+#include "modules/audio_processing/aec3/delay_estimate.h"
+#include "modules/audio_processing/aec3/matched_filter.h"
 #include "modules/audio_processing/logging/apm_data_dumper.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/numerics/safe_minmax.h"
@@ -73,7 +81,7 @@ std::optional<DelayEstimate> MatchedFilterLagAggregator::Aggregate(
   if (lag_estimate) {
     highest_peak_aggregator_.Aggregate(
         std::max(0, static_cast<int>(lag_estimate->lag) - headroom_));
-    ArrayView<const int> histogram = highest_peak_aggregator_.histogram();
+    std::span<const int> histogram = highest_peak_aggregator_.histogram();
     int candidate = highest_peak_aggregator_.candidate();
     significant_candidate_found_ = significant_candidate_found_ ||
                                    histogram[candidate] > thresholds_.converged;

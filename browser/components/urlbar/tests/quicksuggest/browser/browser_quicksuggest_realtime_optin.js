@@ -11,6 +11,15 @@ const OFFLINE_REMOTE_SETTINGS = [
       },
     ],
   },
+  {
+    type: "dynamic-suggestions",
+    suggestion_type: "yelpRealtime_opt_in",
+    attachment: [
+      {
+        keywords: ["coffee"],
+      },
+    ],
+  },
 ];
 
 const TEST_MERINO_SINGLE = [
@@ -38,17 +47,54 @@ add_setup(async function () {
   await QuickSuggestTestUtils.ensureQuickSuggestInit({
     remoteSettingsRecords: OFFLINE_REMOTE_SETTINGS,
     merinoSuggestions: TEST_MERINO_SINGLE,
-    prefs: [["market.featureGate", true]],
+    prefs: [
+      ["market.featureGate", true],
+      ["yelpRealtime.featureGate", true],
+    ],
   });
 
   registerCleanupFunction(async () => {
     UrlbarPrefs.clear("suggest.realtimeOptIn");
-    UrlbarPrefs.clear("quicksuggest.dataCollection.enabled");
+    UrlbarPrefs.clear("quicksuggest.online.enabled");
 
     // Make sure all ingest is done before finishing.
     await QuickSuggestTestUtils.forceSync();
   });
 });
+
+add_task(async function messages() {
+  await doMessagesTest({
+    input: "stock",
+    expected: {
+      title: "Get stock market data right in your search bar",
+      description:
+        "Show market updates and more from our partners when you share search query data with Mozilla. Learn more",
+    },
+  });
+  await doMessagesTest({
+    input: "coffee",
+    expected: {
+      title: "Find great places nearby and more",
+      description:
+        "Get suggestions for nearby places and services — plus updates on stocks, sports scores, and more from our partners by sharing search query data with Mozilla. Learn more",
+    },
+  });
+});
+
+async function doMessagesTest({ input, expected }) {
+  UrlbarPrefs.set("quicksuggest.online.enabled", false);
+
+  let { element } = await openRealtimeSuggestion({ input });
+  let title = element.row.querySelector(".urlbarView-title");
+  Assert.equal(title.textContent, expected.title);
+  let description = element.row.querySelector(
+    ".urlbarView-row-body-description"
+  );
+  Assert.equal(description.textContent, expected.description);
+
+  await UrlbarTestUtils.promisePopupClose(window);
+  UrlbarPrefs.clear("quicksuggest.online.enabled");
+}
 
 add_task(async function optIn_mouse() {
   await doOptInTest(false);
@@ -64,18 +110,17 @@ async function doOptInTest(useKeyboard) {
     "Sanity check: MarketSuggestions is enabled initially"
   );
 
-  UrlbarPrefs.set("quicksuggest.dataCollection.enabled", false);
+  UrlbarPrefs.set("quicksuggest.online.enabled", false);
 
   Assert.ok(
     QuickSuggest.getFeature("MarketSuggestions").isEnabled,
-    "MarketSuggestions remains enabled after disabling quicksuggest.dataCollection.enabled"
+    "MarketSuggestions remains enabled after disabling quicksuggest.online.enabled"
   );
 
   let { element, result } = await openRealtimeSuggestion({ input: "stock" });
   Assert.ok(result.isBestMatch);
-  Assert.ok(result.hideRowLabel);
   Assert.equal(result.payload.suggestionType, "market_opt_in");
-  Assert.equal(result.type, UrlbarUtils.RESULT_TYPE.TIP);
+  Assert.equal(result.type, UrlbarShared.RESULT_TYPE.TIP);
 
   Assert.ok(
     !element.row.querySelector(".urlbarView-button-result-menu"),
@@ -90,6 +135,15 @@ async function doOptInTest(useKeyboard) {
   Assert.ok(
     allowButton.hasAttribute("primary"),
     "The allow button should be primary"
+  );
+
+  // The opt-in engagement runs parent-side and restarts the query, so on the
+  // message path the new query begins after the pick returns. Wait for it to
+  // finish; promiseSearchComplete alone can observe the query that already
+  // completed, since it only follows lastQueryContextPromise as it changes.
+  let promiseNewQuery = UrlbarTestUtils.promiseControllerNotification(
+    window,
+    "onQueryFinished"
   );
 
   if (!useKeyboard) {
@@ -111,15 +165,16 @@ async function doOptInTest(useKeyboard) {
     EventUtils.synthesizeKey("KEY_Enter");
   }
 
+  await promiseNewQuery;
   await UrlbarTestUtils.promiseSearchComplete(window);
   let { result: merinoResult } = await UrlbarTestUtils.getDetailsOfResultAt(
     window,
     1
   );
-  Assert.ok(UrlbarPrefs.get("quicksuggest.dataCollection.enabled"));
+  Assert.ok(UrlbarPrefs.get("quicksuggest.online.enabled"));
   Assert.equal(merinoResult.payload.source, "merino");
   Assert.equal(merinoResult.payload.provider, "polygon");
-  Assert.equal(merinoResult.payload.dynamicType, "market");
+  Assert.equal(merinoResult.payload.dynamicType, "realtime-market");
   info("Allow button works");
 
   await UrlbarTestUtils.promisePopupClose(window);
@@ -129,11 +184,11 @@ async function doOptInTest(useKeyboard) {
     "MarketSuggestions remains enabled opting in"
   );
 
-  UrlbarPrefs.clear("quicksuggest.dataCollection.enabled");
+  UrlbarPrefs.clear("quicksuggest.online.enabled");
 
   Assert.ok(
     QuickSuggest.getFeature("MarketSuggestions").isEnabled,
-    "MarketSuggestions remains enabled after clearing quicksuggest.dataCollection.enabled"
+    "MarketSuggestions remains enabled after clearing quicksuggest.online.enabled"
   );
 }
 
@@ -143,7 +198,7 @@ add_task(async function dismiss() {
     "Sanity check: MarketSuggestions is enabled initially"
   );
 
-  UrlbarPrefs.set("quicksuggest.dataCollection.enabled", false);
+  UrlbarPrefs.set("quicksuggest.online.enabled", false);
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.notNowTimeSeconds");
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.notNowTypes");
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.dismissTypes");
@@ -262,7 +317,7 @@ add_task(async function dismiss() {
     "MarketSuggestions remains disabled simulating passage of 1000 days"
   );
 
-  UrlbarPrefs.clear("quicksuggest.dataCollection.enabled");
+  UrlbarPrefs.clear("quicksuggest.online.enabled");
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.notNowTimeSeconds");
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.notNowTypes");
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.dismissTypes");
@@ -284,7 +339,7 @@ add_task(async function dismiss_with_another_type() {
     "Sanity check: MarketSuggestions is enabled initially"
   );
 
-  UrlbarPrefs.set("quicksuggest.dataCollection.enabled", false);
+  UrlbarPrefs.set("quicksuggest.online.enabled", false);
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.notNowTimeSeconds");
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.notNowTypes");
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.dismissTypes");
@@ -359,7 +414,7 @@ add_task(async function dismiss_with_another_type() {
 
   await assertOptInVisibility({ input: "stock", expectedVisibility: true });
 
-  UrlbarPrefs.clear("quicksuggest.dataCollection.enabled");
+  UrlbarPrefs.clear("quicksuggest.online.enabled");
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.notNowTimeSeconds");
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.notNowTypes");
   UrlbarPrefs.clear("quicksuggest.realtimeOptIn.dismissTypes");
@@ -377,14 +432,14 @@ add_task(async function not_interested() {
     "Sanity check: MarketSuggestions is enabled initially"
   );
 
-  UrlbarPrefs.set("quicksuggest.dataCollection.enabled", false);
+  UrlbarPrefs.set("quicksuggest.online.enabled", false);
   UrlbarPrefs.set("suggest.realtimeOptIn", true);
 
   info("Click on dropdown button");
   let { element } = await openRealtimeSuggestion({ input: "stock" });
 
   const popup = gURLBar.view.resultMenu;
-  const onPopupShown = BrowserTestUtils.waitForEvent(popup, "popupshown");
+  const onPopupShown = BrowserTestUtils.waitForEvent(popup, "shown");
   const dropmarker = element.row.querySelector(
     ".urlbarView-splitbutton-dropmarker"
   );
@@ -392,15 +447,9 @@ add_task(async function not_interested() {
   await onPopupShown;
 
   info("Activate the not_interested item");
-  const onPopupHidden = BrowserTestUtils.waitForEvent(popup, "popuphidden");
-  const targetMenuItem = popup.querySelector("menuitem");
-  if (AppConstants.platform == "macosx") {
-    // Synthesized clicks don't work in the native Mac menu.
-    targetMenuItem.doCommand();
-    popup.hidePopup(true);
-  } else {
-    EventUtils.synthesizeMouseAtCenter(targetMenuItem, {});
-  }
+  const onPopupHidden = BrowserTestUtils.waitForEvent(popup, "hidden");
+  const targetMenuItem = popup.querySelector("panel-item");
+  EventUtils.synthesizeMouseAtCenter(targetMenuItem, {});
   await onPopupHidden;
   await TestUtils.waitForCondition(
     () => !UrlbarPrefs.get("suggest.realtimeOptIn"),
@@ -415,7 +464,7 @@ add_task(async function not_interested() {
   info("Any realtime type suggestion never be shown");
   await assertOptInVisibility({ input: "stock", expectedVisibility: false });
 
-  UrlbarPrefs.clear("quicksuggest.dataCollection.enabled");
+  UrlbarPrefs.clear("quicksuggest.online.enabled");
   UrlbarPrefs.clear("suggest.realtimeOptIn");
 
   Assert.ok(
@@ -429,7 +478,7 @@ add_task(async function not_interested() {
 });
 
 async function openRealtimeSuggestion({ input }) {
-  await BrowserTestUtils.waitForCondition(async () => {
+  await TestUtils.waitForCondition(async () => {
     await UrlbarTestUtils.promiseAutocompleteResultPopup({
       window,
       value: input,

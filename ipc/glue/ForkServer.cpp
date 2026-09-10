@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,7 +13,6 @@
 #include "mozilla/Omnijar.h"
 #include "mozilla/ProcessType.h"
 #include "mozilla/ipc/FileDescriptor.h"
-#include "mozilla/ipc/IPDLParamTraits.h"
 #include "mozilla/ipc/ProcessUtils.h"
 #include "mozilla/ipc/ProtocolMessageUtils.h"
 #include "mozilla/ipc/SetProcessTitle.h"
@@ -286,7 +283,7 @@ bool ForkServer::HandleForkNewSubprocess(UniquePtr<IPC::Message> aMessage) {
 
   IPC::Message reply(MSG_ROUTING_CONTROL, Reply_ForkNewSubprocess__ID);
   IPC::MessageWriter writer(reply);
-  WriteIPDLParam(&writer, nullptr, pid);
+  WriteParam(&writer, pid);
   mTcver->SendInfallible(reply, "failed to send a reply message");
 
   return false;

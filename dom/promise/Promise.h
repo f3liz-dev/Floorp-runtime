@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -140,11 +138,11 @@ class Promise : public SupportsWeakPtr, public JSHolderBase {
     MaybeReject(std::move(res));                                  \
   }                                                               \
   template <int N>                                                \
-  void MaybeRejectWith##name(const char(&aMessage)[N]) {          \
+  void MaybeRejectWith##name(const char (&aMessage)[N]) {         \
     MaybeRejectWith##name(nsLiteralCString(aMessage));            \
   }
 
-#include "mozilla/dom/DOMExceptionNames.h"
+#include "mozilla/dom/DOMExceptionNames.inc"
 
 #undef DOMEXCEPTION
 
@@ -226,6 +224,29 @@ class Promise : public SupportsWeakPtr, public JSHolderBase {
       ErrorResult& aRv,
       PropagateUserInteraction aPropagateUserInteraction =
           eDontPropagateUserInteraction);
+
+  // Do the equivalent of Promise.resolve in the compartment of aGlobal.
+  // The promise is resolved with the JS value corresponding to aValue.
+  // If this fails, the promise is rejected with the exception.
+  template <typename T>
+  static already_AddRefed<Promise> Resolve(
+      nsIGlobalObject* aGlobal, T&& aValue, ErrorResult& aError,
+      PropagateUserInteraction aPropagateUserInteraction =
+          eDontPropagateUserInteraction) {
+    AutoJSAPI jsapi;
+    if (!jsapi.Init(aGlobal)) {
+      aError.Throw(NS_ERROR_UNEXPECTED);
+      return nullptr;
+    }
+
+    JSContext* cx = jsapi.cx();
+    JS::Rooted<JS::Value> val(cx);
+    if (!ToJSValue(cx, std::forward<T>(aValue), &val)) {
+      return Promise::RejectWithExceptionFromContext(aGlobal, cx, aError);
+    }
+
+    return Resolve(aGlobal, cx, val, aError, aPropagateUserInteraction);
+  }
 
   // Do the equivalent of Promise.reject in the compartment of aGlobal.  The
   // compartment of aCx is ignored.  Errors are reported on the ErrorResult; if
@@ -476,10 +497,17 @@ extern "C" {
 // dom::Promise from Rust in xpcom crate.
 void DomPromise_AddRef(mozilla::dom::Promise* aPromise);
 void DomPromise_Release(mozilla::dom::Promise* aPromise);
-void DomPromise_RejectWithVariant(mozilla::dom::Promise* aPromise,
-                                  nsIVariant* aVariant);
+
+void DomPromise_ResolveWithUndefined(mozilla::dom::Promise* aPromise);
+void DomPromise_RejectWithUndefined(mozilla::dom::Promise* aPromise);
+
 void DomPromise_ResolveWithVariant(mozilla::dom::Promise* aPromise,
                                    nsIVariant* aVariant);
+void DomPromise_RejectWithVariant(mozilla::dom::Promise* aPromise,
+                                  nsIVariant* aVariant);
+
+void DomPromise_RejectWithNsresult(mozilla::dom::Promise* aPromise,
+                                   nsresult aResult);
 }
 
 #endif  // mozilla_dom_Promise_h

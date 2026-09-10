@@ -2,11 +2,26 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { html } from "chrome://global/content/vendor/lit.all.mjs";
+import { html, classMap } from "chrome://global/content/vendor/lit.all.mjs";
 import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
+
+const { XPCOMUtils } = ChromeUtils.importESModule(
+  "resource://gre/modules/XPCOMUtils.sys.mjs"
+);
+
+const lazy = {};
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "testGumDelayMs",
+  "privacy.webrtc.preview.testGumDelayMs",
+  0
+);
 
 window.MozXULElement?.insertFTLIfNeeded("browser/webrtc-preview.ftl");
 
+/**
+ * A class to handle a preview of a WebRTC stream.
+ */
 export class WebRTCPreview extends MozLitElement {
   static properties = {
     // The ID of the device to preview.
@@ -27,6 +42,8 @@ export class WebRTCPreview extends MozLitElement {
 
   // The stream object for the preview. Only set when the preview is active.
   #stream = null;
+  // AbortController to cancel pending gUM requests when stopping preview.
+  #abortController = null;
 
   constructor() {
     super();
@@ -60,6 +77,14 @@ export class WebRTCPreview extends MozLitElement {
     mediaSource = null,
     showPreviewControlButtons = null,
   } = {}) {
+    // We can only start preview once the element is connected to the DOM and
+    // the video element is available.
+    // If you run into this error you're calling the preview method too early,
+    // or you forgot to add it to the DOM.
+    if (!this.isConnected || !this.videoEl) {
+      throw new Error("Can not start preview: Not connected yet.");
+    }
+
     if (deviceId != null) {
       this.deviceId = deviceId;
     }
@@ -77,6 +102,9 @@ export class WebRTCPreview extends MozLitElement {
     // Stop any existing preview.
     this.stopPreview();
 
+    this.#abortController = new AbortController();
+    let { signal } = this.#abortController;
+
     this._loading = true;
     this._previewActive = true;
 
@@ -86,17 +114,23 @@ export class WebRTCPreview extends MozLitElement {
         mediaSource: this.mediaSource,
         deviceId: { exact: this.deviceId },
         frameRate: 30,
-        width: 1280,
-        height: 720,
+        width: 854,
+        height: 480,
       },
     };
 
     let stream;
-    let currentDeviceId = this.deviceId;
 
     try {
       stream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (lazy.testGumDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, lazy.testGumDelayMs));
+      }
     } catch (error) {
+      if (signal.aborted) {
+        this.#dispatchTestEvent("aborted");
+        return;
+      }
       this._loading = false;
       if (
         error.name == "OverconstrainedError" &&
@@ -105,29 +139,41 @@ export class WebRTCPreview extends MozLitElement {
         // Source has disappeared since enumeration, which can happen.
         // No preview.
         this.stopPreview();
+        this.#dispatchTestEvent("error");
         return;
       }
       console.error(`error in preview: ${error.message} ${error.constraint}`);
+      this.#dispatchTestEvent("error");
+      return;
     }
 
-    if (this.deviceId != currentDeviceId) {
-      this._loading = false;
-      // If the deviceId changed while we were waiting for gUM, e.g. because the user selected a different device, restart the preview.
+    if (signal.aborted) {
       stream.getTracks().forEach(t => t.stop());
-      this.startPreview();
+      this.#dispatchTestEvent("aborted");
       return;
     }
 
     this.videoEl.srcObject = stream;
     this.#stream = stream;
+    this.#dispatchTestEvent("success");
+  }
+
+  #dispatchTestEvent(result) {
+    if (lazy.testGumDelayMs > 0) {
+      this.dispatchEvent(
+        new CustomEvent("test-preview-complete", { detail: { result } })
+      );
+    }
   }
 
   /**
    * Stop the preview.
    */
   stopPreview() {
-    // We might interrupt an in-progress load. Make sure we don't show a loading
-    // state.
+    // Abort any pending gUM request.
+    this.#abortController?.abort();
+    this.#abortController = null;
+
     this._loading = false;
 
     // Stop any existing playback.
@@ -151,6 +197,7 @@ export class WebRTCPreview extends MozLitElement {
           autoplay
           tabindex="-1"
           @play=${() => (this._loading = false)}
+          class=${classMap({ active: this._previewActive })}
         ></video>
         <moz-button
           id="show-preview-button"

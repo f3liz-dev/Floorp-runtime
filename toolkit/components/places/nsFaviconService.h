@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -6,12 +5,9 @@
 #ifndef nsFaviconService_h_
 #define nsFaviconService_h_
 
-#include <utility>
-
 #include "Database.h"
 #include "FaviconHelpers.h"
 #include "imgITools.h"
-#include "mozilla/Attributes.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/storage.h"
 #include "nsCOMPtr.h"

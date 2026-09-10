@@ -4,11 +4,22 @@
 
 import { actionTypes as at } from "resource://newtab/common/Actions.mjs";
 import { Dedupe } from "resource:///modules/Dedupe.sys.mjs";
+// Namespace import: a named import of an export missing on older train-hop
+// platforms is a link error; a namespace member is just undefined.
+import * as PlatformTopSitesConstants from "resource:///modules/topsites/constants.mjs";
 
 export {
   TOP_SITES_DEFAULT_ROWS,
   TOP_SITES_MAX_SITES_PER_ROW,
 } from "resource:///modules/topsites/constants.mjs";
+
+// @backward-compat { version 154 }
+// TOP_SITES_MAX_ROWS lands in platform constants.mjs in 154; until that reaches
+// Release it's absent on train-hop, so fall back to 4. At 154-Release: drop the
+// namespace import above, delete this shim, and add TOP_SITES_MAX_ROWS to the
+// re-export block above.
+export const TOP_SITES_MAX_ROWS =
+  PlatformTopSitesConstants.TOP_SITES_MAX_ROWS ?? 4;
 
 const dedupe = new Dedupe(site => site && site.url);
 
@@ -25,6 +36,10 @@ export const INITIAL_STATE = {
       Wallpaper: false,
     },
     customizeMenuVisible: false,
+    // When the customize panel is opened via a CTA that should deep-link into a
+    // specific wallpaper category (e.g. "firefox"), this holds that category id
+    // so WallpaperCategories can open it. Cleared when the panel closes.
+    customizePanelWallpaperCategory: null,
   },
   Ads: {
     initialized: false,
@@ -55,7 +70,7 @@ export const INITIAL_STATE = {
   },
   Prefs: {
     initialized: false,
-    values: { featureConfig: {} },
+    values: { featureConfig: {}, lockedPrefs: [] },
   },
   Dialog: {
     visible: false,
@@ -63,7 +78,6 @@ export const INITIAL_STATE = {
   },
   Sections: [],
   Pocket: {
-    isUserLoggedIn: null,
     pocketCta: {},
     waitingForSpoc: true,
   },
@@ -88,6 +102,11 @@ export const INITIAL_STATE = {
     spocs: {
       spocs_endpoint: "",
       lastUpdated: null,
+      cacheUpdateTime: null,
+      onDemand: {
+        enabled: false,
+        loaded: false,
+      },
       data: {
         // "spocs": {title: "", context: "", items: [], personalized: false},
         // "placement1": {title: "", context: "", items: [], personalized: false},
@@ -102,7 +121,6 @@ export const INITIAL_STATE = {
       utmCampaign: undefined,
       utmContent: undefined,
     },
-    isUserLoggedIn: false,
     showTopicSelection: false,
     report: {
       visible: false,
@@ -123,20 +141,19 @@ export const INITIAL_STATE = {
     showNotifications: false,
     toastCounter: 0,
     toastId: "",
+    toastData: {},
     // This queue is reset each time SHOW_TOAST_MESSAGE is ran.
     // For can be a queue in the future, but for now is one item
     toastQueue: [],
   },
-  Personalization: {
-    lastUpdated: null,
-    initialized: false,
-  },
   InferredPersonalization: {
     initialized: false,
     lastUpdated: null,
-    inferredIntrests: {},
+    inferredInterests: {},
     coarseInferredInterests: {},
     coarsePrivateInferredInterests: {},
+    debugFeatures: null,
+    inferredTelemetrySettingsOverrides: {},
   },
   Search: {
     // When search hand-off is enabled, we render a big button that is styled to
@@ -153,11 +170,26 @@ export const INITIAL_STATE = {
     categories: [],
     uploadedWallpaper: "",
   },
+  SectionsLayout: {
+    configs: {},
+    orderings: {},
+  },
+  // Web notifications surfaced on newtab. Distinct from `Notifications` above,
+  // which is in-newtab toast UI state. `notifications` is the canonical
+  // id-keyed table; `byOrigin` is an id-only index. Fed by WebNotificationsFeed.
+  WebNotifications: {
+    initialized: false,
+    lastUpdated: null,
+    notifications: {},
+    byOrigin: {},
+    error: null,
+  },
   Weather: {
     initialized: false,
     lastUpdated: null,
     query: "",
     suggestions: [],
+    hourlyForecasts: [],
     locationData: {
       city: "",
       adminArea: "",
@@ -168,11 +200,32 @@ export const INITIAL_STATE = {
     locationSearchString: "",
     suggestedLocations: [],
   },
-  TrendingSearch: {
-    suggestions: [],
-    collapsed: false,
-  },
   // Widgets
+  Stocks: {
+    tickers: [],
+    lastUpdated: null,
+    error: false,
+    watchlistTickers: [],
+    watchlistReconciledSymbols: [],
+    searchResults: [],
+    searchStatus: "idle",
+    activeRequestId: null,
+    submittedQuery: "",
+  },
+  PictureOfTheDay: {
+    initialized: false,
+    lastUpdated: null,
+    imageUrl: "",
+    thumbnailUrl: "",
+    title: "",
+    description: "",
+    publishedDate: "",
+    sourceUrl: "",
+    author: "",
+    licenseLabel: "",
+    licenseUrl: "",
+    error: null,
+  },
   ListsWidget: {
     // value pointing to last selectled list
     selected: "taskList",
@@ -205,6 +258,78 @@ export const INITIAL_STATE = {
       startTime: null,
       isRunning: false,
     },
+  },
+  ExternalComponents: {
+    components: [],
+  },
+  SportsWidget: {
+    data: null,
+    initialized: false,
+    widgetState: "sports-intro",
+    selectedTeams: [],
+    matchesTab: "upcoming",
+    // Per-tab "Only followed teams" filter toggle. Defaults to on so users
+    // who follow teams see the filtered list right away.
+    followedOnly: { results: true, upcoming: true },
+    watchLive: {
+      loaded: false,
+      data: null,
+    },
+    // Timestamp (ms since epoch) of the last successful live update.
+    // Kept at root so it survives WIDGETS_SPORTS_WIDGET_SET wholesale-replaces
+    // of `data` (e.g. post-match resync).
+    lastLiveUpdated: null,
+    // Index into the live matches list for the Now tab's single-card pager.
+    liveIndex: 0,
+    // End-of-match celebration bookkeeping (set by the feed): `endedAt` maps a
+    // just-ended match's global_event_id to the ms timestamp it left /live;
+    // `celebrated` lists ids that have already triggered a celebration.
+    celebrations: { endedAt: {}, celebrated: [] },
+    // Session-only state for infinite-scroll load-more on the Upcoming and
+    // Results expanded "View all" lists. Each direction tracks its own
+    // in-flight flag, end-of-data flag, and the most recently requested
+    // date. Fetched windows are NOT persisted — they re-fetch on next
+    // session start.
+    loadMore: {
+      upcoming: { loading: false, exhausted: false, lastFetchedDate: null },
+      results: { loading: false, exhausted: false, lastFetchedDate: null },
+    },
+  },
+  PrivacyWidget: {
+    initialized: false,
+    // Count of trackers blocked today, fetched by PrivacyFeed.
+    trackersToday: 0,
+    // Count of distinct sites visited today (Places-based proxy for
+    // "sites where we blocked something"; see PrivacyFeed).
+    sitesToday: 0,
+    lastUpdated: null,
+    // True when the user has turned off every Enhanced Tracking Protection
+    // blocking option, so nothing is being counted (Bug 2063525). The widget
+    // shows a warning card instead of the readout.
+    etpOff: false,
+    // Secondary-message decision chosen by PrivacyFeed's selector
+    // (Bug 2050954). variant: empty | blank | streak | tip. `category` is the
+    // message family (CATEGORY) so the UI can tell a celebration from an
+    // ordinary tip; `icon` is an icon key (see Privacy.jsx); `countArg` is the
+    // l10n plural/var arg.
+    variant: null,
+    messageId: null,
+    category: null,
+    icon: null,
+    countArg: null,
+    // SpecialMessageAction for the message's CTA button (null → no button).
+    cta: null,
+    // When set, the count readout shows "{countCeiling}+" (the daily-cap render).
+    countCeiling: null,
+    // Pending count-up celebration awarded by PrivacyFeed, or null. Shaped
+    // { awardedAt, fromCount, toCount }, plus `forcedTier` when the debug
+    // pref made it; `awardedAt` doubles as its id.
+    celebration: null,
+  },
+  RecentSearches: {
+    initialized: false,
+    // Recent search strings, newest first.
+    searches: [],
   },
 };
 
@@ -248,10 +373,12 @@ function App(prevState = INITIAL_STATE.App, action) {
     case at.SHOW_PERSONALIZE:
       return Object.assign({}, prevState, {
         customizeMenuVisible: true,
+        customizePanelWallpaperCategory: action.data?.wallpaperCategory ?? null,
       });
     case at.HIDE_PERSONALIZE:
       return Object.assign({}, prevState, {
         customizeMenuVisible: false,
+        customizePanelWallpaperCategory: null,
       });
     default:
       return prevState;
@@ -412,6 +539,10 @@ function Prefs(prevState = INITIAL_STATE.Prefs, action) {
       newValues = Object.assign({}, prevState.values);
       newValues[action.data.name] = action.data.value;
       return Object.assign({}, prevState, { values: newValues });
+    case at.MULTIPLE_PREFS_CHANGED:
+      return Object.assign({}, prevState, {
+        values: Object.assign({}, prevState.values, action.data.values),
+      });
     default:
       return prevState;
   }
@@ -598,7 +729,7 @@ function Messages(prevState = INITIAL_STATE.Messages, action) {
         portID: action.data.portID || "",
       };
     case at.MESSAGE_TOGGLE_VISIBILITY:
-      return { ...prevState, isVisible: action.data };
+      return { ...prevState, isVisible: action.data.isVisible };
     default:
       return prevState;
   }
@@ -608,8 +739,6 @@ function Pocket(prevState = INITIAL_STATE.Pocket, action) {
   switch (action.type) {
     case at.POCKET_WAITING_FOR_SPOC:
       return { ...prevState, waitingForSpoc: action.data };
-    case at.POCKET_LOGGED_IN:
-      return { ...prevState, isUserLoggedIn: !!action.data };
     case at.POCKET_CTA:
       return {
         ...prevState,
@@ -620,25 +749,6 @@ function Pocket(prevState = INITIAL_STATE.Pocket, action) {
           useCta: action.data.use_cta,
         },
       };
-    default:
-      return prevState;
-  }
-}
-
-function Personalization(prevState = INITIAL_STATE.Personalization, action) {
-  switch (action.type) {
-    case at.DISCOVERY_STREAM_PERSONALIZATION_LAST_UPDATED:
-      return {
-        ...prevState,
-        lastUpdated: action.data.lastUpdated,
-      };
-    case at.DISCOVERY_STREAM_PERSONALIZATION_INIT:
-      return {
-        ...prevState,
-        initialized: true,
-      };
-    case at.DISCOVERY_STREAM_PERSONALIZATION_RESET:
-      return { ...INITIAL_STATE.Personalization };
     default:
       return prevState;
   }
@@ -657,7 +767,14 @@ function InferredPersonalization(
         coarseInferredInterests: action.data.coarseInferredInterests,
         coarsePrivateInferredInterests:
           action.data.coarsePrivateInferredInterests,
+        inferredTelemetrySettingsOverrides:
+          action.data.inferredTelemetrySettingsOverrides,
         lastUpdated: action.data.lastUpdated,
+      };
+    case at.INFERRED_PERSONALIZATION_DEBUG_FEATURES_UPDATE:
+      return {
+        ...prevState,
+        debugFeatures: action.data,
       };
     case at.INFERRED_PERSONALIZATION_RESET:
       return { ...INITIAL_STATE.InferredPersonalization };
@@ -746,7 +863,6 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
     case at.DISCOVERY_STREAM_PREFS_SETUP:
       return {
         ...prevState,
-        pocketButtonEnabled: action.data.pocketButtonEnabled,
         hideDescriptions: action.data.hideDescriptions,
         compactImages: action.data.compactImages,
         imageGradient: action.data.imageGradient,
@@ -755,17 +871,16 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
         descLines: action.data.descLines,
         readTime: action.data.readTime,
       };
-    case at.DISCOVERY_STREAM_POCKET_STATE_SET:
-      return {
-        ...prevState,
-        isUserLoggedIn: action.data.isUserLoggedIn,
-      };
     case at.SHOW_PRIVACY_INFO:
       return {
         ...prevState,
       };
     case at.DISCOVERY_STREAM_LAYOUT_RESET:
-      return { ...INITIAL_STATE.DiscoveryStream, config: prevState.config };
+      return {
+        ...INITIAL_STATE.DiscoveryStream,
+        config: prevState.config,
+        sectionPersonalization: prevState.sectionPersonalization,
+      };
     case at.DISCOVERY_STREAM_FEEDS_UPDATE:
       return {
         ...prevState,
@@ -831,13 +946,50 @@ function DiscoveryStream(prevState = INITIAL_STATE.DiscoveryStream, action) {
       };
     case at.DISCOVERY_STREAM_SPOCS_UPDATE:
       if (action.data) {
+        // If spocs have been loaded on this tab, we can ignore future updates.
+        // This should never be true on the main store, only content pages.
+        // We check agasint onDemand just to be safe. It generally shouldn't be needed.
+        if (prevState.spocs?.onDemand?.loaded) {
+          return prevState;
+        }
         return {
           ...prevState,
           spocs: {
             ...prevState.spocs,
             lastUpdated: action.data.lastUpdated,
             data: action.data.spocs,
+            cacheUpdateTime: action.data.spocsCacheUpdateTime,
+            onDemand: {
+              enabled: action.data.spocsOnDemand,
+              loaded: false,
+            },
             loaded: true,
+          },
+        };
+      }
+      return prevState;
+    case at.DISCOVERY_STREAM_SPOCS_ONDEMAND_LOAD:
+      return {
+        ...prevState,
+        spocs: {
+          ...prevState.spocs,
+          onDemand: {
+            ...prevState.spocs.onDemand,
+            loaded: true,
+          },
+        },
+      };
+    case at.DISCOVERY_STREAM_SPOCS_ONDEMAND_RESET:
+      if (action.data) {
+        return {
+          ...prevState,
+          spocs: {
+            ...prevState.spocs,
+            cacheUpdateTime: action.data.spocsCacheUpdateTime,
+            onDemand: {
+              ...prevState.spocs.onDemand,
+              enabled: action.data.spocsOnDemand,
+            },
           },
         };
       }
@@ -958,10 +1110,8 @@ function Search(prevState = INITIAL_STATE.Search, action) {
   switch (action.type) {
     case at.DISABLE_SEARCH:
       return Object.assign({ ...prevState, disable: true });
-    case at.FAKE_FOCUS_SEARCH:
-      return Object.assign({ ...prevState, fakeFocus: true });
     case at.SHOW_SEARCH:
-      return Object.assign({ ...prevState, disable: false, fakeFocus: false });
+      return Object.assign({ ...prevState, disable: false });
     default:
       return prevState;
   }
@@ -988,6 +1138,19 @@ function Wallpapers(prevState = INITIAL_STATE.Wallpapers, action) {
   }
 }
 
+function SectionsLayout(prevState = INITIAL_STATE.SectionsLayout, action) {
+  switch (action.type) {
+    case at.SECTIONS_LAYOUT_UPDATE:
+      return {
+        ...prevState,
+        configs: action.data.configs,
+        orderings: action.data.orderings ?? prevState.orderings,
+      };
+    default:
+      return prevState;
+  }
+}
+
 function Notifications(prevState = INITIAL_STATE.Notifications, action) {
   switch (action.type) {
     case at.SHOW_TOAST_MESSAGE:
@@ -996,6 +1159,7 @@ function Notifications(prevState = INITIAL_STATE.Notifications, action) {
         showNotifications: action.data.showNotifications,
         toastCounter: prevState.toastCounter + 1,
         toastId: action.data.toastId,
+        toastData: action.data.toastData ?? {},
         toastQueue: [action.data.toastId],
       };
     case at.HIDE_TOAST_MESSAGE: {
@@ -1016,13 +1180,69 @@ function Notifications(prevState = INITIAL_STATE.Notifications, action) {
   }
 }
 
+/** Merges one notification into the id table and origin index. */
+function addWebNotification(prevState, notification) {
+  const { id, origin } = notification;
+  const originIds = prevState.byOrigin[origin] || [];
+  return {
+    ...prevState,
+    initialized: true,
+    notifications: { ...prevState.notifications, [id]: notification },
+    byOrigin: {
+      ...prevState.byOrigin,
+      [origin]: originIds.includes(id) ? originIds : [...originIds, id],
+    },
+  };
+}
+
+/** Drops a list of `{origin, id}` pairs from the id table and origin index. */
+function removeWebNotifications(prevState, removed) {
+  const notifications = { ...prevState.notifications };
+  const byOrigin = { ...prevState.byOrigin };
+  for (const { origin, id } of removed) {
+    delete notifications[id];
+    const remaining = (byOrigin[origin] || []).filter(
+      existing => existing !== id
+    );
+    if (remaining.length) {
+      byOrigin[origin] = remaining;
+    } else {
+      delete byOrigin[origin];
+    }
+  }
+  return { ...prevState, notifications, byOrigin };
+}
+
+function WebNotifications(prevState = INITIAL_STATE.WebNotifications, action) {
+  switch (action.type) {
+    case at.WEB_NOTIFICATIONS_UPDATED:
+      return {
+        ...prevState,
+        initialized: true,
+        lastUpdated: action.data.lastUpdated,
+        notifications: action.data.notifications,
+        byOrigin: action.data.byOrigin,
+        error: null,
+      };
+    case at.WEB_NOTIFICATIONS_ADDED:
+      return addWebNotification(prevState, action.data.notification);
+    case at.WEB_NOTIFICATIONS_REMOVED:
+      return removeWebNotifications(prevState, action.data.removed);
+    case at.WEB_NOTIFICATIONS_ERROR:
+      return { ...prevState, error: action.data };
+    default:
+      return prevState;
+  }
+}
+
 function Weather(prevState = INITIAL_STATE.Weather, action) {
   switch (action.type) {
     case at.WEATHER_UPDATE:
       return {
         ...prevState,
         suggestions: action.data.suggestions,
-        lastUpdated: action.data.date,
+        hourlyForecasts: action.data.hourlyForecasts || [],
+        lastUpdated: action.data.lastUpdated,
         locationData: action.data.locationData || prevState.locationData,
         initialized: true,
       };
@@ -1034,6 +1254,58 @@ function Weather(prevState = INITIAL_STATE.Weather, action) {
       return { ...prevState, suggestedLocations: action.data };
     case at.WEATHER_LOCATION_DATA_UPDATE:
       return { ...prevState, locationData: action.data };
+    default:
+      return prevState;
+  }
+}
+
+const PictureOfTheDay = (prevState = INITIAL_STATE.PictureOfTheDay, action) => {
+  switch (action.type) {
+    case at.PICTURE_OF_THE_DAY_UPDATE:
+      return {
+        ...prevState,
+        imageUrl: action.data.imageUrl ?? "",
+        thumbnailUrl: action.data.thumbnailUrl ?? "",
+        title: action.data.title ?? "",
+        description: action.data.description ?? "",
+        publishedDate: action.data.publishedDate ?? "",
+        sourceUrl: action.data.sourceUrl ?? "",
+        author: action.data.author ?? "",
+        licenseLabel: action.data.licenseLabel ?? "",
+        licenseUrl: action.data.licenseUrl ?? "",
+        lastUpdated: action.data.lastUpdated ?? null,
+        error: action.data.error ?? null,
+        initialized: true,
+      };
+    default:
+      return prevState;
+  }
+};
+
+function PrivacyWidget(prevState = INITIAL_STATE.PrivacyWidget, action) {
+  switch (action.type) {
+    case at.WIDGETS_PRIVACY_UPDATE:
+      // Merge whatever the feed sent: SYSTEM_TICK/INIT broadcast counts only
+      // (message fields absent → kept); NEW_TAB_INIT also carries the
+      // selector's message decision.
+      return {
+        ...prevState,
+        ...action.data,
+        initialized: true,
+      };
+    default:
+      return prevState;
+  }
+}
+
+function RecentSearches(prevState = INITIAL_STATE.RecentSearches, action) {
+  switch (action.type) {
+    case at.WIDGETS_RECENT_SEARCHES_UPDATE:
+      return {
+        ...prevState,
+        ...action.data,
+        initialized: true,
+      };
     default:
       return prevState;
   }
@@ -1059,17 +1331,6 @@ function Ads(prevState = INITIAL_STATE.Ads, action) {
       };
     case at.ADS_RESET:
       return { ...INITIAL_STATE.Ads };
-    default:
-      return prevState;
-  }
-}
-
-function TrendingSearch(prevState = INITIAL_STATE.TrendingSearch, action) {
-  switch (action.type) {
-    case at.TRENDING_SEARCH_UPDATE:
-      return { ...prevState, suggestions: action.data };
-    case at.TRENDING_SEARCH_TOGGLE_COLLAPSE:
-      return { ...prevState, collapsed: action.data.collapsed };
     default:
       return prevState;
   }
@@ -1151,12 +1412,180 @@ function TimerWidget(prevState = INITIAL_STATE.TimerWidget, action) {
   }
 }
 
+function Stocks(prevState = INITIAL_STATE.Stocks, action) {
+  switch (action.type) {
+    case at.WIDGETS_STOCKS_UPDATE:
+      return {
+        ...prevState,
+        tickers: action.data.tickers,
+        lastUpdated: action.data.lastUpdated,
+        error: action.data.error ?? false,
+      };
+    case at.WIDGETS_STOCKS_WATCHLIST_UPDATE:
+      return {
+        ...prevState,
+        watchlistTickers: action.data.watchlistTickers,
+        watchlistReconciledSymbols: action.data.reconciledSymbols,
+      };
+    case at.WIDGETS_STOCKS_SEARCH_STARTED:
+      return {
+        ...prevState,
+        searchStatus: "loading",
+        searchResults: [],
+        activeRequestId: action.data.requestId,
+        submittedQuery: action.data.query,
+      };
+    case at.WIDGETS_STOCKS_SEARCH_RESPONSE:
+      if (action.data.requestId !== prevState.activeRequestId) {
+        return prevState;
+      }
+      return {
+        ...prevState,
+        searchStatus: action.data.status,
+        searchResults: action.data.values || [],
+      };
+    case at.WIDGETS_STOCKS_SEARCH_CLEAR:
+      return {
+        ...prevState,
+        searchStatus: "idle",
+        searchResults: [],
+        activeRequestId: null,
+        submittedQuery: "",
+      };
+    default:
+      return prevState;
+  }
+}
+
 function ListsWidget(prevState = INITIAL_STATE.ListsWidget, action) {
   switch (action.type) {
     case at.WIDGETS_LISTS_SET:
       return { ...prevState, lists: action.data };
     case at.WIDGETS_LISTS_SET_SELECTED:
       return { ...prevState, selected: action.data };
+    default:
+      return prevState;
+  }
+}
+
+function ExternalComponents(
+  prevState = INITIAL_STATE.ExternalComponents,
+  action
+) {
+  switch (action.type) {
+    case at.REFRESH_EXTERNAL_COMPONENTS:
+      return { ...prevState, components: action.data };
+    default:
+      return prevState;
+  }
+}
+
+function SportsWidget(prevState = INITIAL_STATE.SportsWidget, action) {
+  switch (action.type) {
+    case at.WIDGETS_SPORTS_SET_WIDGET_STATE:
+      return { ...prevState, widgetState: action.data };
+    case at.WIDGETS_SPORTS_SET_SELECTED_TEAMS:
+      return { ...prevState, selectedTeams: action.data };
+    case at.WIDGETS_SPORTS_SET_MATCHES_TAB:
+      return { ...prevState, matchesTab: action.data };
+    case at.WIDGETS_SPORTS_SET_FOLLOWED_ONLY:
+      return {
+        ...prevState,
+        followedOnly: { ...prevState.followedOnly, ...action.data },
+      };
+    case at.WIDGETS_SPORTS_WATCH_LIVE_REQUEST: {
+      // Preserve any previously-fetched payload so a re-request (e.g. the modal
+      // refreshing links on open) doesn't drop the data the "Watch live" entry
+      // point is gated on. Only show the loading state when nothing is cached.
+      const existingWatchLiveData = prevState.watchLive?.data ?? null;
+      return {
+        ...prevState,
+        watchLive: {
+          loaded: !!existingWatchLiveData,
+          data: existingWatchLiveData,
+        },
+      };
+    }
+    case at.WIDGETS_SPORTS_WATCH_LIVE_SET:
+      return {
+        ...prevState,
+        watchLive: { loaded: true, data: action.data },
+      };
+    case at.WIDGETS_SPORTS_LIVE_UPDATE: {
+      return {
+        ...prevState,
+        lastLiveUpdated: action.data?.lastLiveUpdated ?? null,
+        data: {
+          ...prevState.data,
+          live: action.data?.live ?? [],
+        },
+      };
+    }
+    case at.WIDGETS_SPORTS_SET_LIVE_INDEX:
+      return { ...prevState, liveIndex: action.data };
+    case at.WIDGETS_SPORTS_SET_CELEBRATIONS:
+      return { ...prevState, celebrations: action.data };
+    case at.WIDGETS_SPORTS_SET_LOAD_MORE: {
+      const {
+        direction,
+        matches: newMatches,
+        ...loadMoreUpdates
+      } = action.data || {};
+      if (direction !== "upcoming" && direction !== "results") {
+        return prevState;
+      }
+      // Upcoming appends to data.matches.next; results appends to
+      // data.matches.previous. The key used to skip duplicates is the same
+      // in both cases.
+      const targetField = direction === "upcoming" ? "next" : "previous";
+      const nextState = {
+        ...prevState,
+        loadMore: {
+          ...prevState.loadMore,
+          [direction]: {
+            ...prevState.loadMore[direction],
+            ...loadMoreUpdates,
+          },
+        },
+      };
+      if (Array.isArray(newMatches) && newMatches.length && prevState.data) {
+        const existing = prevState.data.matches?.[targetField] ?? [];
+        // Build a stable key for each match so we can skip ones already in
+        // the list. Prefer global_event_id; fall back to a composite that
+        // mirrors the React row key used in the list view.
+        const matchKey = match =>
+          match?.global_event_id ??
+          `${match?.home_team?.key}-${match?.away_team?.key}-${match?.date}`;
+        const existingKeys = new Set(existing.map(matchKey));
+        const additions = newMatches.filter(
+          m => !existingKeys.has(matchKey(m))
+        );
+        if (additions.length) {
+          nextState.data = {
+            ...prevState.data,
+            matches: {
+              ...(prevState.data.matches || {
+                previous: [],
+                current: [],
+                next: [],
+              }),
+              [targetField]: [...existing, ...additions],
+            },
+          };
+        }
+      }
+      return nextState;
+    }
+    case at.WIDGETS_SPORTS_WIDGET_SET:
+      // A wholesale-replace of `data` (initial load / post-match resync) also
+      // resets the session-only load-more state so we don't keep stale
+      // lastFetchedDate / exhausted flags from a previous fetch round.
+      return {
+        ...prevState,
+        data: action.data,
+        initialized: true,
+        loadMore: { ...INITIAL_STATE.SportsWidget.loadMore },
+      };
     default:
       return prevState;
   }
@@ -1172,13 +1601,19 @@ export const reducers = {
   Messages,
   Notifications,
   Pocket,
-  Personalization,
   InferredPersonalization,
   DiscoveryStream,
   Search,
   TimerWidget,
   ListsWidget,
-  TrendingSearch,
   Wallpapers,
+  SectionsLayout,
+  WebNotifications,
   Weather,
+  Stocks,
+  ExternalComponents,
+  SportsWidget,
+  PrivacyWidget,
+  PictureOfTheDay,
+  RecentSearches,
 };

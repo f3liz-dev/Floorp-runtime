@@ -30,7 +30,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
+#include <numbers>
 
 #include "mozilla/FFTBlock.h"
 
@@ -158,7 +158,7 @@ void PeriodicWave::waveDataForFundamentalFrequency(
   }
   if (numberOfPartials > m_maxPartialsInBandLimitedTable) {
     for (unsigned rangeIndex = 0; rangeIndex < m_numberOfRanges; ++rangeIndex) {
-      m_bandLimitedTables[rangeIndex] = 0;
+      m_bandLimitedTables[rangeIndex] = nullptr;
     }
 
     // We need to create the first table to determine the normalization
@@ -288,7 +288,7 @@ void PeriodicWave::createBandLimitedTables(float fundamentalFrequency,
 }
 
 void PeriodicWave::generateBasicWaveform(OscillatorType shape) {
-  const float piFloat = float(M_PI);
+  const float piFloat = std::numbers::pi_v<float>;
   unsigned fftSize = periodicWaveSize();
   unsigned halfSize = fftSize / 2;
 

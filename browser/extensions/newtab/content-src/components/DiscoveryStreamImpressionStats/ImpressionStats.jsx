@@ -3,7 +3,7 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
-import { getActiveCardSize } from "../../lib/utils";
+import { getActiveCardSize, getNovaColumnLayout } from "../../lib/utils";
 import { TOP_SITES_SOURCE } from "../TopSites/TopSitesConstants";
 import React from "react";
 
@@ -34,6 +34,11 @@ export const INTERSECTION_RATIO = 0.5;
  *     impression pings separately
  */
 export class ImpressionStats extends React.PureComponent {
+  constructor(props) {
+    super(props);
+    this.impressionRef = React.createRef();
+  }
+
   // This checks if the given cards are the same as those in the last impression ping.
   // If so, it should not send the same impression ping again.
   _needsImpressionStats(cards) {
@@ -55,7 +60,6 @@ export class ImpressionStats extends React.PureComponent {
 
   _dispatchImpressionStats() {
     const { props } = this;
-    const { isFakespot } = props;
     const cards = props.rows;
 
     if (this.props.flightId) {
@@ -80,6 +84,7 @@ export class ImpressionStats extends React.PureComponent {
                 // Keep the 0-based position, can be adjusted by the telemetry
                 // sender if necessary.
                 position: card.pos,
+                attribution: card.attribution,
               },
             })
           );
@@ -88,62 +93,46 @@ export class ImpressionStats extends React.PureComponent {
     }
 
     if (this._needsImpressionStats(cards)) {
-      if (isFakespot) {
-        props.dispatch(
-          ac.DiscoveryStreamImpressionStats({
-            source: props.source.toUpperCase(),
-            window_inner_width: window.innerWidth,
-            window_inner_height: window.innerHeight,
-            tiles: cards.map(link => ({
-              id: link.id,
-              type: "fakespot",
-              category: link.category,
-            })),
-          })
-        );
-      } else {
-        props.dispatch(
-          ac.DiscoveryStreamImpressionStats({
-            source: props.source.toUpperCase(),
-            window_inner_width: window.innerWidth,
-            window_inner_height: window.innerHeight,
-            tiles: cards.map(link => ({
-              id: link.id,
-              pos: link.pos,
-              type: props.flightId ? "spoc" : "organic",
-              ...(link.shim ? { shim: link.shim } : {}),
-              recommendation_id: link.recommendation_id,
-              fetchTimestamp: link.fetchTimestamp,
-              corpus_item_id: link.corpus_item_id,
-              scheduled_corpus_item_id: link.scheduled_corpus_item_id,
-              recommended_at: link.recommended_at,
-              received_rank: link.received_rank,
-              topic: link.topic,
-              features: link.features,
-              is_list_card: link.is_list_card,
-              ...(link.format
-                ? { format: link.format }
-                : {
-                    format: getActiveCardSize(
-                      window.innerWidth,
-                      link.class_names,
-                      link.section,
-                      link.flightId
-                    ),
-                  }),
-              ...(link.section
-                ? {
-                    section: link.section,
-                    section_position: link.section_position,
-                    is_section_followed: link.is_section_followed,
-                  }
-                : {}),
-            })),
-            firstVisibleTimestamp: props.firstVisibleTimestamp,
-          })
-        );
-        this.impressionCardGuids = cards.map(link => link.id);
-      }
+      const impressionData = {
+        source: props.source.toUpperCase(),
+        window_inner_width: window.innerWidth,
+        window_inner_height: window.innerHeight,
+        tiles: cards.map(link => ({
+          id: link.id,
+          pos: link.pos,
+          type: props.flightId ? "spoc" : "organic",
+          ...(link.shim ? { shim: link.shim } : {}),
+          corpus_item_id: link.corpus_item_id,
+          scheduled_corpus_item_id: link.scheduled_corpus_item_id,
+          recommended_at: link.recommended_at,
+          received_rank: link.received_rank,
+          topic: link.topic,
+          features: link.features,
+          attribution: link.attribution,
+          ...(link.format
+            ? { format: link.format }
+            : {
+                format: getActiveCardSize(
+                  window.innerWidth,
+                  link.class_names,
+                  link.section,
+                  link.flightId,
+                  getNovaColumnLayout(this.impressionRef.current)
+                ),
+              }),
+          ...(link.section
+            ? {
+                section: link.section,
+                section_position: link.section_position,
+                is_section_followed: link.is_section_followed,
+                layout_name: link.sectionLayoutName,
+              }
+            : {}),
+        })),
+      };
+
+      props.dispatch(ac.DiscoveryStreamImpressionStats(impressionData));
+      this.impressionCardGuids = cards.map(link => link.id);
     }
   }
 
@@ -244,7 +233,8 @@ export class ImpressionStats extends React.PureComponent {
         )
       ) {
         this._dispatchImpressionStats();
-        this.impressionObserver.unobserve(this.refs.impression);
+        this._hasReported = true;
+        this._teardownImpressionObserver();
       }
     };
 
@@ -253,30 +243,51 @@ export class ImpressionStats extends React.PureComponent {
       this._handleIntersect,
       options
     );
-    this.impressionObserver.observe(this.refs.impression);
+    this.impressionObserver.observe(this.impressionRef.current);
   }
 
   componentDidMount() {
-    if (this.props.rows.length) {
+    if (this.props.rows.length && this.props.isActive) {
       this.setImpressionObserverOrAddListener();
     }
   }
 
-  componentWillUnmount() {
-    if (this._handleIntersect && this.impressionObserver) {
-      this.impressionObserver.unobserve(this.refs.impression);
+  _teardownImpressionObserver() {
+    if (this.impressionObserver) {
+      this.impressionObserver.unobserve(this.impressionRef.current);
+      this.impressionObserver = null;
     }
     if (this._onVisibilityChange) {
       this.props.document.removeEventListener(
         VISIBILITY_CHANGE_EVENT,
         this._onVisibilityChange
       );
+      this._onVisibilityChange = null;
     }
+  }
+
+  // A carousel stacks its slides, so a hidden slide still intersects and would
+  // report an impression while invisible. A slide only observes while it is
+  // the visible one, and never observes again once it has reported, so a card
+  // that cycles back around isn't counted twice.
+  componentDidUpdate(prevProps) {
+    if (this._hasReported || this.props.isActive === prevProps.isActive) {
+      return;
+    }
+    if (this.props.isActive && this.props.rows.length) {
+      this.setImpressionObserverOrAddListener();
+    } else if (!this.props.isActive) {
+      this._teardownImpressionObserver();
+    }
+  }
+
+  componentWillUnmount() {
+    this._teardownImpressionObserver();
   }
 
   render() {
     return (
-      <div ref={"impression"} className="impression-observer">
+      <div ref={this.impressionRef} className="impression-observer">
         {this.props.children}
       </div>
     );
@@ -288,4 +299,6 @@ ImpressionStats.defaultProps = {
   document: globalThis.document,
   rows: [],
   source: "",
+  // Only a carousel slide passes this as false, and only while hidden.
+  isActive: true,
 };

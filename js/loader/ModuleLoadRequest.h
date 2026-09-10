@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,14 +5,17 @@
 #ifndef js_loader_ModuleLoadRequest_h
 #define js_loader_ModuleLoadRequest_h
 
-#include "LoadContextBase.h"
-#include "ScriptLoadRequest.h"
-#include "ModuleLoaderBase.h"
 #include "mozilla/Assertions.h"
+#include "mozilla/HoldDropJSObjects.h"
+
+#include "LoadContextBase.h"
+#include "ModuleLoaderBase.h"
+#include "nsTHashtable.h"
+#include "nsURIHashKey.h"
+#include "ScriptLoadRequest.h"
+
 #include "js/RootingAPI.h"
 #include "js/Value.h"
-#include "nsURIHashKey.h"
-#include "nsTHashtable.h"
 
 namespace JS::loader {
 
@@ -27,14 +28,7 @@ class ModuleLoaderBase;
 // multiple imports of the same module.
 
 class ModuleLoadRequest final : public ScriptLoadRequest {
-  ~ModuleLoadRequest() {
-    MOZ_ASSERT(!mReferrerScript);
-    MOZ_ASSERT(!mModuleRequestObj);
-    MOZ_ASSERT(mPayload.isUndefined());
-  }
-
-  ModuleLoadRequest(const ModuleLoadRequest& aOther) = delete;
-  ModuleLoadRequest(ModuleLoadRequest&& aOther) = delete;
+  ~ModuleLoadRequest();
 
  public:
   NS_DECL_ISUPPORTS_INHERITED
@@ -43,44 +37,45 @@ class ModuleLoadRequest final : public ScriptLoadRequest {
   using SRIMetadata = mozilla::dom::SRIMetadata;
 
   enum class Kind {
-    // Top-level modules, not imported statically or dynamically..
+    // Top-level modules, not imported statically nor dynamically.
     TopLevel,
 
     // Modules imported statically with `import` declarations.
     StaticImport,
 
     // Modules imported dynamically with dynamic `import()`.
-    // This is actually also a top-level module, but this should be used for
-    // dynamic imports.
     DynamicImport,
   };
 
-  ModuleLoadRequest(nsIURI* aURI, ModuleType aModuleType,
-                    mozilla::dom::ReferrerPolicy aReferrerPolicy,
-                    ScriptFetchOptions* aFetchOptions,
-                    const SRIMetadata& aIntegrity, nsIURI* aReferrer,
-                    LoadContextBase* aContext, Kind aKind,
+  ModuleLoadRequest(ModuleType aModuleType, const SRIMetadata& aIntegrity,
+                    nsIURI* aReferrer, LoadContextBase* aContext, Kind aKind,
                     ModuleLoaderBase* aLoader, ModuleLoadRequest* aRootModule);
+  ModuleLoadRequest(const ModuleLoadRequest& aOther) = delete;
+  ModuleLoadRequest(ModuleLoadRequest&& aOther) = delete;
 
-  bool IsTopLevel() const override { return mIsTopLevel; }
-
-  bool IsDynamicImport() const { return mIsDynamicImport; }
+  bool IsTopLevel() const override { return mKind == Kind::TopLevel; }
+  bool IsStaticImport() const { return mKind == Kind::StaticImport; }
+  bool IsDynamicImport() const { return mKind == Kind::DynamicImport; }
 
   bool IsErrored() const;
 
   nsIGlobalObject* GetGlobalObject();
 
   void SetReady() override;
-  void Cancel() override;
+  void Cancel() override { mLoader->Cancel(this); };
 
-  void SetDynamicImport(LoadedScript* aReferencingScript,
-                        Handle<JSObject*> aModuleRequestObj,
-                        Handle<JSObject*> aPromise);
-  void ClearDynamicImport();
+  void SetImport(Handle<JSScript*> aReferrerScript,
+                 Handle<JSObject*> aModuleRequestObj, Handle<Value> aPayload);
+  void ClearImport();
 
   void ModuleLoaded();
   void ModuleErrored();
   void LoadFailed();
+
+  // Tells the load context that this request stopped waiting on an in-progress
+  // fetch of the same URL. Must be called whenever that happens, whether the
+  // fetch resolved or was canceled.
+  void NotifyModuleWaitFinished();
 
   ModuleLoadRequest* GetRootModule() {
     if (!mRootModule) {
@@ -88,8 +83,6 @@ class ModuleLoadRequest final : public ScriptLoadRequest {
     }
     return mRootModule;
   }
-
-  void MarkModuleForBytecodeEncoding() { MarkForBytecodeEncoding(); }
 
   // Convenience methods to call into the module loader for this request.
 
@@ -111,23 +104,46 @@ class ModuleLoadRequest final : public ScriptLoadRequest {
     return mLoader->InstantiateModuleGraph(this);
   }
   nsresult EvaluateModule() { return mLoader->EvaluateModule(this); }
-  void StartDynamicImport() { mLoader->StartDynamicImport(this); }
   void ProcessDynamicImport() { mLoader->ProcessDynamicImport(this); }
 
   void LoadFinished();
 
-  void UpdateReferrerPolicy(mozilla::dom::ReferrerPolicy aReferrerPolicy) {
-    mReferrerPolicy = aReferrerPolicy;
+#ifdef NIGHTLY_BUILD
+  void SetHasWasmMimeTypeEssence() { mHasWasmMimeTypeEssence = true; }
+
+  bool HasWasmMimeTypeEssence() { return mHasWasmMimeTypeEssence; }
+#endif
+
+  void SetErroredLoadingImports() {
+    MOZ_ASSERT(IsDynamicImport());
+    MOZ_ASSERT(IsFetching() || IsCompiling());
+    mErroredLoadingImports = true;
   }
 
-  // Is this a request for a top level module script or an import?
-  const bool mIsTopLevel;
+  bool IsErroredLoadingImports() const { return mErroredLoadingImports; }
+
+  void UpdateReferrerPolicy(mozilla::dom::ReferrerPolicy aReferrerPolicy) {
+    FetchInfo()->UpdateReferrerPolicy(aReferrerPolicy);
+  }
+
+ public:
+  // Fields.
+  const Kind mKind;
 
   // Type of module (JavaScript, JSON)
   const ModuleType mModuleType;
 
   // Is this the top level request for a dynamic module import?
   const bool mIsDynamicImport;
+
+#ifdef NIGHTLY_BUILD
+  // We can only distinguish JavaScript and Wasm modules by mime type essence.
+  bool mHasWasmMimeTypeEssence = false;
+#endif
+
+  // A flag (for dynamic import) that indicates the module script is
+  // successfully fetched and compiled, but its dependencies are failed to load.
+  bool mErroredLoadingImports;
 
   // Pointer to the script loader, used to trigger actions when the module load
   // finishes.

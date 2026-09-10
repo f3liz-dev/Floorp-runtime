@@ -13,24 +13,21 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 
-#include "absl/strings/escaping.h"
 #include "absl/strings/string_view.h"
-#include "api/array_view.h"
 
 namespace webrtc {
 
-inline std::string Base64Encode(ArrayView<const uint8_t> data) {
-  return absl::Base64Escape(absl::string_view(
+std::string Base64Encode(absl::string_view data);
+
+inline std::string Base64Encode(std::span<const uint8_t> data) {
+  return Base64Encode(absl::string_view(
       reinterpret_cast<const char*>(data.data()), data.size()));
 }
 
-inline std::string Base64Encode(absl::string_view data) {
-  return absl::Base64Escape(data);
-}
-
-enum class Base64DecodeOptions {
+enum class Base64DecodeOptions : uint8_t {
   kStrict,
   // Matches https://infra.spec.whatwg.org/#forgiving-base64-decode.
   kForgiving,

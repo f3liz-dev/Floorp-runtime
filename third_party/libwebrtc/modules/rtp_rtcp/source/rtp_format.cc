@@ -10,13 +10,12 @@
 
 #include "modules/rtp_rtcp/source/rtp_format.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
+#include <span>
 #include <vector>
 
-#include "api/array_view.h"
-#include "api/video/video_codec_type.h"
 #include "modules/rtp_rtcp/source/rtp_format_h264.h"
 #include "modules/rtp_rtcp/source/rtp_format_video_generic.h"
 #include "modules/rtp_rtcp/source/rtp_format_vp8.h"
@@ -26,6 +25,8 @@
 #include "modules/video_coding/codecs/vp8/include/vp8_globals.h"
 #include "modules/video_coding/codecs/vp9/include/vp9_globals.h"
 #include "rtc_base/checks.h"
+#include "rtc_base/numerics/safe_compare.h"
+
 #ifdef RTC_ENABLE_H265
 #include "modules/rtp_rtcp/source/rtp_packetizer_h265.h"
 #endif
@@ -33,43 +34,44 @@
 namespace webrtc {
 
 std::unique_ptr<RtpPacketizer> RtpPacketizer::Create(
-    std::optional<VideoCodecType> type,
-    ArrayView<const uint8_t> payload,
+    PacketizationFormat format,
+    std::span<const uint8_t> payload,
     PayloadSizeLimits limits,
     // Codec-specific details.
     const RTPVideoHeader& rtp_video_header) {
-  if (!type) {
-    // Use raw packetizer.
-    return std::make_unique<RtpPacketizerGeneric>(payload, limits);
-  }
-
-  switch (*type) {
-    case kVideoCodecH264: {
+  switch (format) {
+    case PacketizationFormat::kRaw: {
+      return std::make_unique<RtpPacketizerGeneric>(payload, limits);
+    }
+    case PacketizationFormat::kH264: {
       const auto& h264 =
           std::get<RTPVideoHeaderH264>(rtp_video_header.video_type_header);
       return std::make_unique<RtpPacketizerH264>(payload, limits,
                                                  h264.packetization_mode);
     }
-    case kVideoCodecVP8: {
+    case PacketizationFormat::kVP8: {
       const auto& vp8 =
           std::get<RTPVideoHeaderVP8>(rtp_video_header.video_type_header);
       return std::make_unique<RtpPacketizerVp8>(payload, limits, vp8);
     }
-    case kVideoCodecVP9: {
+    case PacketizationFormat::kVP9: {
       const auto& vp9 =
           std::get<RTPVideoHeaderVP9>(rtp_video_header.video_type_header);
       return std::make_unique<RtpPacketizerVp9>(payload, limits, vp9);
     }
-    case kVideoCodecAV1:
+    case PacketizationFormat::kAV1:
       return std::make_unique<RtpPacketizerAv1>(
           payload, limits, rtp_video_header.frame_type,
           rtp_video_header.is_last_frame_in_picture);
+    case PacketizationFormat::kH265: {
 #ifdef RTC_ENABLE_H265
-    case kVideoCodecH265: {
       return std::make_unique<RtpPacketizerH265>(payload, limits);
-    }
+#else
+      return std::make_unique<RtpPacketizerGeneric>(payload, limits,
+                                                    rtp_video_header);
 #endif
-    default: {
+    }
+    case PacketizationFormat::kGeneric: {
       return std::make_unique<RtpPacketizerGeneric>(payload, limits,
                                                     rtp_video_header);
     }
@@ -77,14 +79,22 @@ std::unique_ptr<RtpPacketizer> RtpPacketizer::Create(
 }
 
 std::vector<int> RtpPacketizer::SplitAboutEqually(
-    int payload_len,
+    size_t payload_size,
     const PayloadSizeLimits& limits) {
-  RTC_DCHECK_GT(payload_len, 0);
   // First or last packet larger than normal are unsupported.
   RTC_DCHECK_GE(limits.first_packet_reduction_len, 0);
   RTC_DCHECK_GE(limits.last_packet_reduction_len, 0);
 
   std::vector<int> result;
+  if (payload_size == 0 ||
+      SafeGt(payload_size, limits.max_payload_len * 0x7000)) {
+    // Do not support frames that are so large they need almost half of the RTP
+    // sequence number space. With MTU ~= 1.2KB that puts a limit of ~34MB on a
+    // single frame. Sending such large frames over RTP is likely impractical.
+    return result;
+  }
+  int payload_len = static_cast<int>(payload_size);
+
   if (limits.max_payload_len >=
       limits.single_packet_reduction_len + payload_len) {
     result.push_back(payload_len);

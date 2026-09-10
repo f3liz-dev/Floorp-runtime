@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -54,8 +52,7 @@ TEST_F(APZCTreeManagerTester, WheelInterruptedByMouseDrag) {
 // block starting with a wheel event with a horizontal can prevent the
 // entire input block from causing any scrolling.
 TEST_F(APZCTreeManagerTester, HorizontalDeltaInterferesWithVerticalScrolling) {
-  using ViewID = ScrollableLayerGuid::ViewID;
-  ViewID rootScrollId = ScrollableLayerGuid::START_SCROLL_ID;
+  ViewID rootScrollId = START_SCROLL_ID;
   const char* treeShape = "x";
   LayerIntRect layerVisibleRect[] = {
       LayerIntRect(0, 0, 100, 100),

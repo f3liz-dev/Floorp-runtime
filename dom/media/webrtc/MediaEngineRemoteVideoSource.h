@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set sw=2 ts=8 et ft=cpp : */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,42 +5,28 @@
 #ifndef MEDIAENGINE_REMOTE_VIDEO_SOURCE_H_
 #define MEDIAENGINE_REMOTE_VIDEO_SOURCE_H_
 
+#include "CamerasChild.h"
 #include "DOMMediaStream.h"
-#include "mozilla/Mutex.h"
-#include "nsCOMPtr.h"
-#include "nsComponentManagerUtils.h"
-#include "nsDirectoryServiceDefs.h"
-#include "nsThreadUtils.h"
-#include "prcvar.h"
-#include "prthread.h"
-
-// Avoid warnings about redefinition of WARN_UNUSED_RESULT
-#include "AudioSegment.h"
 #include "MediaEngineSource.h"
 #include "MediaTrackGraph.h"
-#include "VideoSegment.h"
-#include "VideoUtils.h"
-#include "ipc/IPCMessageUtils.h"
-#include "mozilla/dom/MediaStreamTrackBinding.h"
-
-// Camera Access via IPC
-#include "CamerasChild.h"
-#include "NullTransport.h"
-
-// WebRTC includes
 #include "common_video/include/video_frame_buffer_pool.h"
 #include "modules/video_capture/video_capture_defines.h"
+#include "mozilla/Mutex.h"
+#include "mozilla/dom/MediaStreamTrackBinding.h"
 
 namespace webrtc {
 using CaptureCapability = VideoCaptureCapability;
 }
 
 namespace mozilla {
+namespace dom {
+enum class VideoResizeModeEnum : uint8_t;
+}
 
 // Fitness distance is defined in
 // https://w3c.github.io/mediacapture-main/getusermedia.html#dfn-selectsettings
 
-// In contrast, feasibility distance — used in the implementatioon of
+// In contrast, feasibility distance — used in the implementation of
 // crop_and_scale — effectively rounds width and height up to the nearest
 // native width and height before calculating distance (sorta).
 //
@@ -82,7 +66,8 @@ class MediaEngineRemoteVideoSource : public MediaEngineSource,
   bool ChooseCapability(const NormalizedConstraints& aConstraints,
                         const MediaEnginePrefs& aPrefs,
                         webrtc::CaptureCapability& aCapability,
-                        const DistanceCalculation aCalculate);
+                        const DistanceCalculation aCalculate,
+                        const char** aOutBadConstraint);
 
   uint32_t GetDistance(const webrtc::CaptureCapability& aCandidate,
                        const NormalizedConstraintSet& aConstraints,
@@ -100,6 +85,10 @@ class MediaEngineRemoteVideoSource : public MediaEngineSource,
 
  public:
   explicit MediaEngineRemoteVideoSource(const MediaDevice* aMediaDevice);
+
+  static already_AddRefed<MediaEngineRemoteVideoSource> CreateFrom(
+      const MediaEngineRemoteVideoSource* aSource,
+      const MediaDevice* aMediaDevice);
 
   // ExternalRenderer
   /**
@@ -123,6 +112,8 @@ class MediaEngineRemoteVideoSource : public MediaEngineSource,
   nsresult FocusOnSelectedSource() override;
   nsresult Stop() override;
 
+  nsresult StartCapture(const NormalizedConstraints& aConstraints,
+                        const dom::VideoResizeModeEnum& aResizeMode);
   uint32_t GetBestFitnessDistance(
       const nsTArray<const NormalizedConstraintSet*>& aConstraintSets,
       const MediaEnginePrefs& aPrefs) const override;
@@ -172,7 +163,7 @@ class MediaEngineRemoteVideoSource : public MediaEngineSource,
 
   // mMutex protects certain members on 3 threads:
   // MediaManager, Cameras IPC and MediaTrackGraph.
-  Mutex mMutex MOZ_UNANNOTATED;
+  mutable Mutex mMutex MOZ_UNANNOTATED;
 
   // Current state of this source.
   // Set under mMutex on the owning thread. Accessed under one of the two.
@@ -195,17 +186,25 @@ class MediaEngineRemoteVideoSource : public MediaEngineSource,
   // incoming images. Cameras IPC thread only.
   webrtc::VideoFrameBufferPool mRescalingBufferPool;
 
-  // The intrinsic size of the latest captured image, so we can feed black
-  // images of the same size while stopped.
+  // The intrinsic size of the latest received image, before cropping and
+  // scaling down. So we can provide a decent guess to settings for desktop
+  // sources, since they don't provide capabilities.
   // Set under mMutex on the Cameras IPC thread. Accessed under one of the two.
-  gfx::IntSize mImageSize = gfx::IntSize(0, 0);
+  gfx::IntSize mIncomingImageSize = gfx::IntSize(0, 0);
+
+  // The intrinsic size of the latest processed image, after cropping and
+  // scaling down. So we can update settings on main thread in response to size
+  // changes.
+  // Set under mMutex on the Cameras IPC thread. Accessed under one of the two.
+  gfx::IntSize mScaledImageSize = gfx::IntSize(0, 0);
 
   struct AtomicBool {
     Atomic<bool> mValue;
   };
 
   // True when resolution settings have been updated from a real frame's
-  // resolution. Threadsafe.
+  // resolution. Threadsafe. Set to false on the owning thread. Set to true on
+  // main thread.
   const RefPtr<media::Refcountable<AtomicBool>> mSettingsUpdatedByFrame;
 
   // The current settings of this source.

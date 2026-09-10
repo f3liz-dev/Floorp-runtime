@@ -1,16 +1,13 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
-#include "gc/AtomMarking-inl.h"
 
 #include <type_traits>
 
 #include "gc/GCLock.h"
 #include "gc/PublicIterators.h"
 
+#include "gc/AtomMarking-inl.h"
 #include "gc/GC-inl.h"
 #include "gc/Heap-inl.h"
 #include "gc/PrivateIterators-inl.h"
@@ -20,35 +17,52 @@ namespace gc {
 
 // [SMDOC] GC Atom Marking
 //
-// Things in the atoms zone (which includes atomized strings and other things,
-// all of which we will refer to as 'atoms' here) may be pointed to freely by
-// things in other zones. To avoid the need to perform garbage collections of
-// the entire runtime to collect atoms, we compute a separate atom mark bitmap
-// for each zone that is always an overapproximation of the atoms that zone is
-// using. When an atom is not in the mark bitmap for any zone, it can be
-// destroyed.
+// Things in the atoms zone (which includes atomized strings, symbols, and other
+// things, all of which we will refer to as 'atoms' here) may be pointed to
+// freely by things in other zones. To avoid the need to perform garbage
+// collections of the entire runtime to collect atoms, we compute a separate
+// atom reference bitmap for each zone that is always an overapproximation of
+// the atoms that zone is using: if a zone has a reference to an atom, then it
+// MUST have a reference recorded in the bitmap. If there is a reference in the
+// bitmap, there (only) MAY be an actual reference from the zone. When an atom
+// is not in the reference bitmap for any zone, it can be destroyed.
+//
+// (These bitmaps can only be calculated exactly if we collect a single zone
+// since they are based on the marking state at the end of a GC which may have
+// marked multiple zones.)
+//
+// Note that some "atoms" can be marked gray, and those atoms will store a color
+// in both their mark bitmaps and the zones' reference bitmaps. Atoms will be
+// marked with the maximum color of all incoming references.
 //
 // To minimize interference with the rest of the GC, atom marking and sweeping
-// is done by manipulating the mark bitmaps in the chunks used for the atoms.
-// When the atoms zone is being collected, the mark bitmaps for the chunk(s)
-// used by the atoms are updated normally during marking. After marking
-// finishes, the chunk mark bitmaps are translated to a more efficient atom mark
-// bitmap (see below) that is stored on the zones which the GC collected
-// (computeBitmapFromChunkMarkBits). Before sweeping begins, the chunk mark
-// bitmaps are updated with any atoms that might be referenced by zones which
-// weren't collected (markAtomsUsedByUncollectedZones). The GC sweeping will
-// then release all atoms which are not marked by any zone.
+// is done by manipulating the reference bitmaps in the chunks holding the
+// atoms. When the atoms zone is being collected, the reference bitmaps for the
+// chunk(s) used by the atoms are updated normally during marking (though note
+// that this marking may rely on uncollected zones' bitmaps.)
 //
-// The representation of atom mark bitmaps is as follows:
+// After marking has finished and before sweeping begins, two things happen:
+//
+//  1) The atom reference bitmaps for collected zones are updated to remove
+//     atoms that GC marking has found are not referenced by any collected zone
+//     (see refineZoneBitmapsForCollectedZones). This improves our
+//     approximation.
+//
+//  2) The chunk reference bitmaps are updated with any atoms that might be
+//     referenced by zones which weren't collected (see
+//     markAtomsUsedByUncollectedZones).
+//
+// GC sweeping will then release all atoms not marked by any zone.
+//
+// The representation of atom reference bitmaps is as follows:
 //
 // Each arena in the atoms zone has an atomBitmapStart() value indicating the
-// word index into the bitmap of the first thing in the arena. Each arena uses
-// ArenaBitmapWords of data to store its bitmap, which uses the same
-// representation as chunk mark bitmaps: one bit is allocated per Cell, with
-// bits for space between things being unused when things are larger than a
-// single Cell.
+// word index into the mark bitmap of the first thing in the arena. Each arena
+// uses ArenaBitmapWords of data to store its mark bitmap, which uses the same
+// representation as chunk reference bitmaps: at least two bits per cell (see
+// CellBytesPerMarkBit and MarkBitsPerCell).
 
-size_t AtomMarkingRuntime::allocateIndex(GCRuntime* gc) {
+size_t AtomRefRuntime::allocateIndex(GCRuntime* gc) {
   // We need to find a range of bits from the atoms bitmap for this arena.
 
   // Try to merge background swept free indexes if necessary.
@@ -67,7 +81,7 @@ size_t AtomMarkingRuntime::allocateIndex(GCRuntime* gc) {
   return index;
 }
 
-void AtomMarkingRuntime::freeIndex(size_t index, const AutoLockGC& lock) {
+void AtomRefRuntime::freeIndex(size_t index, const AutoLockGC& lock) {
   MOZ_ASSERT((index % ArenaBitmapWords) == 0);
   MOZ_ASSERT(index < allocatedWords);
 
@@ -84,7 +98,7 @@ void AtomMarkingRuntime::freeIndex(size_t index, const AutoLockGC& lock) {
   }
 }
 
-void AtomMarkingRuntime::mergePendingFreeArenaIndexes(GCRuntime* gc) {
+void AtomRefRuntime::mergePendingFreeArenaIndexes(GCRuntime* gc) {
   MOZ_ASSERT(CurrentThreadCanAccessRuntime(gc->rt));
   if (!hasPendingFreeArenaIndexes) {
     return;
@@ -105,46 +119,114 @@ void AtomMarkingRuntime::mergePendingFreeArenaIndexes(GCRuntime* gc) {
   pendingFreeArenaIndexes.ref().clear();
 }
 
-void AtomMarkingRuntime::refineZoneBitmapsForCollectedZones(GCRuntime* gc) {
-  size_t collectedZones = 0;
-  for (ZonesIter zone(gc, SkipAtoms); !zone.done(); zone.next()) {
-    if (zone->isCollecting()) {
-      collectedZones++;
+// Return whether more than one zone is being collected.
+static bool MultipleNonAtomZonesAreBeingCollected(GCRuntime* gc) {
+  size_t count = 0;
+  for (GCZonesIter zone(gc); !zone.done(); zone.next()) {
+    if (!zone->isAtomsZone()) {
+      count++;
+      if (count == 2) {
+        return true;
+      }
     }
   }
 
-  // If there is more than one zone to update, copy the chunk mark bits into a
-  // bitmap and AND that into the atom marking bitmap for each zone.
+  return false;
+}
+
+void AtomRefRuntime::refineZoneBitmapsForCollectedZones(GCRuntime* gc) {
+  // If there is more than one zone to update, it's more efficient to copy the
+  // chunk mark bits from each arena into a single dense bitmap and then use
+  // that to refine the atom reference bitmap for each zone.
   DenseBitmap marked;
-  if (collectedZones > 1 && computeBitmapFromChunkMarkBits(gc, marked)) {
-    for (GCZonesIter zone(gc); !zone.done(); zone.next()) {
+  if (MultipleNonAtomZonesAreBeingCollected(gc) &&
+      computeBitmapFromChunkMarkBits(gc, marked)) {
+    for (GCZonesIter zone(gc, SkipAtoms); !zone.done(); zone.next()) {
       refineZoneBitmapForCollectedZone(zone, marked);
     }
     return;
   }
 
-  // If there's only one zone (or on OOM), AND the mark bits for each arena into
-  // the zones' atom marking bitmaps directly.
-  for (GCZonesIter zone(gc); !zone.done(); zone.next()) {
-    if (zone->isAtomsZone()) {
-      continue;
-    }
-
+  // If there's only one zone (or on OOM), refine the mark bits for each arena
+  // with the zones' atom reference bitmaps directly.
+  for (GCZonesIter zone(gc, SkipAtoms); !zone.done(); zone.next()) {
     for (auto thingKind : AllAllocKinds()) {
       for (ArenaIterInGC aiter(gc->atomsZone(), thingKind); !aiter.done();
            aiter.next()) {
-        Arena* arena = aiter.get();
-        AtomicBitmapWord* chunkWords =
-            arena->chunk()->markBits.arenaBits(arena);
-        zone->markedAtoms().bitwiseAndRangeWith(arena->atomBitmapStart(),
-                                                ArenaBitmapWords, chunkWords);
+        refineZoneBitmapForCollectedZone(zone, aiter);
       }
     }
   }
 }
 
-bool AtomMarkingRuntime::computeBitmapFromChunkMarkBits(GCRuntime* gc,
-                                                        DenseBitmap& bitmap) {
+// Refining atom reference bitmaps:
+//
+// The atom reference bitmap for a zone records an overapproximation of the
+// reference colour for each atom referenced by that zone. After collection we
+// refine this based on the actual final mark state. The final mark state is the
+// maximum of the mark colours of all references to each atom. Therefore we
+// refine the bitmap by setting it to the minimum of itself and the actual mark
+// state for each atom.
+//
+// To find the minimum we use bitwise AND. For trace kinds that can only be
+// marked black this works on its own. For kinds that can be marked gray we must
+// preprocess the mark bitmap so that both mark bits are set for black cells.
+
+// Masks of bit positions in a mark bitmap word that can be ColorBit::BlackBit
+// or GrayOrBlackBit, which alternative throughout the word.
+#if JS_BITS_PER_WORD == 32
+static constexpr uintptr_t BlackBitMask = 0x55555555;
+#else
+static constexpr uintptr_t BlackBitMask = 0x5555555555555555;
+#endif
+static constexpr uintptr_t GrayOrBlackBitMask = ~BlackBitMask;
+
+static void PropagateBlackBitsToGrayOrBlackBits(DenseBitmap& bitmap,
+                                                Arena* arena) {
+  // This only works if the gray bit and black bits are in the same word,
+  // which is true for symbols.
+  MOZ_ASSERT(
+      TraceKindCanBeMarkedGray(MapAllocToTraceKind(arena->getAllocKind())));
+  MOZ_ASSERT((arena->getThingSize() / CellBytesPerMarkBit) % 2 == 0);
+
+  bitmap.forEachWord(
+      arena->atomBitmapStart(), ArenaBitmapWords,
+      [](uintptr_t& word) { word |= (word & BlackBitMask) << 1; });
+}
+
+static void PropagateBlackBitsToGrayOrBlackBits(
+    uintptr_t (&words)[ArenaBitmapWords]) {
+  for (uintptr_t& word : words) {
+    word |= (word & BlackBitMask) << 1;
+  }
+}
+
+static void PropagateGrayOrBlackBitsToBlackBits(SparseBitmap& bitmap,
+                                                Arena* arena) {
+  // This only works if the gray bit and black bits are in the same word,
+  // which is true for symbols.
+  MOZ_ASSERT(
+      TraceKindCanBeMarkedGray(MapAllocToTraceKind(arena->getAllocKind())));
+  MOZ_ASSERT((arena->getThingSize() / CellBytesPerMarkBit) % 2 == 0);
+
+  bitmap.forEachWord(
+      arena->atomBitmapStart(), ArenaBitmapWords,
+      [](uintptr_t& word) { word |= (word & GrayOrBlackBitMask) >> 1; });
+}
+
+#ifdef DEBUG
+static bool ArenaContainsGrayCells(Arena* arena) {
+  for (ArenaCellIter cell(arena); !cell.done(); cell.next()) {
+    if (cell->isMarkedGray()) {
+      return true;
+    }
+  }
+  return false;
+}
+#endif
+
+bool AtomRefRuntime::computeBitmapFromChunkMarkBits(GCRuntime* gc,
+                                                    DenseBitmap& bitmap) {
   MOZ_ASSERT(CurrentThreadIsPerformingGC());
 
   if (!bitmap.ensureSpace(allocatedWords)) {
@@ -159,29 +241,62 @@ bool AtomMarkingRuntime::computeBitmapFromChunkMarkBits(GCRuntime* gc,
       AtomicBitmapWord* chunkWords = arena->chunk()->markBits.arenaBits(arena);
       bitmap.copyBitsFrom(arena->atomBitmapStart(), ArenaBitmapWords,
                           chunkWords);
+
+      if (thingKind == AllocKind::JITCODE) {
+        // The atoms zone can contain JitCode used for compiled self-hosted JS,
+        // however these cells are never marked gray so we can skip this step.
+        MOZ_ASSERT(!ArenaContainsGrayCells(arena));
+      } else if (TraceKindCanBeMarkedGray(MapAllocToTraceKind(thingKind))) {
+        // Ensure both mark bits are set for black cells so we can compute the
+        // minimum of each mark color by bitwise AND.
+        PropagateBlackBitsToGrayOrBlackBits(bitmap, arena);
+      }
     }
   }
 
   return true;
 }
 
-void AtomMarkingRuntime::refineZoneBitmapForCollectedZone(
+void AtomRefRuntime::refineZoneBitmapForCollectedZone(
     Zone* zone, const DenseBitmap& bitmap) {
   MOZ_ASSERT(zone->isCollectingFromAnyThread());
+  MOZ_ASSERT(!zone->isAtomsZone());
 
-  if (zone->isAtomsZone()) {
+  // Compute the intersection of the given mark bitmap and the zone's reference
+  // set to get the best new overapproximation we can. |bitmap| might include
+  // bits that are not in the zone's reference set, if additional zones were
+  // collected by the GC.
+  zone->referencedAtoms().bitwiseAndWith(bitmap);
+}
+
+void AtomRefRuntime::refineZoneBitmapForCollectedZone(Zone* zone,
+                                                      Arena* arena) {
+  MOZ_ASSERT(zone->isCollectingFromAnyThread());
+  MOZ_ASSERT(!zone->isAtomsZone());
+
+  AtomicBitmapWord* chunkWords = arena->chunk()->markBits.arenaBits(arena);
+
+  AllocKind kind = arena->getAllocKind();
+  if (kind == AllocKind::JITCODE) {
+    // The atoms zone can contain JitCode used for compiled self-hosted JS,
+    // however these cells are never marked gray so we can skip this step.
+    MOZ_ASSERT(!ArenaContainsGrayCells(arena));
+  } else if (TraceKindCanBeMarkedGray(MapAllocToTraceKind(kind))) {
+    uintptr_t words[ArenaBitmapWords];
+    memcpy(words, chunkWords, sizeof(words));
+    PropagateBlackBitsToGrayOrBlackBits(words);
+    zone->referencedAtoms().bitwiseAndRangeWith(arena->atomBitmapStart(),
+                                                ArenaBitmapWords, words);
     return;
   }
 
-  // Take the bitwise and between the two mark bitmaps to get the best new
-  // overapproximation we can. |bitmap| might include bits that are not in
-  // the zone's mark bitmap, if additional zones were collected by the GC.
-  zone->markedAtoms().bitwiseAndWith(bitmap);
+  zone->referencedAtoms().bitwiseAndRangeWith(arena->atomBitmapStart(),
+                                              ArenaBitmapWords, chunkWords);
 }
 
-// Set any bits in the chunk mark bitmaps for atoms which are marked in bitmap.
+// Set any bits in the chunk mark bitmaps for atoms in a reference bitmap.
 template <typename Bitmap>
-static void BitwiseOrIntoChunkMarkBits(Zone* atomsZone, Bitmap& bitmap) {
+static void BitwiseOrIntoChunkMarkBits(Zone* atomsZone, const Bitmap& bitmap) {
   // Make sure that by copying the mark bits for one arena in word sizes we
   // do not affect the mark bits for other arenas.
   static_assert(ArenaBitmapBits == ArenaBitmapWords * JS_BITS_PER_WORD,
@@ -198,7 +313,7 @@ static void BitwiseOrIntoChunkMarkBits(Zone* atomsZone, Bitmap& bitmap) {
   }
 }
 
-UniquePtr<DenseBitmap> AtomMarkingRuntime::getOrMarkAtomsUsedByUncollectedZones(
+UniquePtr<DenseBitmap> AtomRefRuntime::getOrMarkAtomsUsedByUncollectedZones(
     GCRuntime* gc) {
   MOZ_ASSERT(CurrentThreadIsPerformingGC());
 
@@ -207,7 +322,7 @@ UniquePtr<DenseBitmap> AtomMarkingRuntime::getOrMarkAtomsUsedByUncollectedZones(
     // On failure, mark the atoms immediately.
     for (ZonesIter zone(gc, SkipAtoms); !zone.done(); zone.next()) {
       if (!zone->isCollecting()) {
-        BitwiseOrIntoChunkMarkBits(gc->atomsZone(), zone->markedAtoms());
+        BitwiseOrIntoChunkMarkBits(gc->atomsZone(), zone->referencedAtoms());
       }
     }
     return nullptr;
@@ -215,47 +330,71 @@ UniquePtr<DenseBitmap> AtomMarkingRuntime::getOrMarkAtomsUsedByUncollectedZones(
 
   for (ZonesIter zone(gc, SkipAtoms); !zone.done(); zone.next()) {
     if (!zone->isCollecting()) {
-      zone->markedAtoms().bitwiseOrInto(*markedUnion);
+      zone->referencedAtoms().bitwiseOrInto(*markedUnion);
     }
   }
 
   return markedUnion;
 }
 
-void AtomMarkingRuntime::markAtomsUsedByUncollectedZones(
+void AtomRefRuntime::markAtomsUsedByUncollectedZones(
     GCRuntime* gc, UniquePtr<DenseBitmap> markedUnion) {
   BitwiseOrIntoChunkMarkBits(gc->atomsZone(), *markedUnion);
 }
 
-template <typename T>
-void AtomMarkingRuntime::markAtom(JSContext* cx, T* thing) {
-  return inlinedMarkAtom(cx, thing);
+void AtomRefRuntime::unmarkAllGrayReferences(GCRuntime* gc) {
+  for (ZonesIter sourceZone(gc, SkipAtoms); !sourceZone.done();
+       sourceZone.next()) {
+    MOZ_ASSERT(!sourceZone->isAtomsZone());
+    auto& bitmap = sourceZone->referencedAtoms();
+    for (ArenaIter arena(gc->atomsZone(), AllocKind::SYMBOL); !arena.done();
+         arena.next()) {
+      PropagateGrayOrBlackBitsToBlackBits(bitmap, arena);
+    }
+#ifdef DEBUG
+    for (auto cell = gc->atomsZone()->cellIter<JS::Symbol>(); !cell.done();
+         cell.next()) {
+      MOZ_ASSERT(getRefColor(sourceZone, cell.get()) != CellColor::Gray);
+    }
+#endif
+  }
 }
 
-template void AtomMarkingRuntime::markAtom(JSContext* cx, JSAtom* thing);
-template void AtomMarkingRuntime::markAtom(JSContext* cx, JS::Symbol* thing);
+template <typename T>
+void AtomRefRuntime::recordRef(JSContext* cx, T* thing) {
+  // Trigger a read barrier on the atom, in case there is an incremental
+  // GC in progress. This is necessary if the atom is being marked
+  // because a reference to it was obtained from another zone which is
+  // not being collected by the incremental GC.
+  ReadBarrier(thing);
 
-void AtomMarkingRuntime::markId(JSContext* cx, jsid id) {
+  inlinedRecordRefInfallible(cx->zone(), thing);
+}
+
+template void AtomRefRuntime::recordRef(JSContext* cx, JSAtom* thing);
+template void AtomRefRuntime::recordRef(JSContext* cx, JS::Symbol* thing);
+
+void AtomRefRuntime::recordRefToId(JSContext* cx, jsid id) {
   if (id.isAtom()) {
-    markAtom(cx, id.toAtom());
+    recordRef(cx, id.toAtom());
     return;
   }
   if (id.isSymbol()) {
-    markAtom(cx, id.toSymbol());
+    recordRef(cx, id.toSymbol());
     return;
   }
   MOZ_ASSERT(!id.isGCThing());
 }
 
-void AtomMarkingRuntime::markAtomValue(JSContext* cx, const Value& value) {
+void AtomRefRuntime::recordRefToValue(JSContext* cx, const Value& value) {
   if (value.isString()) {
     if (value.toString()->isAtom()) {
-      markAtom(cx, &value.toString()->asAtom());
+      recordRef(cx, &value.toString()->asAtom());
     }
     return;
   }
   if (value.isSymbol()) {
-    markAtom(cx, value.toSymbol());
+    recordRef(cx, value.toSymbol());
     return;
   }
   MOZ_ASSERT_IF(value.isGCThing(), value.isObject() ||
@@ -264,7 +403,7 @@ void AtomMarkingRuntime::markAtomValue(JSContext* cx, const Value& value) {
 }
 
 template <typename T>
-bool AtomMarkingRuntime::atomIsMarked(Zone* zone, T* thing) {
+CellColor AtomRefRuntime::getRefColor(Zone* zone, T* thing) {
   static_assert(std::is_same_v<T, JSAtom> || std::is_same_v<T, JS::Symbol>,
                 "Should only be called with JSAtom* or JS::Symbol* argument");
 
@@ -273,72 +412,113 @@ bool AtomMarkingRuntime::atomIsMarked(Zone* zone, T* thing) {
   MOZ_ASSERT(thing->zoneFromAnyThread()->isAtomsZone());
 
   if (!zone->runtimeFromAnyThread()->permanentAtomsPopulated()) {
-    return true;
+    return CellColor::Black;
   }
 
   if (thing->isPermanentAndMayBeShared()) {
-    return true;
+    return CellColor::Black;
   }
 
   if constexpr (std::is_same_v<T, JSAtom>) {
     if (thing->isPinned()) {
-      return true;
+      return CellColor::Black;
     }
   }
 
-  size_t bit = GetAtomBit(&thing->asTenured());
-  return zone->markedAtoms().readonlyThreadsafeGetBit(bit);
+  AutoMarkingLock lock(zone, atomRefLock);
+
+  size_t bit = getAtomBit(&thing->asTenured());
+
+  size_t blackBit = bit + size_t(ColorBit::BlackBit);
+  size_t grayOrBlackBit = bit + size_t(ColorBit::GrayOrBlackBit);
+
+  SparseBitmap& bitmap = zone->referencedAtoms();
+
+  MOZ_ASSERT_IF((std::is_same_v<T, JSAtom>),
+                !bitmap.readonlyThreadsafeGetBit(grayOrBlackBit));
+  MOZ_ASSERT_IF((std::is_same_v<T, JS::Symbol>) &&
+                    bitmap.readonlyThreadsafeGetBit(blackBit),
+                bitmap.readonlyThreadsafeGetBit(grayOrBlackBit));
+
+  if (bitmap.readonlyThreadsafeGetBit(blackBit)) {
+    return CellColor::Black;
+  }
+
+  if constexpr (std::is_same_v<T, JS::Symbol>) {
+    if (bitmap.readonlyThreadsafeGetBit(grayOrBlackBit)) {
+      return CellColor::Gray;
+    }
+  }
+
+  return CellColor::White;
 }
 
-template bool AtomMarkingRuntime::atomIsMarked(Zone* zone, JSAtom* thing);
-template bool AtomMarkingRuntime::atomIsMarked(Zone* zone, JS::Symbol* thing);
+template CellColor AtomRefRuntime::getRefColor(Zone* zone, JSAtom* thing);
+template CellColor AtomRefRuntime::getRefColor(Zone* zone, JS::Symbol* thing);
+
+CellColor AtomRefRuntime::getRefColorForIndex(Zone* zone, size_t bitIndex) {
+  MOZ_ASSERT(zone->runtimeFromAnyThread()->permanentAtomsPopulated());
+
+  size_t blackBit = bitIndex + size_t(ColorBit::BlackBit);
+  size_t grayOrBlackBit = bitIndex + size_t(ColorBit::GrayOrBlackBit);
+
+  SparseBitmap& bitmap = zone->referencedAtoms();
+  bool blackBitSet = bitmap.readonlyThreadsafeGetBit(blackBit);
+  bool grayOrBlackBitSet = bitmap.readonlyThreadsafeGetBit(grayOrBlackBit);
+
+  if (blackBitSet) {
+    return CellColor::Black;
+  }
+
+  if (grayOrBlackBitSet) {
+    return CellColor::Gray;
+  }
+
+  return CellColor::White;
+}
 
 #ifdef DEBUG
 
 template <>
-bool AtomMarkingRuntime::atomIsMarked(Zone* zone, TenuredCell* thing) {
-  if (!thing) {
-    return true;
-  }
+CellColor AtomRefRuntime::getRefColor(Zone* zone, TenuredCell* thing) {
+  MOZ_ASSERT(thing);
+  MOZ_ASSERT(thing->zoneFromAnyThread()->isAtomsZone());
 
   if (thing->is<JSString>()) {
     JSString* str = thing->as<JSString>();
-    if (!str->isAtom()) {
-      return true;
-    }
-    return atomIsMarked(zone, &str->asAtom());
+    return getRefColor(zone, &str->asAtom());
   }
 
   if (thing->is<JS::Symbol>()) {
-    return atomIsMarked(zone, thing->as<JS::Symbol>());
+    return getRefColor(zone, thing->as<JS::Symbol>());
   }
 
-  return true;
+  MOZ_CRASH("Unexpected atom kind");
 }
 
-bool AtomMarkingRuntime::idIsMarked(Zone* zone, jsid id) {
+bool AtomRefRuntime::hasRefToId(Zone* zone, jsid id) {
   if (id.isAtom()) {
-    return atomIsMarked(zone, id.toAtom());
+    return hasRef(zone, id.toAtom());
   }
 
   if (id.isSymbol()) {
-    return atomIsMarked(zone, id.toSymbol());
+    return hasRef(zone, id.toSymbol());
   }
 
   MOZ_ASSERT(!id.isGCThing());
   return true;
 }
 
-bool AtomMarkingRuntime::valueIsMarked(Zone* zone, const Value& value) {
+bool AtomRefRuntime::hasRefToValue(Zone* zone, const Value& value) {
   if (value.isString()) {
     if (value.toString()->isAtom()) {
-      return atomIsMarked(zone, &value.toString()->asAtom());
+      return hasRef(zone, &value.toString()->asAtom());
     }
     return true;
   }
 
   if (value.isSymbol()) {
-    return atomIsMarked(zone, value.toSymbol());
+    return hasRef(zone, value.toSymbol());
   }
 
   MOZ_ASSERT_IF(value.isGCThing(), value.isObject() ||
@@ -353,17 +533,17 @@ bool AtomMarkingRuntime::valueIsMarked(Zone* zone, const Value& value) {
 
 #ifdef DEBUG
 
-bool AtomIsMarked(Zone* zone, JSAtom* atom) {
-  return zone->runtimeFromAnyThread()->gc.atomMarking.atomIsMarked(zone, atom);
+bool ZoneHasRef(Zone* zone, JSAtom* atom) {
+  return zone->runtimeFromAnyThread()->gc.atomReferences.hasRef(zone, atom);
 }
 
-bool AtomIsMarked(Zone* zone, jsid id) {
-  return zone->runtimeFromAnyThread()->gc.atomMarking.idIsMarked(zone, id);
+bool ZoneHasRef(Zone* zone, jsid id) {
+  return zone->runtimeFromAnyThread()->gc.atomReferences.hasRefToId(zone, id);
 }
 
-bool AtomIsMarked(Zone* zone, const Value& value) {
-  return zone->runtimeFromAnyThread()->gc.atomMarking.valueIsMarked(zone,
-                                                                    value);
+bool ZoneHasRef(Zone* zone, const Value& value) {
+  return zone->runtimeFromAnyThread()->gc.atomReferences.hasRefToValue(zone,
+                                                                       value);
 }
 
 #endif  // DEBUG

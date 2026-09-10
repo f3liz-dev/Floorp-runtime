@@ -7,7 +7,8 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
-  SessionStore: "resource:///modules/sessionstore/SessionStore.sys.mjs",
+  SessionStore:
+    "moz-src:///browser/components/sessionstore/SessionStore.sys.mjs",
   TabMetrics: "moz-src:///browser/components/tabbrowser/TabMetrics.sys.mjs",
 });
 
@@ -24,13 +25,16 @@ export var SessionWindowUI = {
    */
   restoreLastClosedTabOrWindowOrSession(window) {
     let lastActionTaken = lazy.SessionStore.popLastClosedAction();
-
     if (lastActionTaken) {
       switch (lastActionTaken.type) {
-        case lazy.SessionStore.LAST_ACTION_CLOSED_TAB: {
-          this.undoCloseTab(window);
+        case lazy.SessionStore.LAST_ACTION_CLOSED_TAB:
+          {
+            const sourceWindow = lazy.SessionStore.getWindowForTabClosedId(
+              lastActionTaken.closedId
+            );
+            this.undoCloseTab(window, undefined, sourceWindow?.__SSi);
+          }
           break;
-        }
         case lazy.SessionStore.LAST_ACTION_CLOSED_WINDOW: {
           this.undoCloseWindow();
           break;
@@ -49,6 +53,7 @@ export var SessionWindowUI = {
 
   /**
    * Re-open a closed tab into the current window.
+   *
    * @param window
    *        Window reference
    * @param [aIndex]
@@ -139,6 +144,7 @@ export var SessionWindowUI = {
 
   /**
    * Re-open a closed window.
+   *
    * @param aIndex
    *        The index of the window (via SessionStore.getClosedWindowData)
    * @returns a reference to the reopened window.
@@ -156,7 +162,9 @@ export var SessionWindowUI = {
    * Only show the infobar when canRestoreLastSession and the pref value == 1
    */
   async maybeShowRestoreSessionInfoBar() {
-    let win = lazy.BrowserWindowTracker.getTopWindow();
+    let win = lazy.BrowserWindowTracker.getTopWindow({
+      allowFromInactiveWorkspace: true,
+    });
     let count = Services.prefs.getIntPref(
       "browser.startup.couldRestoreSession.count",
       0

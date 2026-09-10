@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,6 +7,7 @@
 
 #include "mozilla/ErrorNames.h"
 #include "mozilla/IntegerPrintfMacros.h"
+#include "mozilla/Logging.h"
 #include "nsError.h"
 #include "nsPrintfCString.h"
 #include "nsString.h"  // Required before 'mozilla/ErrorNames.h'!?
@@ -43,6 +42,16 @@ class MediaResult {
   MediaResult(nsresult aResult, CDMProxy* aCDMProxy)
       : mCode(aResult), mCDMProxy(aCDMProxy) {
     MOZ_ASSERT(aResult == NS_ERROR_DOM_MEDIA_CDM_PROXY_NOT_SUPPORTED_ERR);
+  }
+  static MediaResult Logged(nsresult aResult, const char* aMessage,
+                            const LogModule* aLogModule) {
+    MOZ_LOG_FMT(aLogModule, LogLevel::Warning, "{}", aMessage);
+    return MediaResult(aResult, aMessage);
+  }
+  static MediaResult Logged(nsresult aResult, const nsCString& aMessage,
+                            const LogModule* aLogModule) {
+    MOZ_LOG_FMT(aLogModule, LogLevel::Warning, "{}", aMessage.get());
+    return MediaResult(aResult, aMessage);
   }
   MediaResult(const MediaResult& aOther) = default;
   MediaResult(MediaResult&& aOther) = default;

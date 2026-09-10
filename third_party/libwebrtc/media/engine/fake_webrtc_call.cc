@@ -10,9 +10,10 @@
 
 #include "media/engine/fake_webrtc_call.h"
 
-#include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,6 +25,7 @@
 #include "api/call/audio_sink.h"
 #include "api/crypto/frame_decryptor_interface.h"
 #include "api/environment/environment.h"
+#include "api/fec_controller.h"
 #include "api/frame_transformer_interface.h"
 #include "api/make_ref_counted.h"
 #include "api/media_types.h"
@@ -35,6 +37,7 @@
 #include "api/task_queue/task_queue_base.h"
 #include "api/units/timestamp.h"
 #include "api/video/video_source_interface.h"
+#include "api/video/video_stream_encoder_settings.h"
 #include "api/video_codecs/video_codec.h"
 #include "api/video_codecs/video_encoder.h"
 #include "call/audio_receive_stream.h"
@@ -46,7 +49,6 @@
 #include "call/video_send_stream.h"
 #include "media/base/media_channel.h"
 #include "modules/rtp_rtcp/source/rtp_packet_received.h"
-#include "modules/rtp_rtcp/source/rtp_util.h"
 #include "rtc_base/buffer.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/copy_on_write_buffer.h"
@@ -58,8 +60,6 @@
 
 namespace webrtc {
 
-using ::webrtc::Environment;
-using ::webrtc::ParseRtpSsrc;
 
 FakeAudioSendStream::FakeAudioSendStream(int id,
                                          const AudioSendStream::Config& config)
@@ -68,7 +68,7 @@ FakeAudioSendStream::FakeAudioSendStream(int id,
 void FakeAudioSendStream::Reconfigure(const AudioSendStream::Config& config,
                                       SetParametersCallback callback) {
   config_ = config;
-  webrtc::InvokeSetParametersCallback(callback, RTCError::OK());
+  InvokeSetParametersCallback(callback, RTCError::OK());
 }
 
 const AudioSendStream::Config& FakeAudioSendStream::GetConfig() const {
@@ -123,16 +123,15 @@ void FakeAudioReceiveStream::SetStats(
   stats_ = stats;
 }
 
-bool FakeAudioReceiveStream::VerifyLastPacket(const uint8_t* data,
-                                              size_t length) const {
-  return last_packet_ == Buffer(data, length);
+bool FakeAudioReceiveStream::VerifyLastPacket(
+    std::span<const uint8_t> data) const {
+  return last_packet_ == Buffer(data.data(), data.size());
 }
 
-bool FakeAudioReceiveStream::DeliverRtp(const uint8_t* packet,
-                                        size_t length,
+bool FakeAudioReceiveStream::DeliverRtp(std::span<const uint8_t> packet,
                                         int64_t /* packet_time_us */) {
   ++received_packets_;
-  last_packet_.SetData(packet, length);
+  last_packet_.SetData(packet);
   return true;
 }
 
@@ -187,8 +186,8 @@ FakeVideoSendStream::FakeVideoSendStream(const Environment& env,
       framerate_scaling_enabled_(false),
       source_(nullptr),
       num_swapped_frames_(0) {
-  RTC_DCHECK(config.encoder_settings.encoder_factory != nullptr);
-  RTC_DCHECK(config.encoder_settings.bitrate_allocator_factory != nullptr);
+  RTC_DCHECK(config_.encoder_settings.encoder_factory != nullptr);
+  RTC_DCHECK(config_.encoder_settings.bitrate_allocator_factory != nullptr);
   ReconfigureVideoEncoder(std::move(encoder_config));
 }
 
@@ -296,6 +295,8 @@ VideoSendStream::Stats FakeVideoSendStream::GetStats() {
   return stats_;
 }
 
+void FakeVideoSendStream::SetCsrcs(std::span<const uint32_t> csrcs) {}
+
 void FakeVideoSendStream::ReconfigureVideoEncoder(VideoEncoderConfig config) {
   ReconfigureVideoEncoder(std::move(config), nullptr);
 }
@@ -353,7 +354,7 @@ void FakeVideoSendStream::ReconfigureVideoEncoder(
   codec_settings_set_ = config.encoder_specific_settings != nullptr;
   encoder_config_ = std::move(config);
   ++num_encoder_reconfigurations_;
-  webrtc::InvokeSetParametersCallback(callback, RTCError::OK());
+  InvokeSetParametersCallback(callback, RTCError::OK());
 }
 
 void FakeVideoSendStream::Start() {
@@ -391,7 +392,7 @@ void FakeVideoSendStream::SetSource(
       resolution_scaling_enabled_ = true;
       framerate_scaling_enabled_ = true;
       break;
-    case DegradationPreference::DISABLED:
+    case DegradationPreference::MAINTAIN_FRAMERATE_AND_RESOLUTION:
       resolution_scaling_enabled_ = false;
       framerate_scaling_enabled_ = false;
       break;
@@ -467,8 +468,8 @@ FakeCall::FakeCall(const Environment& env,
     : env_(env),
       network_thread_(network_thread),
       worker_thread_(worker_thread),
-      audio_network_state_(webrtc::kNetworkUp),
-      video_network_state_(webrtc::kNetworkUp),
+      audio_network_state_(kNetworkUp),
+      video_network_state_(kNetworkUp),
       num_created_send_streams_(0),
       num_created_receive_streams_(0) {}
 
@@ -537,13 +538,13 @@ NetworkState FakeCall::GetNetworkState(MediaType media) const {
     case MediaType::ANY:
     case MediaType::UNSUPPORTED:
       ADD_FAILURE() << "GetNetworkState called with unknown parameter.";
-      return webrtc::kNetworkDown;
+      return kNetworkDown;
   }
   // Even though all the values for the enum class are listed above,the compiler
   // will emit a warning as the method may be called with a value outside of the
   // valid enum range, unless this case is also handled.
   ADD_FAILURE() << "GetNetworkState called with unknown parameter.";
-  return webrtc::kNetworkDown;
+  return kNetworkDown;
 }
 
 AudioSendStream* FakeCall::CreateAudioSendStream(
@@ -588,7 +589,20 @@ void FakeCall::DestroyAudioReceiveStream(
 
 VideoSendStream* FakeCall::CreateVideoSendStream(
     VideoSendStream::Config config,
-    VideoEncoderConfig encoder_config) {
+    VideoEncoderConfig encoder_config,
+    EncoderSwitchRequestCallback encoder_switch_request_callback) {
+  FakeVideoSendStream* fake_stream = new FakeVideoSendStream(
+      env_, std::move(config), std::move(encoder_config));
+  video_send_streams_.push_back(fake_stream);
+  ++num_created_send_streams_;
+  return fake_stream;
+}
+
+VideoSendStream* FakeCall::CreateVideoSendStream(
+    VideoSendStream::Config config,
+    VideoEncoderConfig encoder_config,
+    EncoderSwitchRequestCallback encoder_switch_request_callback,
+    std::unique_ptr<FecController> fec_controller) {
   FakeVideoSendStream* fake_stream = new FakeVideoSendStream(
       env_, std::move(config), std::move(encoder_config));
   video_send_streams_.push_back(fake_stream);
@@ -690,7 +704,7 @@ bool FakeCall::DeliverPacketInternal(MediaType media_type,
   if (media_type == MediaType::AUDIO) {
     for (auto receiver : audio_receive_streams_) {
       if (receiver->GetConfig().rtp.remote_ssrc == ssrc) {
-        receiver->DeliverRtp(packet.cdata(), packet.size(), arrival_time.us());
+        receiver->DeliverRtp(packet, arrival_time.us());
         ++delivered_packets_by_ssrc_[ssrc];
         return true;
       }
@@ -737,27 +751,6 @@ void FakeCall::SignalChannelNetworkState(MediaType media, NetworkState state) {
       ADD_FAILURE()
           << "SignalChannelNetworkState called with unknown parameter.";
   }
-}
-
-void FakeCall::OnAudioTransportOverheadChanged(
-    int /* transport_overhead_per_packet */) {}
-
-void FakeCall::OnLocalSsrcUpdated(AudioReceiveStreamInterface& stream,
-                                  uint32_t local_ssrc) {
-  auto& fake_stream = static_cast<FakeAudioReceiveStream&>(stream);
-  fake_stream.SetLocalSsrc(local_ssrc);
-}
-
-void FakeCall::OnLocalSsrcUpdated(VideoReceiveStreamInterface& stream,
-                                  uint32_t local_ssrc) {
-  auto& fake_stream = static_cast<FakeVideoReceiveStream&>(stream);
-  fake_stream.SetLocalSsrc(local_ssrc);
-}
-
-void FakeCall::OnLocalSsrcUpdated(FlexfecReceiveStream& stream,
-                                  uint32_t local_ssrc) {
-  auto& fake_stream = static_cast<FakeFlexfecReceiveStream&>(stream);
-  fake_stream.SetLocalSsrc(local_ssrc);
 }
 
 void FakeCall::OnUpdateSyncGroup(AudioReceiveStreamInterface& stream,

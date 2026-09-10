@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,11 +7,9 @@
 #include <stdint.h>
 
 #include <algorithm>
-#include <limits>
 
 #include "HLSUtils.h"
 #include "MediaCodec.h"
-#include "mozilla/Unused.h"
 #include "mozilla/java/GeckoAudioInfoWrappers.h"
 #include "mozilla/java/GeckoHLSDemuxerWrapperNatives.h"
 #include "mozilla/java/GeckoVideoInfoWrappers.h"
@@ -93,11 +89,11 @@ class HLSDemuxer::HLSDemuxerCallbacksSupport
           }
         }));
     MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
-    Unused << rv;
+    (void)rv;
   }
 
   void OnError(int aErrorCode) {
-    HLS_DEBUG("HLSDemuxerCallbacksSupport", "Got error(%d) from java side",
+    HLS_DEBUG("HLSDemuxerCallbacksSupport", "Got error({}) from java side",
               aErrorCode);
     MutexAutoLock lock(mMutex);
     if (!mDemuxer) {
@@ -112,7 +108,7 @@ class HLSDemuxer::HLSDemuxerCallbacksSupport
           }
         }));
     MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
-    Unused << rv;
+    (void)rv;
   }
 
   void Detach() {
@@ -359,7 +355,7 @@ void HLSTrackDemuxer::UpdateMediaInfo(int index) {
     }
     auto* audioInfo = mTrackInfo->GetAsAudioInfo();
     MOZ_ASSERT(audioInfo != nullptr);
-    HLS_DEBUG("HLSTrackDemuxer", "Update audio info (%d)", index);
+    HLS_DEBUG("HLSTrackDemuxer", "Update audio info ({})", index);
     java::GeckoAudioInfo::LocalRef audioInfoObj(std::move(infoObj));
     audioInfo->mRate = audioInfoObj->Rate();
     audioInfo->mChannels = audioInfoObj->Channels();
@@ -395,7 +391,7 @@ void HLSTrackDemuxer::UpdateMediaInfo(int index) {
     videoInfo->mMimeType =
         NS_ConvertUTF16toUTF8(videoInfoObj->MimeType()->ToString());
     videoInfo->mDuration = TimeUnit::FromMicroseconds(videoInfoObj->Duration());
-    HLS_DEBUG("HLSTrackDemuxer", "Update video info (%d) / I(%dx%d) / D(%dx%d)",
+    HLS_DEBUG("HLSTrackDemuxer", "Update video info ({}) / I({}x{}) / D({}x{})",
               index, videoInfo->mImage.width, videoInfo->mImage.height,
               videoInfo->mDisplay.width, videoInfo->mDisplay.height);
   }
@@ -475,7 +471,7 @@ CryptoSample HLSTrackDemuxer::ExtractCryptoSample(
     return crypto;
   } while (false);
 
-  HLS_DEBUG("HLSTrackDemuxer", "%s", msg);
+  HLS_DEBUG("HLSTrackDemuxer", "{}", msg);
   return CryptoSample{};
 }
 
@@ -534,7 +530,7 @@ void HLSTrackDemuxer::UpdateNextKeyFrameTime() {
   MOZ_ASSERT(mParent, "Called after BreackCycle()");
   TimeUnit nextKeyFrameTime = mParent->GetNextKeyFrameTime();
   if (nextKeyFrameTime != mNextKeyframeTime.refOr(TimeUnit::FromInfinity())) {
-    HLS_DEBUG("HLSTrackDemuxer", "Update mNextKeyframeTime to %" PRId64,
+    HLS_DEBUG("HLSTrackDemuxer", "Update mNextKeyframeTime to {}",
               nextKeyFrameTime.ToMicroseconds());
     mNextKeyframeTime = Some(nextKeyFrameTime);
   }
@@ -621,7 +617,7 @@ void HLSTrackDemuxer::BreakCycles() {
       "HLSTrackDemuxer::BreakCycles", [self]() { self->mParent = nullptr; });
   nsresult rv = mParent->GetTaskQueue()->Dispatch(task.forget());
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
-  Unused << rv;
+  (void)rv;
 }
 
 HLSTrackDemuxer::~HLSTrackDemuxer() {}

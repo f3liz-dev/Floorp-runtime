@@ -112,7 +112,6 @@ if CONFIG["TARGET_OS"] == "WINNT":
     ]
 
     OS_LIBS += [
-        "mincore",
         "shell32",
         "shlwapi",
         "user32",
@@ -162,7 +161,7 @@ DIRS += [
     "executable",
 ]
 
-if CONFIG["ENABLE_TESTS"]:
+if CONFIG["MOZ_APP_NAME"] != "zucchini":
     TEST_DIRS += [
         "tests/gtest",
     ]

@@ -1,14 +1,14 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "MoveNodeTransaction.h"
 
-#include "EditorBase.h"      // for EditorBase
-#include "EditorDOMPoint.h"  // for EditorDOMPoint
-#include "HTMLEditor.h"      // for HTMLEditor
-#include "HTMLEditUtils.h"   // for HTMLEditUtils
+#include "EditorBase.h"           // for EditorBase
+#include "EditorDOMAPIWrapper.h"  // for AutoNodeAPIWrapper
+#include "EditorDOMPoint.h"       // for EditorDOMPoint
+#include "HTMLEditor.h"           // for HTMLEditor
+#include "HTMLEditUtils.h"        // for HTMLEditUtils
 
 #include "mozilla/Likely.h"
 #include "mozilla/Logging.h"
@@ -335,9 +335,17 @@ void MoveSiblingsTransaction::RemoveAllSiblingsToMove(
   for (const size_t i : IntegerRange(aNotifier.MovingContentCount())) {
     nsIContent* const contentToMove = aNotifier.GetContentAt(i);
     MOZ_ASSERT(contentToMove);
-    // MOZ_KnownLive because it's guaranteed by both notifier and
-    // aClonedSiblingsToMove.
-    MOZ_KnownLive(contentToMove)->Remove();
+    AutoNodeAPIWrapper nodeWrapper(aHTMLEditor,
+                                   // MOZ_KnownLive because it's guaranteed by
+                                   // both notifier and aClonedSiblingsToMove.
+                                   MOZ_KnownLive(*contentToMove));
+    if (NS_FAILED(nodeWrapper.Remove())) {
+      NS_WARNING("AutoNodeAPIWrapper::Remove() failed, but ignored");
+    } else {
+      NS_WARNING_ASSERTION(
+          nodeWrapper.IsExpectedResult(),
+          "Temporarily removing node caused other mutations, but ignored");
+    }
   }
 }
 
@@ -358,21 +366,21 @@ nsresult MoveSiblingsTransaction::InsertAllSiblingsToMove(
         NS_WARNING_ASSERTION(
             NS_SUCCEEDED(rvMarkElementDirty),
             "EditorBase::MarkElementDirty() failed, but ignored");
-        Unused << rvMarkElementDirty;
+        (void)rvMarkElementDirty;
       }
     }
 
-    IgnoredErrorResult error;
-    aParentNode.InsertBefore(
-        // MOZ_KnownLive because of guaranteed by both aNotifier and
-        // aClonedSiblingsToMove.
-        MOZ_KnownLive(*contentToMove), aReferenceNode, error);
-    // InsertBefore() may call MightThrowJSException() even if there is no
-    // error. We don't need the flag here.
-    error.WouldReportJSException();
-    if (MOZ_UNLIKELY(error.Failed())) {
-      NS_WARNING("nsINode::InsertBefore() failed");
-      rv = error.StealNSResult();
+    AutoNodeAPIWrapper nodeWrapper(aHTMLEditor, aParentNode);
+    // MOZ_KnownLive because of guaranteed by both aNotifier and
+    // aClonedSiblingsToMove.
+    nsresult rvInner =
+        nodeWrapper.InsertBefore(MOZ_KnownLive(*contentToMove), aReferenceNode);
+    if (NS_FAILED(rvInner)) {
+      NS_WARNING("AutoNodeAPIWrapper::InsertBefore() failed");
+      rv = rvInner;
+    } else {
+      NS_WARNING_ASSERTION(nodeWrapper.IsExpectedResult(),
+                           "Moving a node caused other mutations, but ignored");
     }
   }
 

@@ -1,11 +1,10 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ContentProcess.h"
 
+#include "js/Initialization.h"
 #include "mozilla/Preferences.h"
 
 #if defined(XP_MACOSX) && defined(MOZ_SANDBOX)
@@ -29,9 +28,12 @@ static nsresult GetGREDir(nsIFile** aResult) {
   nsresult rv = XRE_GetBinaryPath(getter_AddRefs(current));
   NS_ENSURE_SUCCESS(rv, rv);
 
-#ifdef XP_DARWIN
+#if defined(XP_MACOSX)
   // Walk out of [subprocess].app/Contents/MacOS to the real GRE dir
   const int depth = 4;
+#elif defined(XP_IOS)
+  // Walk out of Extensions/[subprocess].appex to the real GRE dir
+  const int depth = 3;
 #else
   const int depth = 1;
 #endif
@@ -45,8 +47,19 @@ static nsresult GetGREDir(nsIFile** aResult) {
     NS_ENSURE_TRUE(current, NS_ERROR_UNEXPECTED);
   }
 
-#ifdef XP_DARWIN
+#if defined(XP_MACOSX)
   rv = current->SetNativeLeafName("Resources"_ns);
+  NS_ENSURE_SUCCESS(rv, rv);
+#elif defined(XP_IOS)
+  // FIXME: Consider looking up the GeckoView.framework bundle directly, rather
+  // than deriving it from XRE_GetBinaryPath on iOS. This may be more resilient
+  // especially once we properly bundle XUL into a separate framework or support
+  // multiple embedders.
+  rv = current->AppendNative("Frameworks"_ns);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = current->AppendNative("GeckoView.framework"_ns);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = current->AppendNative("Frameworks"_ns);
   NS_ENSURE_SUCCESS(rv, rv);
 #endif
 
@@ -156,6 +169,11 @@ void ContentProcess::InfallibleInit(int aArgc, char* aArgv[]) {
   // preloaded the jar(s)).
   if (!Omnijar::IsInitialized()) {
     Omnijar::ChildProcessInit(aArgc, aArgv);
+  }
+
+  Maybe<bool> disableJit = geckoargs::sDisableJit.Get(aArgc, aArgv);
+  if (disableJit && *disableJit) {
+    JS::DisableJitBackend();
   }
 
   rv = NS_InitXPCOM(nullptr, xpcomAppDir, &mDirProvider);

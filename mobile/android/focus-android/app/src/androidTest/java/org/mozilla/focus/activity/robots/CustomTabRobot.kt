@@ -16,8 +16,9 @@ import androidx.test.espresso.matcher.ViewMatchers.withText
 import androidx.test.uiautomator.UiObject
 import androidx.test.uiautomator.UiSelector
 import junit.framework.TestCase.assertTrue
+import mozilla.components.browser.toolbar.R as toolbarR
+import mozilla.components.feature.customtabs.R as customtabsR
 import org.junit.Assert
-import org.mozilla.focus.R
 import org.mozilla.focus.helpers.TestHelper.appName
 import org.mozilla.focus.helpers.TestHelper.mDevice
 import org.mozilla.focus.helpers.TestHelper.packageName
@@ -28,10 +29,7 @@ class CustomTabRobot {
 
     private lateinit var sessionLoadedIdlingResource: SessionLoadedIdlingResource
 
-    val progressBar: UiObject =
-        mDevice.findObject(
-            UiSelector().resourceId("$packageName:id/progress"),
-        )
+    val progressBar: UiObject = mDevice.findObject(UiSelector().resourceId("$packageName:id/progress"))
 
     fun verifyCustomTabActionButton(buttonDescription: String) {
         actionButton(buttonDescription).check(matches(isDisplayed()))
@@ -57,9 +55,7 @@ class CustomTabRobot {
     }
 
     fun closeCustomTab() {
-        closeCustomTabButton
-            .check(matches(isDisplayed()))
-            .perform(click())
+        closeCustomTabButton.check(matches(isDisplayed())).perform(click())
     }
 
     fun verifyCustomTabUrl(url: String) {
@@ -84,14 +80,10 @@ class CustomTabRobot {
     fun verifyPageContent(expectedText: String) {
         val sessionLoadedIdlingResource = SessionLoadedIdlingResource()
 
-        mDevice.findObject(UiSelector().resourceId("$packageName:id/engineView"))
-            .waitForExists(waitingTime)
+        mDevice.findObject(UiSelector().resourceId("$packageName:id/engineView")).waitForExists(waitingTime)
 
         runWithIdleRes(sessionLoadedIdlingResource) {
-            Assert.assertTrue(
-                mDevice.findObject(UiSelector().textContains(expectedText))
-                    .waitForExists(waitingTime),
-            )
+            Assert.assertTrue(mDevice.findObject(UiSelector().textContains(expectedText)).waitForExists(waitingTime))
         }
     }
 
@@ -102,9 +94,7 @@ class CustomTabRobot {
 
     class Transition {
         fun clickOpenInFocusButton(interact: BrowserRobot.() -> Unit): BrowserRobot.Transition {
-            openInFocusButton
-                .check(matches(isDisplayed()))
-                .perform(click())
+            openInFocusButton.check(matches(isDisplayed())).perform(click())
 
             BrowserRobot().interact()
             return BrowserRobot.Transition()
@@ -126,15 +116,15 @@ fun customTab(interact: CustomTabRobot.() -> Unit): CustomTabRobot.Transition {
 
 private fun actionButton(description: String) = onView(withContentDescription(description))
 
-private val menuButton = onView(withId(R.id.mozac_browser_toolbar_menu))
+private val menuButton = onView(withId(toolbarR.id.mozac_browser_toolbar_menu))
 
 private val shareButton = onView(withContentDescription("Share link"))
 
 private fun customMenuItem(description: String) = onView(withText(description))
 
-private val closeCustomTabButton = onView(withContentDescription(R.string.mozac_feature_customtabs_exit_button))
+private val closeCustomTabButton =
+    onView(withContentDescription(customtabsR.string.mozac_feature_customtabs_exit_button))
 
 private val openInFocusButton = onView(withText("Open in $appName"))
 
-private val customTabUrl =
-    mDevice.findObject(UiSelector().resourceId("$packageName:id/mozac_browser_toolbar_url_view"))
+private val customTabUrl = mDevice.findObject(UiSelector().resourceId("$packageName:id/mozac_browser_toolbar_url_view"))

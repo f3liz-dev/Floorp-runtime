@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,12 +19,14 @@ class CommandEncoder;
 class Device;
 class ExternalTexture;
 
-class CommandBuffer final : public ObjectBase, public ChildOf<Device> {
+class CommandBuffer final : public nsWrapperCache,
+                            public ObjectBase,
+                            public ChildOf<Device> {
  public:
   GPU_DECL_CYCLE_COLLECTION(CommandBuffer)
   GPU_DECL_JS_WRAP(CommandBuffer)
 
-  CommandBuffer(Device* const aParent, WebGPUChild* const aBridge, RawId aId,
+  CommandBuffer(Device* const aParent, RawId aId,
                 nsTArray<WeakPtr<CanvasContext>>&& aPresentationContexts,
                 nsTArray<RefPtr<ExternalTexture>>&& aExternalTextures);
 
@@ -33,15 +34,11 @@ class CommandBuffer final : public ObjectBase, public ChildOf<Device> {
     return mExternalTextures;
   }
 
-  Maybe<RawId> Commit();
+  RawId Commit();
 
  private:
-  CommandBuffer() = delete;
-  ~CommandBuffer();
-  void Cleanup();
+  virtual ~CommandBuffer();
 
-  const RawId mId;
-  RefPtr<WebGPUChild> mBridge;
   const nsTArray<WeakPtr<CanvasContext>> mPresentationContexts;
 
   // List of external textures used in this command buffer.

@@ -14,7 +14,9 @@
 #include <utility>
 
 #include "absl/base/nullability.h"
+#include "api/environment/deprecated_global_field_trials.h"
 #include "api/environment/environment.h"
+#include "api/environment/force_test_environment.h"
 #include "api/field_trials_view.h"
 #include "api/make_ref_counted.h"
 #include "api/ref_counted_base.h"
@@ -22,7 +24,6 @@
 #include "api/scoped_refptr.h"
 #include "api/task_queue/default_task_queue_factory.h"
 #include "api/task_queue/task_queue_factory.h"
-#include "api/transport/field_trial_based_config.h"
 #include "rtc_base/checks.h"
 #include "system_wrappers/include/clock.h"
 
@@ -31,7 +32,7 @@ namespace {
 
 template <typename T>
 void Store(absl_nonnull std::unique_ptr<T> value,
-           scoped_refptr<const webrtc::RefCountedBase>& leaf) {
+           scoped_refptr<const RefCountedBase>& leaf) {
   class StorageNode : public RefCountedBase {
    public:
     StorageNode(scoped_refptr<const RefCountedBase> parent,
@@ -99,11 +100,16 @@ void EnvironmentFactory::Set(
 }
 
 Environment EnvironmentFactory::CreateWithDefaults() && {
+  RTC_CHECK((field_trials_ != nullptr && field_trials_->IsTest()) ||
+            !IsForceTestEnvironmentEnabled() ||
+            IsTestEnvironmentCheckBypassed())
+      << "Production Environment creation is not allowed in tests. Use "
+         "CreateTestEnvironment.";
   if (field_trials_ == nullptr) {
-    Set(std::make_unique<FieldTrialBasedConfig>());
+    Set(std::make_unique<DeprecatedGlobalFieldTrials>());
   }
 #if defined(WEBRTC_MOZILLA_BUILD)
-  // We want to use our clock, not GetRealTimeClockRaw, and we avoid
+  // We want to use our clock, not GetRealTimeClockOnlyUseForRelativeTime, and we avoid
   // building the code under third_party/libwebrtc/task_queue.  To
   // ensure we're setting up things correctly, namely providing an
   // Environment object with a preset task_queue_factory and clock,

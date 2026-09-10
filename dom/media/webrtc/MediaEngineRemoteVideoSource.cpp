@@ -1,5 +1,4 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -10,9 +9,7 @@
 #include "MediaManager.h"
 #include "MediaTrackConstraints.h"
 #include "PerformanceRecorder.h"
-#include "Tracing.h"
-#include "VideoFrameUtils.h"
-#include "VideoUtils.h"
+#include "VideoSegment.h"
 #include "common_video/include/video_frame_buffer.h"
 #include "common_video/libyuv/include/webrtc_libyuv.h"
 #include "mozilla/ErrorNames.h"
@@ -24,11 +21,10 @@
 namespace mozilla {
 
 extern LazyLogModule gMediaManagerLog;
-#define LOG(...) MOZ_LOG(gMediaManagerLog, LogLevel::Debug, (__VA_ARGS__))
+#define LOG(...) MOZ_LOG_FMT(gMediaManagerLog, LogLevel::Debug, __VA_ARGS__)
 #define LOG_FRAME(...) \
-  MOZ_LOG(gMediaManagerLog, LogLevel::Verbose, (__VA_ARGS__))
+  MOZ_LOG_FMT(gMediaManagerLog, LogLevel::Verbose, __VA_ARGS__)
 
-using dom::ConstrainLongRange;
 using dom::MediaSourceEnum;
 using dom::MediaTrackCapabilities;
 using dom::MediaTrackConstraints;
@@ -86,7 +82,7 @@ static Maybe<VideoFacingModeEnum> GetFacingMode(const nsString& aDeviceName) {
 
 struct DesiredSizeInput {
   NormalizedConstraints mConstraints;
-  bool mCanCropAndScale;
+  Maybe<bool> mCanCropAndScale;
   Maybe<int32_t> mCapabilityWidth;
   Maybe<int32_t> mCapabilityHeight;
   camera::CaptureEngine mCapEngine;
@@ -96,12 +92,11 @@ struct DesiredSizeInput {
 };
 
 static gfx::IntSize CalculateDesiredSize(DesiredSizeInput aInput) {
-  MOZ_ASSERT(aInput.mInputWidth > 0);
-  MOZ_ASSERT(aInput.mInputHeight > 0);
-
-  if (aInput.mCapabilityWidth && aInput.mCapabilityHeight &&
-      !aInput.mCanCropAndScale) {
-    // Downscaling camera by constraints is not yet supported (bug 1286945).
+  if (!aInput.mCanCropAndScale.valueOr(aInput.mCapEngine !=
+                                       camera::CameraEngine)) {
+    // Don't scale to constraints in resizeMode "none".
+    // If resizeMode is disabled, follow our legacy behavior of downscaling for
+    // screen capture but not for cameras.
     aInput.mConstraints.mWidth.mIdeal = Nothing();
     aInput.mConstraints.mHeight.mIdeal = Nothing();
   }
@@ -121,52 +116,54 @@ static gfx::IntSize CalculateDesiredSize(DesiredSizeInput aInput) {
 
   // This logic works for both camera and screen sharing case.
   // In VideoResizeModeEnum::None, ideal dimensions are absent.
-  // In screen sharing, min and max dimensions are forbidden.
+  // In screen sharing, min and exact dimensions are forbidden.
   int32_t dst_width = aInput.mConstraints.mWidth.Get(inputWidth);
   int32_t dst_height = aInput.mConstraints.mHeight.Get(inputHeight);
 
-  if (!aInput.mConstraints.mWidth.mIdeal &&
-      aInput.mConstraints.mHeight.mIdeal) {
-    dst_width = *aInput.mConstraints.mHeight.mIdeal * aInput.mInputWidth /
-                aInput.mInputHeight;
-  } else if (!aInput.mConstraints.mHeight.mIdeal &&
-             aInput.mConstraints.mWidth.mIdeal) {
-    dst_height = *aInput.mConstraints.mWidth.mIdeal * aInput.mInputHeight /
-                 aInput.mInputWidth;
-  }
+  // We must not upscale.
+  dst_width = std::min(dst_width, inputWidth);
+  dst_height = std::min(dst_height, inputHeight);
 
   if (aInput.mCapEngine != camera::CameraEngine ||
       !aInput.mConstraints.mWidth.mIdeal ||
       !aInput.mConstraints.mHeight.mIdeal) {
     // Scale down without cropping.
     // Cropping is not allowed by spec for desktop capture.
-    // It also doesn't make sense when not both ideal width and height are
-    // given.
-    // First scale to average of portrait and landscape.
-    float scale_width = (float)dst_width / (float)aInput.mInputWidth;
-    float scale_height = (float)dst_height / (float)aInput.mInputHeight;
-    float scale = (scale_width + scale_height) / 2;
-    // If both req_ideal_width & req_ideal_height are absent, scale is 1, but
-    // if one is present and the other not, scale precisely to the one present
-    if (!aInput.mConstraints.mWidth.mIdeal) {
-      scale = scale_height;
-    } else if (!aInput.mConstraints.mHeight.mIdeal) {
-      scale = scale_width;
-    }
-    dst_width = int32_t(scale * (float)aInput.mInputWidth);
-    dst_height = int32_t(scale * (float)aInput.mInputHeight);
+    // For cameras, it only makes sense when not both ideal width and
+    // height are given, assuming they're within min/max constraints.
 
-    // If scaled rectangle exceeds max rectangle, scale to minimum of portrait
-    // and landscape
-    if (dst_width > aInput.mConstraints.mWidth.mMax ||
-        dst_height > aInput.mConstraints.mHeight.mMax) {
-      scale_width = (float)aInput.mConstraints.mWidth.mMax / (float)dst_width;
-      scale_height =
-          (float)aInput.mConstraints.mHeight.mMax / (float)dst_height;
-      scale = std::min(scale_width, scale_height);
-      dst_width = int32_t(scale * dst_width);
-      dst_height = int32_t(scale * dst_height);
-    }
+    // Max constraints decide the envelope.
+    const double scale_width_strict =
+        std::min(1.0, AssertedCast<double>(aInput.mConstraints.mWidth.mMax) /
+                          AssertedCast<double>(inputWidth));
+    const double scale_height_strict =
+        std::min(1.0, AssertedCast<double>(aInput.mConstraints.mHeight.mMax) /
+                          AssertedCast<double>(inputHeight));
+
+    double scale_width =
+        AssertedCast<double>(dst_width) / AssertedCast<double>(inputWidth);
+    double scale_height =
+        AssertedCast<double>(dst_height) / AssertedCast<double>(inputHeight);
+
+    // If both ideal width & ideal height are absent, scale is 1, but
+    // if one is present and the other not, scale precisely to the one present.
+    // If both are present, scale to the smaller one.
+    // This works because the fitness distance for width and height is shortest
+    // where either dimension exactly matches its ideal constraint.
+    // Also adapt to max constraints.
+    double scale = std::min(
+        {scale_width, scale_height, scale_width_strict, scale_height_strict});
+
+    dst_width = SaturatingCast<int32_t>(
+        std::round(scale * AssertedCast<double>(inputWidth)));
+    dst_height = SaturatingCast<int32_t>(
+        std::round(scale * AssertedCast<double>(inputHeight)));
+  }
+
+  if (aInput.mCapEngine == camera::CameraEngine) {
+    // For cameras we are allowed to crop. Adapt to min constraints.
+    dst_width = aInput.mConstraints.mWidth.Clamp(dst_width);
+    dst_height = aInput.mConstraints.mHeight.Clamp(dst_height);
   }
 
   // Ensure width and height are at least two. Smaller frames can lead to
@@ -175,31 +172,6 @@ static gfx::IntSize CalculateDesiredSize(DesiredSizeInput aInput) {
   dst_height = std::max(2, dst_height);
 
   return {dst_width, dst_height};
-}
-
-static VideoResizeModeEnum GetResizeMode(const NormalizedConstraintSet& c,
-                                         const MediaEnginePrefs& aPrefs) {
-  if (!aPrefs.mResizeModeEnabled) {
-    return dom::VideoResizeModeEnum::None;
-  }
-  auto defaultResizeMode = aPrefs.mResizeMode;
-  nsString defaultResizeModeString =
-      NS_ConvertASCIItoUTF16(dom::GetEnumString(defaultResizeMode));
-  uint32_t distanceToDefault = MediaConstraintsHelper::FitnessDistance(
-      Some(defaultResizeModeString), c.mResizeMode);
-  if (distanceToDefault == 0) {
-    return defaultResizeMode;
-  }
-  VideoResizeModeEnum otherResizeMode =
-      (defaultResizeMode == VideoResizeModeEnum::None)
-          ? VideoResizeModeEnum::Crop_and_scale
-          : VideoResizeModeEnum::None;
-  nsString otherResizeModeString =
-      NS_ConvertASCIItoUTF16(dom::GetEnumString(otherResizeMode));
-  uint32_t distanceToOther = MediaConstraintsHelper::FitnessDistance(
-      Some(otherResizeModeString), c.mResizeMode);
-  return (distanceToDefault <= distanceToOther) ? defaultResizeMode
-                                                : otherResizeMode;
 }
 
 MediaEngineRemoteVideoSource::MediaEngineRemoteVideoSource(
@@ -214,10 +186,11 @@ MediaEngineRemoteVideoSource::MediaEngineRemoteVideoSource(
       mTrackCapabilities(
           MakeAndAddRef<media::Refcountable<MediaTrackCapabilities>>()),
       mFirstFramePromise(mFirstFramePromiseHolder.Ensure(__func__)),
+      mCalculation(kFitness),
       mPrefs(MakeUnique<MediaEnginePrefs>()),
       mMediaDevice(aMediaDevice),
       mDeviceUUID(NS_ConvertUTF16toUTF8(aMediaDevice->mRawID)) {
-  LOG("%s", __PRETTY_FUNCTION__);
+  LOG("{}", __PRETTY_FUNCTION__);
   if (mCapEngine == camera::CameraEngine) {
     // Only cameras can have a facing mode.
     Maybe<VideoFacingModeEnum> facingMode =
@@ -229,7 +202,26 @@ MediaEngineRemoteVideoSource::MediaEngineRemoteVideoSource(
   }
 }
 
+/*static*/
+already_AddRefed<MediaEngineRemoteVideoSource>
+MediaEngineRemoteVideoSource::CreateFrom(
+    const MediaEngineRemoteVideoSource* aSource,
+    const MediaDevice* aMediaDevice) {
+  auto src = MakeRefPtr<MediaEngineRemoteVideoSource>(aMediaDevice);
+  *static_cast<MediaTrackSettings*>(src->mSettings) = *aSource->mSettings;
+  *static_cast<MediaTrackCapabilities*>(src->mTrackCapabilities) =
+      *aSource->mTrackCapabilities;
+  {
+    MutexAutoLock lock(aSource->mMutex);
+    src->mIncomingImageSize = aSource->mIncomingImageSize;
+  }
+  return src.forget();
+}
+
 MediaEngineRemoteVideoSource::~MediaEngineRemoteVideoSource() {
+  if (mCaptureId >= 0) {
+    camera::CamerasChild::RemoveCallbackIfExists(mCaptureId);
+  }
   mFirstFramePromiseHolder.RejectIfExists(NS_ERROR_ABORT, __func__);
 }
 
@@ -257,22 +249,29 @@ static inline const char* ToString(DistanceCalculation aMode) {
 nsresult MediaEngineRemoteVideoSource::Allocate(
     const MediaTrackConstraints& aConstraints, const MediaEnginePrefs& aPrefs,
     uint64_t aWindowID, const char** aOutBadConstraint) {
-  LOG("%s", __PRETTY_FUNCTION__);
+  LOG("{}", __PRETTY_FUNCTION__);
   AssertIsOnOwningThread();
 
   MOZ_ASSERT(mState == kReleased);
 
   NormalizedConstraints c(aConstraints);
-  auto distanceMode = ToDistanceCalculation(GetResizeMode(c, aPrefs));
+  const auto resizeMode = MediaConstraintsHelper::GetResizeMode(c, aPrefs);
+  const auto legacyDistanceMode =
+      mCapEngine == camera::CameraEngine ? kFitness : kFeasibility;
+  const auto distanceMode =
+      resizeMode.map(&ToDistanceCalculation).valueOr(legacyDistanceMode);
   webrtc::CaptureCapability newCapability;
-  LOG("ChooseCapability(%s) for mCapability (Allocate) ++",
+  LOG("ChooseCapability({}) for mCapability (Allocate) ++",
       ToString(distanceMode));
-  if (!ChooseCapability(c, aPrefs, newCapability, distanceMode)) {
-    *aOutBadConstraint =
-        MediaConstraintsHelper::FindBadConstraint(c, aPrefs, mMediaDevice);
+  if (!ChooseCapability(c, aPrefs, newCapability, distanceMode,
+                        aOutBadConstraint)) {
+    if (aOutBadConstraint && !*aOutBadConstraint) {
+      *aOutBadConstraint =
+          MediaConstraintsHelper::FindBadConstraint(c, aPrefs, mMediaDevice);
+    }
     return NS_ERROR_FAILURE;
   }
-  LOG("ChooseCapability(%s) for mCapability (Allocate) --",
+  LOG("ChooseCapability({}) for mCapability (Allocate) --",
       ToString(distanceMode));
 
   mCaptureId =
@@ -282,54 +281,74 @@ nsresult MediaEngineRemoteVideoSource::Allocate(
     return NS_ERROR_FAILURE;
   }
 
+  DesiredSizeInput input{};
+  double framerate = 0.0;
   {
     MutexAutoLock lock(mMutex);
     mState = kAllocated;
-    mCapability = newCapability;
+    mCapability = std::move(newCapability);
     mCalculation = distanceMode;
     mConstraints = Some(c);
     *mPrefs = aPrefs;
     mTrackingId =
         TrackingId(CaptureEngineToTrackingSourceStr(mCapEngine), mCaptureId);
+    const int32_t& cw = mCapability.width;
+    const int32_t& ch = mCapability.height;
+    const double maxFPS = AssertedCast<double>(mCapability.maxFPS);
+    input = {
+        .mConstraints = c,
+        .mCanCropAndScale = resizeMode.map([](auto aRM) {
+          return aRM == dom::VideoResizeModeEnum::Crop_and_scale;
+        }),
+        .mCapabilityWidth = cw ? Some(cw) : Nothing(),
+        .mCapabilityHeight = ch ? Some(ch) : Nothing(),
+        .mCapEngine = mCapEngine,
+        .mInputWidth = cw ? cw : mIncomingImageSize.width,
+        .mInputHeight = ch ? ch : mIncomingImageSize.height,
+        .mRotation = 0,
+    };
+    framerate = input.mCanCropAndScale.valueOr(false)
+                    ? std::min(mConstraints->mFrameRate.Get(maxFPS), maxFPS)
+                    : maxFPS;
   }
+
+  auto dstSize = CalculateDesiredSize(input);
 
   NS_DispatchToMainThread(NS_NewRunnableFunction(
       "MediaEngineRemoteVideoSource::Allocate::MainUpdate",
-      [settings = mSettings, caps = mTrackCapabilities,
-       facingMode = mFacingMode,
-       resizeModeEnabled = aPrefs.mResizeModeEnabled]() {
+      [settings = mSettings, caps = mTrackCapabilities, dstSize, framerate,
+       facingMode = mFacingMode, resizeMode]() {
         *settings = dom::MediaTrackSettings();
 
-        settings->mWidth.Construct(0);
-        settings->mHeight.Construct(0);
-        settings->mFrameRate.Construct(0);
+        settings->mWidth.Construct(dstSize.width);
+        settings->mHeight.Construct(dstSize.height);
+        settings->mFrameRate.Construct(framerate);
 
         caps->mFacingMode.Reset();
-        if (facingMode.isSome()) {
+        if (facingMode) {
           settings->mFacingMode.Construct(*facingMode);
-          nsTArray<nsString> facing;
-          facing.AppendElement(*facingMode);
-          caps->mFacingMode.Construct(std::move(facing));
+          caps->mFacingMode.Construct(nsTArray{*facingMode});
         }
 
         caps->mResizeMode.Reset();
-        if (resizeModeEnabled) {
-          NS_ConvertASCIItoUTF16 noneString(
-              dom::GetEnumString(VideoResizeModeEnum::None));
-          NS_ConvertASCIItoUTF16 cropString(
+        if (resizeMode) {
+          nsString noneString, cropString;
+          noneString.AssignASCII(dom::GetEnumString(VideoResizeModeEnum::None));
+          cropString.AssignASCII(
               dom::GetEnumString(VideoResizeModeEnum::Crop_and_scale));
-          settings->mResizeMode.Construct(noneString);
-          caps->mResizeMode.Construct(
-              nsTArray<nsString>{noneString, cropString});
+          settings->mResizeMode.Construct(
+              *resizeMode == VideoResizeModeEnum::Crop_and_scale ? cropString
+                                                                 : noneString);
+          caps->mResizeMode.Construct(nsTArray{noneString, cropString});
         }
       }));
 
-  LOG("Video device %d allocated", mCaptureId);
+  LOG("Video device {} allocated", mCaptureId);
   return NS_OK;
 }
 
 nsresult MediaEngineRemoteVideoSource::Deallocate() {
-  LOG("%s", __PRETTY_FUNCTION__);
+  LOG("{}", __PRETTY_FUNCTION__);
   AssertIsOnOwningThread();
 
   MOZ_ASSERT(mState == kStopped || mState == kAllocated);
@@ -352,19 +371,29 @@ nsresult MediaEngineRemoteVideoSource::Deallocate() {
   mImageContainer = nullptr;
   mRescalingBufferPool.Release();
 
-  LOG("Video device %d deallocated", mCaptureId);
+  LOG("Video device {} deallocated", mCaptureId);
 
-  if (camera::GetChildAndCall(&camera::CamerasChild::ReleaseCapture, mCapEngine,
-                              mCaptureId)) {
-    // Failure can occur when the parent process is shutting down.
-    return NS_ERROR_FAILURE;
+  int error = camera::GetChildAndCall(&camera::CamerasChild::ReleaseCapture,
+                                      mCapEngine, mCaptureId);
+
+  if (error == camera::kSuccess) {
+    return NS_OK;
   }
-  return NS_OK;
+
+  if (error == camera::kIpcError) {
+    // Failure can occur when the parent process is shutting down, and the IPC
+    // channel is down. We still consider the capturer deallocated in this
+    // case, since it cannot deliver frames without the IPC channel open.
+    return NS_OK;
+  }
+
+  MOZ_ASSERT(error == camera::kError);
+  return NS_ERROR_FAILURE;
 }
 
 void MediaEngineRemoteVideoSource::SetTrack(const RefPtr<MediaTrack>& aTrack,
                                             const PrincipalHandle& aPrincipal) {
-  LOG("%s", __PRETTY_FUNCTION__);
+  LOG("{}", __PRETTY_FUNCTION__);
   AssertIsOnOwningThread();
 
   MOZ_ASSERT(mState == kAllocated);
@@ -385,74 +414,56 @@ void MediaEngineRemoteVideoSource::SetTrack(const RefPtr<MediaTrack>& aTrack,
 }
 
 nsresult MediaEngineRemoteVideoSource::Start() {
-  LOG("%s", __PRETTY_FUNCTION__);
+  LOG("{}", __PRETTY_FUNCTION__);
   AssertIsOnOwningThread();
 
   MOZ_ASSERT(mState == kAllocated || mState == kStarted || mState == kStopped);
   MOZ_ASSERT(mTrack);
 
-  DesiredSizeInput input{};
-  double framerate = 0.0;
+  NormalizedConstraints constraints;
   {
     MutexAutoLock lock(mMutex);
     mState = kStarted;
-    const int32_t& cw = mCapability.width;
-    const int32_t& ch = mCapability.height;
-    const double maxFPS = AssertedCast<double>(mCapability.maxFPS);
-    input = {
-        .mConstraints = *mConstraints,
-        .mCanCropAndScale = mCalculation == kFeasibility,
-        .mCapabilityWidth = cw ? Some(cw) : Nothing(),
-        .mCapabilityHeight = ch ? Some(ch) : Nothing(),
-        .mCapEngine = mCapEngine,
-        .mInputWidth = cw,
-        .mInputHeight = ch,
-        .mRotation = 0,
-    };
-    framerate =
-        input.mCanCropAndScale ? mConstraints->mFrameRate.Get(maxFPS) : maxFPS;
+    constraints = *mConstraints;
   }
 
+  // Tell CamerasParent what resizeMode was selected, as it doesn't have access
+  // to MediaEnginePrefs.
+  const auto resizeMode = mCalculation == kFeasibility
+                              ? VideoResizeModeEnum::Crop_and_scale
+                              : VideoResizeModeEnum::None;
+  const auto resizeModeString =
+      NS_ConvertASCIItoUTF16(dom::GetEnumString(resizeMode));
+  constraints.mResizeMode.mIdeal.clear();
+  constraints.mResizeMode.mIdeal.insert(resizeModeString);
+
+  nsresult rv = StartCapture(constraints, resizeMode);
   mSettingsUpdatedByFrame->mValue = false;
+  return rv;
+}
+
+nsresult MediaEngineRemoteVideoSource::StartCapture(
+    const NormalizedConstraints& aConstraints,
+    const dom::VideoResizeModeEnum& aResizeMode) {
+  LOG("{}", __PRETTY_FUNCTION__);
+  AssertIsOnOwningThread();
+
+  MOZ_ASSERT(mState == kStarted);
 
   if (camera::GetChildAndCall(&camera::CamerasChild::StartCapture, mCapEngine,
-                              mCaptureId, mCapability, this)) {
+                              mCaptureId, mCapability, aConstraints,
+                              aResizeMode, this)) {
     LOG("StartCapture failed");
     MutexAutoLock lock(mMutex);
     mState = kStopped;
     return NS_ERROR_FAILURE;
   }
 
-  Maybe<gfx::IntSize> dstSize;
-  if (input.mInputWidth && input.mInputHeight) {
-    dstSize = Some(CalculateDesiredSize(input));
-  }
-
-  NS_DispatchToMainThread(NS_NewRunnableFunction(
-      "MediaEngineRemoteVideoSource::SetLastCapability",
-      [settings = mSettings, updated = mSettingsUpdatedByFrame,
-       calc = mCalculation, dstSize, framerate,
-       resizeModeEnabled = mPrefs->mResizeModeEnabled]() mutable {
-        const bool cropAndScale = calc == kFeasibility;
-        if (dstSize && !updated->mValue) {
-          settings->mWidth.Value() = dstSize->width;
-          settings->mHeight.Value() = dstSize->height;
-        }
-        settings->mFrameRate.Value() = framerate;
-        if (resizeModeEnabled) {
-          auto resizeMode = cropAndScale ? VideoResizeModeEnum::Crop_and_scale
-                                         : VideoResizeModeEnum::None;
-          settings->mResizeMode.Reset();
-          settings->mResizeMode.Value() =
-              NS_ConvertASCIItoUTF16(dom::GetEnumString(resizeMode));
-        }
-      }));
-
   return NS_OK;
 }
 
 nsresult MediaEngineRemoteVideoSource::FocusOnSelectedSource() {
-  LOG("%s", __PRETTY_FUNCTION__);
+  LOG("{}", __PRETTY_FUNCTION__);
   AssertIsOnOwningThread();
 
   int result;
@@ -462,7 +473,7 @@ nsresult MediaEngineRemoteVideoSource::FocusOnSelectedSource() {
 }
 
 nsresult MediaEngineRemoteVideoSource::Stop() {
-  LOG("%s", __PRETTY_FUNCTION__);
+  LOG("{}", __PRETTY_FUNCTION__);
   AssertIsOnOwningThread();
 
   if (mState == kStopped || mState == kAllocated) {
@@ -471,9 +482,11 @@ nsresult MediaEngineRemoteVideoSource::Stop() {
 
   MOZ_ASSERT(mState == kStarted);
 
-  if (camera::GetChildAndCall(&camera::CamerasChild::StopCapture, mCapEngine,
-                              mCaptureId)) {
-    // Failure can occur when the parent process is shutting down.
+  int error = camera::GetChildAndCall(&camera::CamerasChild::StopCapture,
+                                      mCapEngine, mCaptureId);
+
+  if (error == camera::kError) {
+    // CamerasParent replied with error. The capturer is still running.
     return NS_ERROR_FAILURE;
   }
 
@@ -482,35 +495,54 @@ nsresult MediaEngineRemoteVideoSource::Stop() {
     mState = kStopped;
   }
 
-  return NS_OK;
+  if (error == camera::kSuccess) {
+    return NS_OK;
+  }
+
+  MOZ_ASSERT(error == camera::kIpcError);
+  // Failure can occur when the parent process is shutting down, and the IPC
+  // channel is down. We still consider the capturer stopped in this case,
+  // since it cannot deliver frames without the IPC channel open.
+  return NS_ERROR_FAILURE;
 }
 
 nsresult MediaEngineRemoteVideoSource::Reconfigure(
     const MediaTrackConstraints& aConstraints, const MediaEnginePrefs& aPrefs,
     const char** aOutBadConstraint) {
-  LOG("%s", __PRETTY_FUNCTION__);
+  LOG("{}", __PRETTY_FUNCTION__);
   AssertIsOnOwningThread();
 
   NormalizedConstraints c(aConstraints);
-  auto distanceMode = ToDistanceCalculation(GetResizeMode(c, aPrefs));
+  const auto resizeMode = MediaConstraintsHelper::GetResizeMode(c, aPrefs);
+  const auto legacyDistanceMode =
+      mCapEngine == camera::CameraEngine ? kFitness : kFeasibility;
+  const auto distanceMode =
+      resizeMode.map(&ToDistanceCalculation).valueOr(legacyDistanceMode);
   webrtc::CaptureCapability newCapability;
-  LOG("ChooseCapability(%s) for mTargetCapability (Reconfigure) ++",
+  LOG("ChooseCapability({}) for mTargetCapability (Reconfigure) ++",
       ToString(distanceMode));
-  if (!ChooseCapability(c, aPrefs, newCapability, distanceMode)) {
-    *aOutBadConstraint =
-        MediaConstraintsHelper::FindBadConstraint(c, aPrefs, mMediaDevice);
+  if (!ChooseCapability(c, aPrefs, newCapability, distanceMode,
+                        aOutBadConstraint)) {
+    if (aOutBadConstraint && !*aOutBadConstraint) {
+      *aOutBadConstraint =
+          MediaConstraintsHelper::FindBadConstraint(c, aPrefs, mMediaDevice);
+    }
     return NS_ERROR_INVALID_ARG;
   }
-  LOG("ChooseCapability(%s) for mTargetCapability (Reconfigure) --",
+  LOG("ChooseCapability({}) for mTargetCapability (Reconfigure) --",
       ToString(distanceMode));
 
-  const bool capabilityChanged = mCapability != newCapability;
+  bool needsRestart{};
   DesiredSizeInput input{};
   double framerate = 0.0;
   {
     MutexAutoLock lock(mMutex);
-    // Start() applies mCapability on the device.
-    mCapability = newCapability;
+
+    needsRestart = mCapability != newCapability || mConstraints != Some(c) ||
+                   !(*mPrefs == aPrefs);
+
+    // StartCapture() applies mCapability on the device.
+    mCapability = std::move(newCapability);
     mCalculation = distanceMode;
     mConstraints = Some(c);
     *mPrefs = aPrefs;
@@ -518,27 +550,29 @@ nsresult MediaEngineRemoteVideoSource::Reconfigure(
     const int32_t& ch = mCapability.height;
     input = {
         .mConstraints = c,
-        .mCanCropAndScale = mCalculation == kFeasibility,
+        .mCanCropAndScale = resizeMode.map([](auto aRM) {
+          return aRM == dom::VideoResizeModeEnum::Crop_and_scale;
+        }),
         .mCapabilityWidth = cw ? Some(cw) : Nothing(),
         .mCapabilityHeight = ch ? Some(ch) : Nothing(),
         .mCapEngine = mCapEngine,
-        .mInputWidth = cw ? cw : mImageSize.width,
-        .mInputHeight = ch ? ch : mImageSize.height,
+        .mInputWidth = cw ? cw : mIncomingImageSize.width,
+        .mInputHeight = ch ? ch : mIncomingImageSize.height,
         .mRotation = 0,
     };
     framerate = distanceMode == kFeasibility
-                    ? mConstraints->mFrameRate.Get(mCapability.maxFPS)
+                    ? std::min(mConstraints->mFrameRate.Get(mCapability.maxFPS),
+                               AssertedCast<double>(mCapability.maxFPS))
                     : mCapability.maxFPS;
   }
 
-  if (mState == kStarted && capabilityChanged) {
-    nsresult rv = Start();
+  if (mState == kStarted && needsRestart) {
+    nsresult rv =
+        StartCapture(c, resizeMode.valueOr(dom::VideoResizeModeEnum::None));
     if (NS_WARN_IF(NS_FAILED(rv))) {
-      nsAutoCString name;
-      GetErrorName(rv, name);
-      LOG("Video source %p for video device %d Reconfigure() failed "
-          "unexpectedly in Start(). rv=%s",
-          this, mCaptureId, name.Data());
+      LOG("Video source {} for video device {} Reconfigure() failed "
+          "unexpectedly in Start(). rv={}",
+          fmt::ptr(this), mCaptureId, rv);
       return NS_ERROR_UNEXPECTED;
     }
   }
@@ -546,14 +580,18 @@ nsresult MediaEngineRemoteVideoSource::Reconfigure(
   mSettingsUpdatedByFrame->mValue = false;
   gfx::IntSize dstSize = CalculateDesiredSize(input);
   NS_DispatchToMainThread(NS_NewRunnableFunction(
-      __func__, [domSettings = mSettings, updated = mSettingsUpdatedByFrame,
-                 dstSize, framerate]() mutable {
-        if (updated->mValue) {
-          return;
+      __func__, [settings = mSettings, updated = mSettingsUpdatedByFrame,
+                 dstSize, framerate, resizeMode]() mutable {
+        if (!updated->mValue) {
+          settings->mWidth.Value() = dstSize.width;
+          settings->mHeight.Value() = dstSize.height;
         }
-        domSettings->mWidth.Value() = dstSize.width;
-        domSettings->mHeight.Value() = dstSize.height;
-        domSettings->mFrameRate.Value() = framerate;
+        settings->mFrameRate.Value() = framerate;
+        if (resizeMode) {
+          settings->mResizeMode.Reset();
+          settings->mResizeMode.Construct(
+              NS_ConvertASCIItoUTF16(dom::GetEnumString(*resizeMode)));
+        }
       }));
 
   return NS_OK;
@@ -613,12 +651,15 @@ int MediaEngineRemoteVideoSource::DeliverFrame(
   {
     MutexAutoLock lock(mMutex);
     MOZ_ASSERT(mState == kStarted);
+    mIncomingImageSize = {aProps.width(), aProps.height()};
     const int32_t& cw = mCapability.width;
     const int32_t& ch = mCapability.height;
 
     input = {
         .mConstraints = *mConstraints,
-        .mCanCropAndScale = mCalculation == kFeasibility,
+        .mCanCropAndScale = mPrefs->mResizeModeEnabled
+                                ? Some(mCalculation == kFeasibility)
+                                : Nothing(),
         .mCapabilityWidth = cw ? Some(cw) : Nothing(),
         .mCapabilityHeight = ch ? Some(ch) : Nothing(),
         .mCapEngine = mCapEngine,
@@ -656,7 +697,7 @@ int MediaEngineRemoteVideoSource::DeliverFrame(
       return 0;
     }
     scaledBuffer->CropAndScaleFrom(*buffer);
-    buffer = scaledBuffer;
+    buffer = std::move(scaledBuffer);
     rec.Record();
   }
 
@@ -689,14 +730,14 @@ int MediaEngineRemoteVideoSource::DeliverFrame(
 #ifdef DEBUG
   static uint32_t frame_num = 0;
   LOG_FRAME(
-      "frame %d (%dx%d)->(%dx%d); rotation %d, rtpTimeStamp %u, ntpTimeMs "
-      "%" PRIu64 ", renderTimeMs %" PRIu64,
+      "frame {} ({}x{})->({}x{}); rotation {}, rtpTimeStamp {}, ntpTimeMs "
+      "{}, renderTimeMs {}",
       frame_num++, aProps.width(), aProps.height(), dstSize.width,
       dstSize.height, aProps.rotation(), aProps.rtpTimeStamp(),
       aProps.ntpTimeMs(), aProps.renderTimeMs());
 #endif
 
-  if (mImageSize != dstSize) {
+  if (mScaledImageSize != dstSize) {
     NS_DispatchToMainThread(NS_NewRunnableFunction(
         "MediaEngineRemoteVideoSource::FrameSizeChange",
         [settings = mSettings, updated = mSettingsUpdatedByFrame,
@@ -716,8 +757,8 @@ int MediaEngineRemoteVideoSource::DeliverFrame(
     MutexAutoLock lock(mMutex);
     MOZ_ASSERT(mState == kStarted);
     VideoSegment segment;
-    mImageSize = image->GetSize();
-    segment.AppendWebrtcLocalFrame(image.forget(), mImageSize, mPrincipal,
+    mScaledImageSize = image->GetSize();
+    segment.AppendWebrtcLocalFrame(image.forget(), mScaledImageSize, mPrincipal,
                                    /* aForceBlack */ false, TimeStamp::Now(),
                                    aProps.captureTime());
     mTrack->AppendData(&segment);
@@ -815,7 +856,9 @@ uint32_t MediaEngineRemoteVideoSource::GetBestFitnessDistance(
 
   bool first = true;
   for (const NormalizedConstraintSet* ns : aConstraintSets) {
-    auto mode = ToDistanceCalculation(GetResizeMode(*ns, aPrefs));
+    auto mode = MediaConstraintsHelper::GetResizeMode(*ns, aPrefs)
+                    .map(&ToDistanceCalculation)
+                    .valueOr(kFitness);
     for (size_t i = 0; i < candidateSet.Length();) {
       auto& candidate = candidateSet[i];
       uint32_t distance = GetDistance(candidate.mCapability, *ns, mode);
@@ -877,7 +920,7 @@ static const char* ConvertVideoTypeToCStr(webrtc::VideoType aType) {
 static void LogCapability(const char* aHeader,
                           const webrtc::CaptureCapability& aCapability,
                           uint32_t aDistance) {
-  LOG("%s: %4u x %4u x %2u maxFps, %s. Distance = %" PRIu32, aHeader,
+  LOG("{}: {:4} x {:4} x {:2} maxFps, {}. Distance = {}", aHeader,
       aCapability.width, aCapability.height, aCapability.maxFPS,
       ConvertVideoTypeToCStr(aCapability.videoType), aDistance);
 }
@@ -885,32 +928,61 @@ static void LogCapability(const char* aHeader,
 bool MediaEngineRemoteVideoSource::ChooseCapability(
     const NormalizedConstraints& aConstraints, const MediaEnginePrefs& aPrefs,
     webrtc::CaptureCapability& aCapability,
-    const DistanceCalculation aCalculate) {
-  LOG("%s", __PRETTY_FUNCTION__);
+    const DistanceCalculation aCalculate, const char** aOutBadConstraint) {
+  LOG("{}", __PRETTY_FUNCTION__);
   AssertIsOnOwningThread();
 
   if (MOZ_LOG_TEST(gMediaManagerLog, LogLevel::Debug)) {
-    LOG("ChooseCapability: prefs: %dx%d @%dfps", aPrefs.GetWidth(),
+    LOG("ChooseCapability: prefs: {}x{} @{}fps", aPrefs.GetWidth(),
         aPrefs.GetHeight(), aPrefs.mFPS);
     MediaConstraintsHelper::LogConstraints(aConstraints);
     if (!aConstraints.mAdvanced.empty()) {
-      LOG("Advanced array[%zu]:", aConstraints.mAdvanced.size());
-      for (auto& advanced : aConstraints.mAdvanced) {
+      LOG("Advanced array[{}]:", aConstraints.mAdvanced.size());
+      for (const auto& advanced : aConstraints.mAdvanced) {
         MediaConstraintsHelper::LogConstraints(advanced);
       }
     }
+  }
+
+  MOZ_ASSERT_IF(aOutBadConstraint, !*aOutBadConstraint);
+  FlattenedConstraints c(aConstraints);
+  const auto checkConstraint = [](const auto& aConstraint) {
+    return aConstraint.mMin <= aConstraint.mMax && aConstraint.mMax > 0;
+  };
+  if (!checkConstraint(c.mWidth)) {
+    if (aOutBadConstraint) {
+      *aOutBadConstraint = "width";
+    }
+    return false;
+  }
+  if (!checkConstraint(c.mHeight)) {
+    if (aOutBadConstraint) {
+      *aOutBadConstraint = "height";
+    }
+    return false;
+  }
+  if (!checkConstraint(c.mFrameRate)) {
+    if (aOutBadConstraint) {
+      *aOutBadConstraint = "frameRate";
+    }
+    return false;
   }
 
   switch (mCapEngine) {
     case camera::ScreenEngine:
     case camera::WinEngine:
     case camera::BrowserEngine: {
-      FlattenedConstraints c(aConstraints);
       // DesktopCaptureImpl polls for frames and so must know the framerate to
       // capture at. This is signaled through CamerasParent as the capability's
       // maxFPS. Note that DesktopCaptureImpl does not expose any capabilities.
+      constexpr int32_t probablyNativeFramerate = 60;
+      constexpr int32_t cap = 120;
+      const int32_t constrainedFramerate =
+          SaturatingCast<int32_t>(std::lround(c.mFrameRate.Get(aPrefs.mFPS)));
       aCapability.maxFPS =
-          c.mFrameRate.Clamp(c.mFrameRate.mIdeal.valueOr(aPrefs.mFPS));
+          aCalculate == kFeasibility
+              ? std::min(constrainedFramerate, cap)
+              : std::clamp(constrainedFramerate, probablyNativeFramerate, cap);
       return true;
     }
     default:
@@ -919,20 +991,14 @@ bool MediaEngineRemoteVideoSource::ChooseCapability(
 
   nsTArray<CapabilityCandidate> candidateSet;
   size_t num = NumCapabilities();
-  int32_t minHeight = 0, maxHeight = 0, minWidth = 0, maxWidth = 0, maxFps = 0;
+  int32_t maxHeight = 0, maxWidth = 0, maxFps = 0;
   for (size_t i = 0; i < num; i++) {
     auto capability = GetCapability(i);
     if (capability.height > maxHeight) {
       maxHeight = capability.height;
     }
-    if (!minHeight || (capability.height < minHeight)) {
-      minHeight = capability.height;
-    }
     if (capability.width > maxWidth) {
       maxWidth = capability.width;
-    }
-    if (!minWidth || (capability.width < minWidth)) {
-      minWidth = capability.width;
     }
     if (capability.maxFPS > maxFps) {
       maxFps = capability.maxFPS;
@@ -942,17 +1008,17 @@ bool MediaEngineRemoteVideoSource::ChooseCapability(
 
   NS_DispatchToMainThread(NS_NewRunnableFunction(
       "MediaEngineRemoteVideoSource::ChooseCapability",
-      [capabilities = mTrackCapabilities, maxHeight, minHeight, maxWidth,
-       minWidth, maxFps]() mutable {
+      [capabilities = mTrackCapabilities, maxHeight, maxWidth,
+       maxFps]() mutable {
         dom::ULongRange widthRange;
         widthRange.mMax.Construct(maxWidth);
-        widthRange.mMin.Construct(minWidth);
+        widthRange.mMin.Construct(2);
         capabilities->mWidth.Reset();
         capabilities->mWidth.Construct(widthRange);
 
         dom::ULongRange heightRange;
         heightRange.mMax.Construct(maxHeight);
-        heightRange.mMin.Construct(minHeight);
+        heightRange.mMin.Construct(2);
         capabilities->mHeight.Reset();
         capabilities->mHeight.Construct(heightRange);
 
@@ -990,7 +1056,8 @@ bool MediaEngineRemoteVideoSource::ChooseCapability(
       cap.height = c.mHeight.Get(prefHeight);
       cap.height = std::clamp(cap.height, 0, 4320);
 
-      cap.maxFPS = c.mFrameRate.Get(aPrefs.mFPS);
+      cap.maxFPS =
+          SaturatingCast<int32_t>(std::lround(c.mFrameRate.Get(aPrefs.mFPS)));
       cap.maxFPS = std::clamp(cap.maxFPS, 0, 480);
 
       if (cap.width != prefWidth) {
@@ -1026,7 +1093,7 @@ bool MediaEngineRemoteVideoSource::ChooseCapability(
   }
 
   if (candidateSet.IsEmpty()) {
-    LOG("failed to find capability match from %zu choices",
+    LOG("failed to find capability match from {} choices",
         candidateSet.Length());
     return false;
   }

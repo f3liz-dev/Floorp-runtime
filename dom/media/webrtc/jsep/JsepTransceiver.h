@@ -2,13 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef _JSEPTRANSCEIVER_H_
-#define _JSEPTRANSCEIVER_H_
+#ifndef JSEPTRANSCEIVER_H_
+#define JSEPTRANSCEIVER_H_
 
 #include <string>
 
 #include "jsep/JsepTrack.h"
 #include "jsep/JsepTransport.h"
+#include "mozilla/UniquePtr.h"
 #include "nsError.h"
 #include "sdp/Sdp.h"
 #include "sdp/SdpAttribute.h"
@@ -20,7 +21,7 @@ class JsepUuidGenerator {
  public:
   virtual ~JsepUuidGenerator() = default;
   virtual bool Generate(std::string* id) = 0;
-  virtual JsepUuidGenerator* Clone() const = 0;
+  virtual UniquePtr<JsepUuidGenerator> Clone() const = 0;
 };
 
 class JsepTransceiver {
@@ -216,4 +217,4 @@ class JsepTransceiver {
 
 }  // namespace mozilla
 
-#endif  // _JSEPTRANSCEIVER_H_
+#endif  // JSEPTRANSCEIVER_H_

@@ -11,20 +11,22 @@
 #ifndef PC_TEST_MOCK_CHANNEL_INTERFACE_H_
 #define PC_TEST_MOCK_CHANNEL_INTERFACE_H_
 
-#include <functional>
 #include <string>
 #include <vector>
 
 #include "absl/strings/string_view.h"
 #include "api/jsep.h"
 #include "api/media_types.h"
+#include "api/rtc_error.h"
 #include "media/base/media_channel.h"
 #include "media/base/stream_params.h"
 #include "pc/channel_interface.h"
 #include "pc/rtp_transport_internal.h"
+#include "pc/session_description.h"
 #include "test/gmock.h"
 
 namespace webrtc {
+class RtpPacketReceived;
 
 // Mock class for BaseChannel.
 // Use this class in unit tests to avoid dependency on a specific
@@ -32,8 +34,7 @@ namespace webrtc {
 class MockChannelInterface : public ChannelInterface {
  public:
   MOCK_METHOD(MediaType, media_type, (), (const, override));
-  MOCK_METHOD(VideoChannel*, AsVideoChannel, (), (override));
-  MOCK_METHOD(VoiceChannel*, AsVoiceChannel, (), (override));
+
   MOCK_METHOD(MediaSendChannelInterface*, media_send_channel, (), (override));
   MOCK_METHOD(VoiceMediaSendChannelInterface*,
               voice_media_send_channel,
@@ -58,23 +59,14 @@ class MockChannelInterface : public ChannelInterface {
   MOCK_METHOD(absl::string_view, transport_name, (), (const, override));
   MOCK_METHOD(const std::string&, mid, (), (const, override));
   MOCK_METHOD(void, Enable, (bool), (override));
-  MOCK_METHOD(void,
-              SetFirstPacketReceivedCallback,
-              (std::function<void()>),
-              (override));
-  MOCK_METHOD(void,
-              SetFirstPacketSentCallback,
-              (std::function<void()>),
-              (override));
-  MOCK_METHOD(bool,
+  MOCK_METHOD(RTCError,
               SetLocalContent,
-              (const webrtc::MediaContentDescription*, SdpType, std::string&),
+              (const webrtc::MediaContentDescription*, SdpType),
               (override));
-  MOCK_METHOD(bool,
+  MOCK_METHOD(RTCError,
               SetRemoteContent,
-              (const webrtc::MediaContentDescription*, SdpType, std::string&),
+              (const webrtc::MediaContentDescription*, SdpType),
               (override));
-  MOCK_METHOD(bool, SetPayloadTypeDemuxingEnabled, (bool), (override));
   MOCK_METHOD(const std::vector<StreamParams>&,
               local_streams,
               (),
@@ -88,12 +80,5 @@ class MockChannelInterface : public ChannelInterface {
 
 }  //  namespace webrtc
 
-// Re-export symbols from the webrtc namespace for backwards compatibility.
-// TODO(bugs.webrtc.org/4222596): Remove once all references are updated.
-#ifdef WEBRTC_ALLOW_DEPRECATED_NAMESPACES
-namespace cricket {
-using ::webrtc::MockChannelInterface;
-}  // namespace cricket
-#endif  // WEBRTC_ALLOW_DEPRECATED_NAMESPACES
 
 #endif  // PC_TEST_MOCK_CHANNEL_INTERFACE_H_

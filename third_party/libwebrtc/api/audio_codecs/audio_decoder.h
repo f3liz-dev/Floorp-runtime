@@ -16,9 +16,10 @@
 
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
-#include "api/array_view.h"
+#include "api/audio/audio_view.h"
 #include "rtc_base/buffer.h"
 
 namespace webrtc {
@@ -62,7 +63,7 @@ class AudioDecoder {
     // decoder produced comfort noise or speech. On failure, returns an empty
     // std::optional. Decode may be called at most once per frame object.
     virtual std::optional<DecodeResult> Decode(
-        ArrayView<int16_t> decoded) const = 0;
+        std::span<int16_t> decoded) const = 0;
   };
 
   struct ParseResult {
@@ -173,7 +174,7 @@ class AudioDecoder {
   virtual size_t Channels() const = 0;
 
   // The maximum number of audio channels supported by WebRTC decoders.
-  static constexpr int kMaxNumberOfChannels = 24;
+  static constexpr int kMaxNumberOfChannels = kMaxNumberOfAudioChannels;
 
  protected:
   static SpeechType ConvertSpeechType(int16_t type);

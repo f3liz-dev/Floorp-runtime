@@ -1,7 +1,7 @@
 "use strict";
 
 const kURL =
-  // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+  // eslint-disable-next-line sdl/no-insecure-url
   "http://example.com/browser/browser/base/content/test/general/dummy_page.html";
 ("data:text/html,<a href=''>Middle-click me</a>");
 
@@ -11,7 +11,10 @@ const kURL =
  */
 add_task(async function () {
   await SpecialPowers.pushPrefEnv({
-    set: [["browser.link.alternative_click.block_javascript", false]],
+    set: [
+      ["browser.link.alternative_click.block_javascript", false],
+      ["dom.navigation.webidl.enabled", false],
+    ],
   });
 
   await BrowserTestUtils.withNewTab(kURL, async function (browser) {
@@ -34,7 +37,7 @@ add_task(async function () {
     let newTab = await newTabPromise;
     is(
       newTab.linkedBrowser.contentPrincipal.origin,
-      // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+      // eslint-disable-next-line sdl/no-insecure-url
       "http://example.com",
       "Principal should be for example.com"
     );

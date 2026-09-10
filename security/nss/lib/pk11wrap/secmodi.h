@@ -11,7 +11,6 @@
 #include <stddef.h>
 
 #include "pkcs11.h"
-#include "nssilock.h"
 #include "secoidt.h"
 #include "secdert.h"
 #include "certt.h"
@@ -144,6 +143,11 @@ PRBool pk11_FindAttrInTemplate(CK_ATTRIBUTE *attr, unsigned int numAttrs,
                                CK_ATTRIBUTE_TYPE target);
 
 CK_MECHANISM_TYPE pk11_mapWrapKeyType(KeyType keyType);
+CK_MECHANISM_TYPE pk11_mapKemKeyType(KeyType keyType);
+CK_MECHANISM_TYPE pk11_mapDeriveKeyType(KeyType keyType);
+CK_KEY_TYPE pk11_getPKCS11KeyTypeFromKeyType(KeyType keyType);
+KeyType pk11_getKeyTypeFromPKCS11KeyType(CK_KEY_TYPE pk11KeyType);
+
 PK11SymKey *pk11_KeyExchange(PK11SlotInfo *slot, CK_MECHANISM_TYPE type,
                              CK_ATTRIBUTE_TYPE operation, CK_FLAGS flags, PRBool isPerm,
                              PK11SymKey *symKey);
@@ -161,8 +165,13 @@ SECItem *pk11_GetLowLevelKeyFromHandle(PK11SlotInfo *slot,
 SECStatus PK11_TraverseSlot(PK11SlotInfo *slot, void *arg);
 CK_OBJECT_HANDLE pk11_FindPrivateKeyFromCertID(PK11SlotInfo *slot,
                                                SECItem *keyID);
-SECKEYPrivateKey *PK11_MakePrivKey(PK11SlotInfo *slot, KeyType keyType,
-                                   PRBool isTemp, CK_OBJECT_HANDLE privID, void *wincx);
+SECKEYPrivateKey *pk11_MakePrivKey(PK11SlotInfo *slot, KeyType keyType,
+                                   PRBool isOwner, CK_OBJECT_HANDLE privID, void *wincx);
+/* create the token public key that matches an already imported private key.
+ * Tokens aren't required to support permanent public keys, so callers should
+ * treat a failure here as non-fatal. */
+SECStatus SECKEY_SetPublicValue(SECKEYPrivateKey *privKey,
+                                const SECItem *publicValue);
 CERTCertificate *PK11_MakeCertFromHandle(PK11SlotInfo *slot,
                                          CK_OBJECT_HANDLE certID, CK_ATTRIBUTE *privateLabel);
 

@@ -148,6 +148,8 @@ export const ATTRIBUTE_TRANSFORMS = Object.freeze({
   isFxAEnabled: typeAssertions.boolean,
   isFxASignedIn: typeAssertions.boolean,
   isMSIX: typeAssertions.boolean,
+  launchOnLoginAllowedByPolicy: typeAssertions.boolean,
+  launchOnLoginEnabled: typeAssertions.boolean,
   locale: typeAssertions.string,
   memoryMB: typeAssertions.quantity,
   os: pick(
@@ -159,6 +161,7 @@ export const ATTRIBUTE_TRANSFORMS = Object.freeze({
   ),
   primaryResolution: pick("height", "width"),
   profileAgeCreated: typeAssertions.quantity,
+  profileGroupProfileCount: typeAssertions.quantity,
   region: typeAssertions.string,
   totalBookmarksCount: typeAssertions.quantity,
   userMonthlyActivity: userMonthlyActivity =>
@@ -212,6 +215,7 @@ export function normalizeAttributeName(attr) {
  * Nimbus via the `getPrefValue` filter.
  */
 export const PREFS = Object.freeze({
+  "browser.ai.control.default": PREF_STRING,
   "browser.newtabpage.activity-stream.asrouter.userprefs.cfr.addons": PREF_BOOL,
   "browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features":
     PREF_BOOL,
@@ -221,9 +225,10 @@ export const PREFS = Object.freeze({
   "browser.newtabpage.activity-stream.showSearch": PREF_BOOL,
   "browser.newtabpage.activity-stream.showSponsoredTopSites": PREF_BOOL,
   "browser.newtabpage.enabled": PREF_BOOL,
+  "browser.profiles.created": PREF_BOOL,
   "browser.startup.page": PREF_INT,
   "browser.toolbars.bookmarks.visibility": PREF_STRING,
-  "browser.urlbar.quicksuggest.dataCollection.enabled": PREF_BOOL,
+  "browser.urlbar.lastUrlbarSearchSeconds": PREF_INT,
   "browser.urlbar.showSearchSuggestionsFirst": PREF_BOOL,
   "browser.urlbar.suggest.quicksuggest.sponsored": PREF_BOOL,
   "media.videocontrols.picture-in-picture.enabled": PREF_BOOL,
@@ -234,6 +239,10 @@ export const PREFS = Object.freeze({
   "nimbus.qa.pref-1": PREF_STRING,
   "nimbus.qa.pref-2": PREF_STRING,
   "security.sandbox.content.level": PREF_INT,
+  "termsofuse.acceptedDate": PREF_STRING,
+  "termsofuse.acceptedVersion": PREF_INT,
+  "termsofuse.bypassNotification": PREF_BOOL,
+  "termsofuse.firstAcceptedDate": PREF_STRING,
   "trailhead.firstrun.didSeeAboutWelcome": PREF_BOOL,
 });
 
@@ -356,6 +365,12 @@ async function recordTargetingContextAttributes() {
     )
   ).ctx;
 
+  const recordAttrsEnabled =
+    lazy.NimbusFeatures.nimbusTelemetry.getVariable("gleanMetricConfiguration")
+      ?.metrics_enabled?.[
+      "nimbus_targeting_environment.targeting_context_value"
+    ] ?? false;
+
   const recordAttrs =
     lazy.NimbusFeatures.nimbusTelemetry.getVariable(
       "nimbusTargetingEnvironment"
@@ -367,7 +382,10 @@ async function recordTargetingContextAttributes() {
     try {
       const value = await transform(await context[attr]);
 
-      if (recordAttrs === null || recordAttrs.includes(attr)) {
+      if (
+        recordAttrsEnabled &&
+        (recordAttrs === null || recordAttrs.includes(attr))
+      ) {
         values[metric] = value;
       }
 
@@ -378,14 +396,16 @@ async function recordTargetingContextAttributes() {
     }
   }
 
-  let stringifiedCtx;
-  try {
-    stringifiedCtx = JSON.stringify(values);
-  } catch (ex) {
-    stringifiedCtx = "(JSON.stringify error)";
-  }
+  if (recordAttrsEnabled) {
+    let stringifiedCtx;
+    try {
+      stringifiedCtx = JSON.stringify(values);
+    } catch (ex) {
+      stringifiedCtx = "(JSON.stringify error)";
+    }
 
-  Glean.nimbusTargetingEnvironment.targetingContextValue.set(stringifiedCtx);
+    Glean.nimbusTargetingEnvironment.targetingContextValue.set(stringifiedCtx);
+  }
 }
 
 /**
@@ -398,6 +418,4 @@ export async function recordTargetingContext() {
 
   // This will ensure that the profile group ID metric has been set.
   await lazy.ClientID.getProfileGroupID();
-
-  GleanPings.nimbusTargetingContext.submit();
 }

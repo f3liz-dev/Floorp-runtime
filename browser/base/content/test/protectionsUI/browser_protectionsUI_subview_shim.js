@@ -12,7 +12,7 @@
 
 // Choose origin so that all tracking origins used are third-parties.
 const TRACKING_PAGE =
-  // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+  // eslint-disable-next-line sdl/no-insecure-url
   "http://example.net/browser/browser/base/content/test/protectionsUI/trackingPage.html";
 
 add_setup(async function () {
@@ -185,7 +185,7 @@ async function runTestForCategoryAndState(category, action) {
       elementId: "socialblock",
     },
     cryptomining: {
-      // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+      // eslint-disable-next-line sdl/no-insecure-url
       origin: "http://cryptomining.example.com",
       elementId: "cryptominers",
     },
@@ -247,7 +247,8 @@ async function runTestForCategoryAndState(category, action) {
 
 /**
  * Test mixed allow/block/replace states for the tracking protection category.
- * @param {Object} options - States to test.
+ *
+ * @param {object} options - States to test.
  * @param {boolean} options.block - Test tracker block state.
  * @param {boolean} options.allow - Test tracker allow state.
  * @param {boolean} options.replace - Test tracker replace state.

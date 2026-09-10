@@ -4,7 +4,6 @@
 
 "use strict";
 
-const EventEmitter = require("resource://devtools/shared/event-emitter.js");
 const {
   setIgnoreLayoutChanges,
 } = require("resource://devtools/shared/layout/utils.js");
@@ -23,11 +22,11 @@ class ViewportSizeHighlighter {
    *
    * @param {HighlighterEnvironment} highlighterEnv
    * @param {InspectorActor} parent
-   * @param {Object} options
-   * @param {Number} options.hideTimeout: An optional number. When passed, the viewport
+   * @param {object} options
+   * @param {number} options.hideTimeout: An optional number. When passed, the viewport
    *        information will automatically hide after {hideTimeout} ms.
-   * @param {String} options.extraCls: An extra class to add to the infobar container.
-   * @param {Boolean} options.waitForDocumentToLoad: Option that will be passed to
+   * @param {string} options.extraCls: An extra class to add to the infobar container.
+   * @param {boolean} options.waitForDocumentToLoad: Option that will be passed to
    *        CanvasFrameAnonymousContentHelper. Defaults to true
    */
   constructor(highlighterEnv, parent, options = {}) {
@@ -108,7 +107,12 @@ class ViewportSizeHighlighter {
     const { window } = this.env;
     const { innerHeight, innerWidth } = window;
     const infobarId = "viewport-size-highlighter-viewport-infobar-container";
-    const textContent = innerWidth + "px \u00D7 " + innerHeight + "px";
+    // We're getting un-rounded inner(Height|Width), but here 1 decimal should be enough.
+    // Note: we're not using Intl.NumberFormat with maximumFractionDigits as the size
+    // "strings" could have different length while resizing the window, which will make
+    // the highlighter look very jittery.
+    const textContent =
+      innerWidth.toFixed(1) + "px \u00D7 " + innerHeight.toFixed(1) + "px";
     this.markup.getElement(infobarId).setTextContent(textContent);
   }
 
@@ -139,8 +143,6 @@ class ViewportSizeHighlighter {
     this.parent = null;
     this.markup = null;
     this.isReady = null;
-
-    EventEmitter.emit(this, "destroy");
   }
 
   show() {

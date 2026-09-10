@@ -10,13 +10,22 @@
 
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
+#include <span>
+#include <string>
 #include <vector>
 
+#include "api/audio_codecs/audio_encoder.h"
+#include "api/audio_codecs/audio_encoder_factory.h"
+#include "api/audio_codecs/audio_format.h"
 #include "api/environment/environment.h"
-#include "api/environment/environment_factory.h"
+#include "api/scoped_refptr.h"
+#include "rtc_base/buffer.h"
 #include "rtc_base/numerics/safe_conversions.h"
+#include "test/create_test_environment.h"
 #include "test/gmock.h"
 #include "test/gtest.h"
 
@@ -41,7 +50,7 @@ TEST_P(AudioEncoderFactoryTest, CanQueryAllSupportedFormats) {
 }
 
 TEST_P(AudioEncoderFactoryTest, CanConstructAllSupportedEncoders) {
-  const Environment env = CreateEnvironment();
+  const Environment env = CreateTestEnvironment();
   auto factory = GetParam();
   auto supported_encoders = factory->GetSupportedEncoders();
   for (const auto& spec : supported_encoders) {
@@ -56,7 +65,7 @@ TEST_P(AudioEncoderFactoryTest, CanConstructAllSupportedEncoders) {
 
 TEST_P(AudioEncoderFactoryTest, CanRunAllSupportedEncoders) {
   constexpr int kTestPayloadType = 127;
-  const Environment env = CreateEnvironment();
+  const Environment env = CreateTestEnvironment();
   auto factory = GetParam();
   auto supported_encoders = factory->GetSupportedEncoders();
   for (const auto& spec : supported_encoders) {
@@ -74,7 +83,7 @@ TEST_P(AudioEncoderFactoryTest, CanRunAllSupportedEncoders) {
                                               encoder->NumChannels() / 100);
     Buffer out;
     BufferT<int16_t> audio;
-    audio.SetData(num_samples, [](ArrayView<int16_t> audio) {
+    audio.SetData(num_samples, [](std::span<int16_t> audio) {
       for (size_t i = 0; i != audio.size(); ++i) {
         // Just put some numbers in there, ensure they're within range.
         audio[i] =
@@ -152,7 +161,7 @@ TEST(BuiltinAudioEncoderFactoryTest, SupportsTheExpectedFormats) {
 
 // Tests that using more channels than the maximum does not work.
 TEST(BuiltinAudioEncoderFactoryTest, MaxNrOfChannels) {
-  const Environment env = CreateEnvironment();
+  const Environment env = CreateTestEnvironment();
   scoped_refptr<AudioEncoderFactory> aef = CreateBuiltinAudioEncoderFactory();
   std::vector<std::string> codecs = {
 #ifdef WEBRTC_CODEC_OPUS

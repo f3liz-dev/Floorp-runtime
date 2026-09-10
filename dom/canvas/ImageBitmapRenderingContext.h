@@ -50,7 +50,7 @@ class ImageBitmapRenderingContext final
                                JS::Handle<JSObject*> aGivenProto) override;
 
   // nsISupports interface + CC
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
 
   NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(ImageBitmapRenderingContext)
 
@@ -75,7 +75,7 @@ class ImageBitmapRenderingContext final
   NS_IMETHOD GetInputStream(
       const char* aMimeType, const nsAString& aEncoderOptions,
       mozilla::CanvasUtils::ImageExtraction aExtractionBehavior,
-      nsIInputStream** aStream) override;
+      const nsACString& aRandomizationKey, nsIInputStream** aStream) override;
 
   virtual already_AddRefed<mozilla::gfx::SourceSurface> GetSurfaceSnapshot(
       gfxAlphaType* aOutAlphaType) override;

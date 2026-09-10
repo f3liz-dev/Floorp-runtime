@@ -13,7 +13,7 @@
 
 #include <openssl/ossl_typ.h>
 
-#include <string>
+#include <cstdint>
 
 #include "absl/strings/string_view.h"
 
@@ -43,6 +43,10 @@ bool VerifyPeerCertMatchesHost(SSL* ssl, absl::string_view host);
 // prefix can be provided for context.
 void LogSSLErrors(absl::string_view prefix);
 
+// Logs a human-readable description of the SSL connection's handshake state
+// and any alerts. Intended to be installed via SSL_CTX_set_info_callback().
+void SSLInfoCallback(const SSL* ssl, int where, int ret);
+
 #ifndef WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS
 // Attempt to add the certificates from the loader into the SSL_CTX. False is
 // returned only if there are no certificates returned from the loader or none
@@ -57,26 +61,5 @@ CRYPTO_BUFFER_POOL* GetBufferPool();
 }  // namespace openssl
 }  // namespace webrtc
 
-// Re-export symbols from the webrtc namespace for backwards compatibility.
-// TODO(bugs.webrtc.org/4222596): Remove once all references are updated.
-#ifdef WEBRTC_ALLOW_DEPRECATED_NAMESPACES
-namespace rtc {
-namespace openssl {
-
-#ifndef WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS
-using ::webrtc::openssl::LoadBuiltinSSLRootCertificates;
-#endif
-
-using ::webrtc::openssl::LogSSLErrors;
-using ::webrtc::openssl::VerifyPeerCertMatchesHost;
-
-#ifdef OPENSSL_IS_BORINGSSL
-using ::webrtc::openssl::GetBufferPool;
-using ::webrtc::openssl::ParseCertificate;
-#endif
-
-}  // namespace openssl
-}  // namespace rtc
-#endif  // WEBRTC_ALLOW_DEPRECATED_NAMESPACES
 
 #endif  // RTC_BASE_OPENSSL_UTILITY_H_

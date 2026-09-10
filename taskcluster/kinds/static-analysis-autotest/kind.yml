@@ -5,6 +5,7 @@
 loader: taskgraph.loader.transform:loader
 
 kind-dependencies:
+    - fetch
     - toolchain
 
 transforms:
@@ -15,6 +16,7 @@ transforms:
     - gecko_taskgraph.transforms.task:transforms
 
 task-defaults:
+    run-on-repo-type: [hg]
     attributes:
         retrigger: true
     index:
@@ -27,6 +29,7 @@ task-defaults:
     use-python: default
     run-on-projects: ['mozilla-central']
     run:
+        clone-with: hg
         using: mozharness
         actions: [static-analysis-autotest]
         script: mozharness/scripts/fx_desktop_build.py
@@ -42,7 +45,7 @@ tasks:
             job-name: linux64-st-autotest-debug
         treeherder:
             platform: linux64/debug
-        worker-type: t-linux-docker
+        worker-type: t-linux-docker-amd
         worker:
             docker-image: {in-tree: static-analysis-build}
             env:
@@ -98,5 +101,7 @@ tasks:
                 - win64-dump_syms
                 - win64-winchecksec
                 - vs
-                - windows-rs
                 - sysroot-wasm32-wasi
+                - winappsdk-x86_64-pc-windows-msvc
+            fetch:
+                - windows-rs

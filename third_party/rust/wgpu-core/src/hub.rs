@@ -18,6 +18,9 @@ The resources to which identifiers refer are freed explicitly.
 Attempting to use an identifier for a resource that has been freed
 elicits an error result.
 
+Eventually, we would like to remove numeric IDs from wgpu-core.
+See <https://github.com/gfx-rs/wgpu/issues/5121>.
+
 ## Assigning ids to resources
 
 The users of `wgpu_core` generally want resource ids to be assigned
@@ -27,9 +30,9 @@ in one of two ways:
   For example, `wgpu` expects to call `Global::device_create_buffer`
   and have the return value indicate the newly created buffer's id.
 
-- Users like `player` and Firefox want to allocate ids themselves, and
-  pass `Global::device_create_buffer` and friends the id to assign the
-  new resource.
+- Users like Firefox want to allocate ids themselves, and pass
+  `Global::device_create_buffer` and friends the id to assign the new
+  resource.
 
 To accommodate either pattern, `wgpu_core` methods that create
 resources all expect an `id_in` argument that the caller can use to
@@ -98,6 +101,19 @@ flagged as errors as well.
 [wrapped in a mutex]: trait.IdentityHandler.html#impl-IdentityHandler%3CI%3E-for-Mutex%3CIdentityManager%3E
 [WebGPU]: https://www.w3.org/TR/webgpu/
 
+## IDs and tracing
+
+As of `wgpu` v27, commands are encoded all at once when
+`CommandEncoder::finish` is called, not when the encoding methods are
+called for each command. This implies storing a representation of the
+commands in memory until `finish` is called.  `Arc`s are more suitable
+for this purpose than numeric ids. Rather than redundantly store both
+`Id`s and `Arc`s, tracing has been changed to work with `Arc`s. The
+serialized trace identifies resources by the integer value of
+`Arc::as_ptr`. These IDs have the type [`crate::id::PointerId`]. The
+trace player uses hash maps to go from `PointerId`s to `Arc`s
+when replaying a trace.
+
 */
 
 use alloc::sync::Arc;
@@ -105,16 +121,20 @@ use core::fmt::Debug;
 
 use crate::{
     binding_model::{BindGroup, BindGroupLayout, PipelineLayout},
-    command::{CommandBuffer, CommandEncoder, RenderBundle},
+    command::{
+        CommandBuffer, CommandEncoder, ComputePass, RenderBundle, RenderBundleEncoder, RenderPass,
+    },
     device::{queue::Queue, Device},
     instance::Adapter,
+    lock::rank,
     pipeline::{ComputePipeline, PipelineCache, RenderPipeline, ShaderModule},
     registry::{Registry, RegistryReport},
     resource::{
-        Blas, Buffer, ExternalTexture, Fallible, QuerySet, Sampler, StagingBuffer, Texture,
-        TextureView, Tlas,
+        Blas, Buffer, ExternalTexture, QuerySet, Sampler, StagingBuffer, Texture, TextureView, Tlas,
     },
 };
+
+use parking_lot::Mutex;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct HubReport {
@@ -137,6 +157,9 @@ pub struct HubReport {
     pub texture_views: RegistryReport,
     pub external_textures: RegistryReport,
     pub samplers: RegistryReport,
+    pub render_passes: RegistryReport,
+    pub compute_passes: RegistryReport,
+    pub render_bundle_encoders: RegistryReport,
 }
 
 impl HubReport {
@@ -170,29 +193,39 @@ pub struct Hub {
     pub(crate) adapters: Registry<Arc<Adapter>>,
     pub(crate) devices: Registry<Arc<Device>>,
     pub(crate) queues: Registry<Arc<Queue>>,
-    pub(crate) pipeline_layouts: Registry<Fallible<PipelineLayout>>,
-    pub(crate) shader_modules: Registry<Fallible<ShaderModule>>,
-    pub(crate) bind_group_layouts: Registry<Fallible<BindGroupLayout>>,
-    pub(crate) bind_groups: Registry<Fallible<BindGroup>>,
+    pub(crate) pipeline_layouts: Registry<Arc<PipelineLayout>>,
+    pub(crate) shader_modules: Registry<Arc<ShaderModule>>,
+    pub(crate) bind_group_layouts: Registry<Arc<BindGroupLayout>>,
+    pub(crate) bind_groups: Registry<Arc<BindGroup>>,
     pub(crate) command_encoders: Registry<Arc<CommandEncoder>>,
     pub(crate) command_buffers: Registry<Arc<CommandBuffer>>,
-    pub(crate) render_bundles: Registry<Fallible<RenderBundle>>,
-    pub(crate) render_pipelines: Registry<Fallible<RenderPipeline>>,
-    pub(crate) compute_pipelines: Registry<Fallible<ComputePipeline>>,
-    pub(crate) pipeline_caches: Registry<Fallible<PipelineCache>>,
-    pub(crate) query_sets: Registry<Fallible<QuerySet>>,
-    pub(crate) buffers: Registry<Fallible<Buffer>>,
+    pub(crate) render_bundles: Registry<Arc<RenderBundle>>,
+    pub(crate) render_pipelines: Registry<Arc<RenderPipeline>>,
+    pub(crate) compute_pipelines: Registry<Arc<ComputePipeline>>,
+    pub(crate) pipeline_caches: Registry<Arc<PipelineCache>>,
+    pub(crate) query_sets: Registry<Arc<QuerySet>>,
+    pub(crate) buffers: Registry<Arc<Buffer>>,
     pub(crate) staging_buffers: Registry<StagingBuffer>,
-    pub(crate) textures: Registry<Fallible<Texture>>,
-    pub(crate) texture_views: Registry<Fallible<TextureView>>,
-    pub(crate) external_textures: Registry<Fallible<ExternalTexture>>,
-    pub(crate) samplers: Registry<Fallible<Sampler>>,
-    pub(crate) blas_s: Registry<Fallible<Blas>>,
-    pub(crate) tlas_s: Registry<Fallible<Tlas>>,
+    pub(crate) textures: Registry<Arc<Texture>>,
+    pub(crate) texture_views: Registry<Arc<TextureView>>,
+    pub(crate) external_textures: Registry<Arc<ExternalTexture>>,
+    pub(crate) samplers: Registry<Arc<Sampler>>,
+    pub(crate) blas_s: Registry<Arc<Blas>>,
+    pub(crate) tlas_s: Registry<Arc<Tlas>>,
+    pub(crate) render_passes: Registry<Arc<Mutex<RenderPass>>>,
+    pub(crate) compute_passes: Registry<Arc<Mutex<ComputePass>>>,
+    pub(crate) render_bundle_encoders: Registry<Arc<Mutex<RenderBundleEncoder>>>,
 }
 
 impl Hub {
     pub(crate) fn new() -> Self {
+        // Unique lock ranks are required only for registries that are accessed concurrently.
+        // This happens in render pass/bundle encoding, and bind group creation. (Concurrent
+        // access could probably be avoided even in those cases, but acquiring all the locks
+        // at once simplifies the code.)
+        //
+        // The _first_ concurrently-held registry lock uses REGISTRY_STORAGE. Others have
+        // their own named lock rank.
         Self {
             adapters: Registry::new(),
             devices: Registry::new(),
@@ -200,22 +233,25 @@ impl Hub {
             pipeline_layouts: Registry::new(),
             shader_modules: Registry::new(),
             bind_group_layouts: Registry::new(),
-            bind_groups: Registry::new(),
+            bind_groups: Registry::with_rank(rank::HUB_BIND_GROUPS),
             command_encoders: Registry::new(),
             command_buffers: Registry::new(),
             render_bundles: Registry::new(),
-            render_pipelines: Registry::new(),
+            render_pipelines: Registry::with_rank(rank::HUB_RENDER_PIPELINES),
             compute_pipelines: Registry::new(),
             pipeline_caches: Registry::new(),
             query_sets: Registry::new(),
             buffers: Registry::new(),
             staging_buffers: Registry::new(),
             textures: Registry::new(),
-            texture_views: Registry::new(),
-            external_textures: Registry::new(),
-            samplers: Registry::new(),
+            texture_views: Registry::with_rank(rank::HUB_TEXTURE_VIEWS),
+            external_textures: Registry::with_rank(rank::HUB_EXTERNAL_TEXTURES),
+            samplers: Registry::with_rank(rank::HUB_SAMPLERS),
             blas_s: Registry::new(),
-            tlas_s: Registry::new(),
+            tlas_s: Registry::with_rank(rank::HUB_TLAS),
+            render_passes: Registry::new(),
+            compute_passes: Registry::new(),
+            render_bundle_encoders: Registry::new(),
         }
     }
 
@@ -240,6 +276,9 @@ impl Hub {
             texture_views: self.texture_views.generate_report(),
             external_textures: self.external_textures.generate_report(),
             samplers: self.samplers.generate_report(),
+            render_passes: self.render_passes.generate_report(),
+            compute_passes: self.compute_passes.generate_report(),
+            render_bundle_encoders: self.render_bundle_encoders.generate_report(),
         }
     }
 }

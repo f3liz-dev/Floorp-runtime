@@ -1,4 +1,3 @@
-/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -1041,7 +1040,7 @@ export var PlacesUtils = {
   /**
    * Copy a single places result node, recursively if applicable.
    *
-   * @param {Object} node
+   * @param {object} node
    *    The node to copy. If not a real places node but a single
    *    title/URL combination, you must set `type` to 0 (aka RESULT_TYPE_URI),
    *    and provide a `title` and `uri` property which should both be strings.
@@ -1475,10 +1474,12 @@ export var PlacesUtils = {
    *
    * @param {nsINavHistoryContainerResultNode} aNode
    *   The container node to search through.
+   * @param {function(string): boolean} uriValidatorFn
+   *   An optional function that takes a URI and returns true if it should be considered a valid URI.
    * @returns {boolean}
    *   True if the node contains uri nodes, false otherwise.
    */
-  hasChildURIs(aNode) {
+  hasChildURIs(aNode, uriValidatorFn) {
     if (!this.nodeIsContainer(aNode)) {
       return false;
     }
@@ -1499,7 +1500,10 @@ export var PlacesUtils = {
     let found = false;
     for (let i = 0, count = root.childCount; i < count && !found; i++) {
       let child = root.getChild(i);
-      if (this.nodeIsURI(child)) {
+      if (
+        this.nodeIsURI(child) &&
+        (!uriValidatorFn || uriValidatorFn(child.uri))
+      ) {
         found = true;
       }
     }
@@ -2142,6 +2146,24 @@ export var PlacesUtils = {
       this._loggers.set(prefix, logger);
     }
     return logger;
+  },
+
+  /**
+   * Converts an array of Float32 into a SQL bindable blob format.
+   *
+   * @param {Array<number>|Float32Array} tensor
+   * @returns {Uint8ClampedArray} SQL bindable blob.
+   */
+  tensorToSQLBindable(tensor) {
+    if (!tensor) {
+      throw new Error("tensorToSQLBindable received an invalid tensor");
+    } else if (Array.isArray(tensor)) {
+      return new Uint8ClampedArray(new Float32Array(tensor).buffer);
+    } else if (tensor instanceof Float32Array) {
+      return new Uint8ClampedArray(tensor.buffer);
+    } else {
+      throw new Error("tensorToSQLBindable received an invalid tensor");
+    }
   },
 
   /**
@@ -2997,14 +3019,14 @@ XPCOMUtils.defineLazyServiceGetter(
   PlacesUtils,
   "favicons",
   "@mozilla.org/browser/favicon-service;1",
-  "nsIFaviconService"
+  Ci.nsIFaviconService
 );
 
 XPCOMUtils.defineLazyServiceGetter(
   lazy,
   "bmsvc",
   "@mozilla.org/browser/nav-bookmarks-service;1",
-  "nsINavBookmarksService"
+  Ci.nsINavBookmarksService
 );
 ChromeUtils.defineLazyGetter(PlacesUtils, "bookmarks", () => {
   return Object.freeze(
@@ -3021,7 +3043,7 @@ XPCOMUtils.defineLazyServiceGetter(
   PlacesUtils,
   "tagging",
   "@mozilla.org/browser/tagging-service;1",
-  "nsITaggingService"
+  Ci.nsITaggingService
 );
 
 ChromeUtils.defineLazyGetter(lazy, "bundle", function () {
@@ -3134,9 +3156,9 @@ ChromeUtils.defineLazyGetter(lazy, "gAsyncDBLargeCacheConnPromised", () =>
       // This should be kept in sync with nsPlacesTables.h.
       await conn.execute(`
         CREATE TEMP TABLE IF NOT EXISTS moz_openpages_temp (
-          url TEXT,
-          userContextId INTEGER,
-          groupId TEXT,
+          url TEXT NOT NULL,
+          userContextId INTEGER NOT NULL,
+          groupId TEXT NOT NULL,
           open_count INTEGER,
           PRIMARY KEY (url, userContextId, groupId)
         )`);
@@ -3149,7 +3171,7 @@ ChromeUtils.defineLazyGetter(lazy, "gAsyncDBLargeCacheConnPromised", () =>
           DELETE FROM moz_openpages_temp
           WHERE url = NEW.url
             AND userContextId = NEW.userContextId
-            AND groupId IS NEW.groupId;
+            AND groupId = NEW.groupId;
         END`);
       gAsyncDBLargeCacheConnDeferred.resolve(conn);
       return conn;

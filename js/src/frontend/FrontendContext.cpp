@@ -1,14 +1,14 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "frontend/FrontendContext.h"
 
 #ifdef _WIN32
+// clang-format off
 #  include "util/WindowsWrapper.h"
 #  include <process.h>  // GetCurrentThreadId
+// clang-format on
 #else
 #  include <pthread.h>  // pthread_self
 #endif
@@ -34,9 +34,7 @@ void FrontendErrors::clearErrors() {
 
 void FrontendErrors::clearWarnings() { warnings.clear(); }
 
-void FrontendAllocator::reportAllocationOverflow() {
-  fc_->onAllocationOverflow();
-}
+void FrontendAllocator::reportAllocOverflow() { fc_->onAllocationOverflow(); }
 
 void* FrontendAllocator::onOutOfMemory(AllocFunction allocFunc,
                                        arena_id_t arena, size_t nbytes,
@@ -208,9 +206,16 @@ bool FrontendContext::convertToRuntimeError(
   }
   if (warning == Warning::Report) {
     for (CompileError& error : warnings()) {
+#ifdef DEBUG
+      bool hadException = cx->isExceptionPending();
+#endif
       if (!error.throwError(cx)) {
         return false;
       }
+
+      // The warning reporter shouldn't clear the exception set by
+      // other errors.
+      MOZ_ASSERT_IF(hadException, cx->isExceptionPending());
     }
   }
   if (hadOverRecursed()) {

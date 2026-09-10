@@ -1,6 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -13,13 +11,11 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/Compiler.h"
-#include "mozilla/FloatingPoint.h"
 
 #include <algorithm>
 #include <type_traits>
 
-#include "jsnum.h"
-
+#include "builtin/Number.h"
 #include "gc/Zone.h"
 #include "jit/AtomicOperations.h"
 #include "js/Conversions.h"
@@ -44,11 +40,7 @@ namespace js {
 //
 // https://cplusplus.github.io/CWG/issues/2518.html
 #if defined(__clang__)
-#  if (__clang_major__ >= 17)
-#    define STATIC_ASSERT_IN_UNEVALUATED_CONTEXT 1
-#  else
-#    define STATIC_ASSERT_IN_UNEVALUATED_CONTEXT 0
-#  endif
+#  define STATIC_ASSERT_IN_UNEVALUATED_CONTEXT 1
 #elif MOZ_IS_GCC
 #  if MOZ_GCC_VERSION_AT_LEAST(13, 1, 0)
 #    define STATIC_ASSERT_IN_UNEVALUATED_CONTEXT 1

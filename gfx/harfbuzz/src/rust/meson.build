@@ -36,13 +36,13 @@ buildtype = get_option('buildtype')
 if buildtype == 'release' or buildtype == 'debugoptimized'
   cargo_args += [
     '-Z', 'build-std=std,panic_abort',
-    '-Z', 'build-std-features=panic_immediate_abort',
+    '-Z', 'build-std-features=optimize_for_size',
   ]
   cargo_args += ['--profile', buildtype]
 endif
 
 opt_level = get_option('optimization')
-rust_flags += ' -C opt-level=' + opt_level
+rust_flags += ' -C force-frame-pointers=yes -C force-unwind-tables=no -C opt-level=' + opt_level
 
 sources = [
   'lib.rs',
@@ -52,9 +52,10 @@ sources = [
 
 harfbuzz_rust = custom_target(
   'harfbuzz_rust',
-  input: sources + ['Cargo.toml', 'Cargo.lock'],
+  input: sources + ['Cargo.toml'],
   output: ['libharfbuzz_rust.a'],
   depends: [hb_rs],
+  build_always_stale: true,
   env: ['OUT_DIR=' + meson.current_build_dir(),
         'RUSTFLAGS=' + rust_flags,
   ],

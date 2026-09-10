@@ -9,20 +9,49 @@ const { LINKS } = ChromeUtils.importESModule(
 );
 const lazy = {};
 
+const { sinon } = ChromeUtils.importESModule(
+  "resource://testing-common/Sinon.sys.mjs"
+);
+
 ChromeUtils.defineESModuleGetters(lazy, {
-  IPProtectionWidget: "resource:///modules/ipprotection/IPProtection.sys.mjs",
+  IPProtectionWidget:
+    "moz-src:///browser/components/ipprotection/IPProtection.sys.mjs",
   IPProtectionPanel:
-    "resource:///modules/ipprotection/IPProtectionPanel.sys.mjs",
+    "moz-src:///browser/components/ipprotection/IPProtectionPanel.sys.mjs",
+  IPProtectionService:
+    "moz-src:///toolkit/components/ipprotection/IPProtectionService.sys.mjs",
+  IPPDummyAuthProvider:
+    "resource://testing-common/ipprotection/IPPDummyAuthProvider.sys.mjs",
+  IPPNimbusHelper:
+    "moz-src:///toolkit/components/ipprotection/IPPNimbusHelper.sys.mjs",
 });
 
-async function setAndUpdateIsSignedIn(content, isSignedIn) {
-  content.state.isSignedIn = isSignedIn;
-  content.requestUpdate();
-  await content.updateComplete;
-}
+const PANELSTATES = {
+  signedOutVPNOff: {
+    unauthenticated: true,
+    isProtectionEnabled: false,
+  },
+  signedInVPNOff: {
+    unauthenticated: false,
+    isProtectionEnabled: false,
+  },
+  signedInVPNOn: {
+    unauthenticated: false,
+    isProtectionEnabled: true,
+  },
+};
 
-async function setAndUpdateHasUpgraded(content, hasUpgraded) {
-  content.state.hasUpgraded = hasUpgraded;
+async function setAuthenticated(content, isReady, sandbox) {
+  if (isReady) {
+    lazy.IPPDummyAuthProvider.simulateSignIn(true);
+    lazy.IPPDummyAuthProvider.setEntitlement(createTestEntitlement(), {
+      silent: true,
+    });
+  } else {
+    lazy.IPPDummyAuthProvider.simulateSignIn(false);
+  }
+  sandbox.stub(lazy.IPPNimbusHelper, "hidesFeature").returns(false);
+  lazy.IPProtectionService.updateState();
   content.requestUpdate();
   await content.updateComplete;
 }
@@ -37,6 +66,8 @@ async function resetStateToObj(content, originalState) {
  * Tests that the ip protection main panel view has the correct content.
  */
 add_task(async function test_main_content() {
+  let sandbox = sinon.createSandbox();
+
   let button = document.getElementById(lazy.IPProtectionWidget.WIDGET_ID);
   let panelView = PanelMultiView.getViewNode(
     document,
@@ -52,57 +83,13 @@ add_task(async function test_main_content() {
 
   let originalState = structuredClone(content.state);
 
-  await setAndUpdateIsSignedIn(content, true);
+  await setAuthenticated(content, true, sandbox);
 
   Assert.ok(
     BrowserTestUtils.isVisible(content),
     "ipprotection content component should be present"
   );
   Assert.ok(content.statusCardEl, "Status card should be present");
-
-  // Test content before user upgrade
-  await setAndUpdateHasUpgraded(content, false);
-  Assert.ok(
-    !content.activeSubscriptionEl,
-    "Active subscription element should not be present"
-  );
-  Assert.ok(content.upgradeEl, "Upgrade vpn element should be present");
-  Assert.ok(
-    content.upgradeEl.querySelector("#upgrade-vpn-title"),
-    "Upgrade vpn title should be present"
-  );
-  Assert.ok(
-    content.upgradeEl.querySelector("#upgrade-vpn-paragraph"),
-    "Upgrade vpn paragraph should be present"
-  );
-  Assert.ok(
-    content.upgradeEl.querySelector("#upgrade-vpn-button"),
-    "Upgrade vpn button should be present"
-  );
-
-  // Test content after user upgrade
-  await setAndUpdateHasUpgraded(content, true);
-  Assert.ok(!content.upgradeEl, "Upgrade vpn element should not be present");
-  Assert.ok(
-    content.activeSubscriptionEl,
-    "Active subscription element should be present"
-  );
-  Assert.ok(
-    content.activeSubscriptionEl.querySelector(
-      "#active-subscription-vpn-title"
-    ),
-    "Active subcription vpn title should be present"
-  );
-  Assert.ok(
-    content.activeSubscriptionEl.querySelector(
-      "#active-subscription-vpn-message"
-    ),
-    "Active subscription vpn paragraph should be present"
-  );
-  Assert.ok(
-    content.activeSubscriptionEl.querySelector("#download-vpn-button"),
-    "Download vpn button should be present"
-  );
 
   await resetStateToObj(content, originalState);
 
@@ -110,217 +97,245 @@ add_task(async function test_main_content() {
   let panelHiddenPromise = waitForPanelEvent(document, "popuphidden");
   EventUtils.synthesizeKey("KEY_Escape");
   await panelHiddenPromise;
+
+  sandbox.restore();
 });
 
 /**
- * Tests UI updates to the status card in the panel after enable/disable.
+ * Tests settings link visibility in different panel states.
  */
-add_task(async function test_status_card() {
-  const l10nIdOn = "ipprotection-connection-status-on";
-  const l10nIdOff = "ipprotection-connection-status-off";
-  const fiveDaysInMS = 5 * 24 * 60 * 60 * 1000;
-  const enabledSince = Date.now() - fiveDaysInMS;
-  const mockLocation = {
-    name: "United States",
-    code: "us",
-  };
-
-  let content = await openPanel({
-    isSignedIn: true,
-    protectionEnabledSince: enabledSince,
-    location: mockLocation,
-  });
+add_task(async function test_settings_link_visibility() {
+  let content = await openPanel(PANELSTATES.signedOutVPNOff);
 
   Assert.ok(
-    BrowserTestUtils.isVisible(content),
-    "ipprotection content component should be present"
-  );
-  Assert.ok(content.statusCardEl, "Status card should be present");
-  Assert.equal(
-    content.statusCardEl?.getAttribute("data-l10n-id"),
-    l10nIdOff,
-    "Status card connection toggle data-l10n-id should be correct by default"
-  );
-  Assert.equal(
-    content.statusCardEl?.description,
-    "",
-    "Time string should be empty"
-  );
-  Assert.ok(content.locationEl, "Location details should be present");
-
-  let flag = content.locationEl?.shadowRoot.querySelector("ipprotection-flag");
-
-  Assert.ok(flag, "Flag component should be present");
-
-  let animationLoadedPromise = BrowserTestUtils.waitForMutationCondition(
-    content.shadowRoot,
-    { childList: true, subtree: true },
-    () => !content.animationEl
-  );
-  let timerUpdatedPromise = BrowserTestUtils.waitForMutationCondition(
-    content.shadowRoot,
-    { childList: true, subtree: true },
-    () => content._connectionTimeInterval
+    !content.settingsButtonEl,
+    "Settings button should NOT be present when not signed in"
   );
 
-  // Set state as if protection is enabled
-  content.state.isProtectionEnabled = true;
-  content.state.protectionEnabledSince = enabledSince;
-  content.requestUpdate();
-  await Promise.all([
-    content.updateComplete,
-    timerUpdatedPromise,
-    animationLoadedPromise,
-  ]);
+  await closePanel();
 
-  Assert.equal(
-    content.statusCardEl?.getAttribute("data-l10n-id"),
-    l10nIdOn,
-    "Status card connection toggle data-l10n-id should be correct when protection is enabled"
-  );
-  Assert.ok(content.animationEl, "Status card animation should be present");
+  content = await openPanel(PANELSTATES.signedInVPNOff);
 
-  let animationUnloadedPromise = BrowserTestUtils.waitForMutationCondition(
-    content.shadowRoot,
-    { childList: true, subtree: true },
-    () => !content.animationEl
-  );
-  let timerStoppedPromise = BrowserTestUtils.waitForMutationCondition(
-    content.shadowRoot,
-    { childList: true, subtree: true },
-    () => !content._connectionTimeInterval
-  );
-
-  // Set state as if protection is disabled
-  content.state.isProtectionEnabled = false;
-  content.requestUpdate();
-  await Promise.all([
-    content.updateComplete,
-    animationUnloadedPromise,
-    timerStoppedPromise,
-  ]);
-
-  Assert.equal(
-    content.statusCardEl?.getAttribute("data-l10n-id"),
-    l10nIdOff,
-    "Status card connection toggle data-l10n-id should be correct when protection is disabled"
-  );
   Assert.ok(
-    !content.animationEl,
-    "Status card animation should not be present"
+    content.settingsButtonEl,
+    "Settings button should be present when VPN is disabled"
+  );
+
+  await closePanel();
+
+  content = await openPanel(PANELSTATES.signedInVPNOn);
+
+  Assert.ok(
+    content.settingsButtonEl,
+    "Settings button should be present when VPN is enabled"
   );
 
   await closePanel();
 });
 
 /**
- * Tests that the correct IPProtection events are dispatched on toggle.
+ * Tests that clicking the settings button closes the panel and calls
+ * openPreferences with the correct argument.
  */
-add_task(async function test_ipprotection_events_on_toggle() {
-  const userEnableEventName = "IPProtection:UserEnable";
-  const userDisableEventName = "IPProtection:UserDisable";
+add_task(async function test_settings_button_closes_panel() {
+  let content = await openPanel(PANELSTATES.signedInVPNOn);
 
-  let button = document.getElementById(lazy.IPProtectionWidget.WIDGET_ID);
+  Assert.ok(BrowserTestUtils.isVisible(content), "VPN panel should be present");
+
+  Assert.ok(content.settingsButtonEl, "Settings button should be present");
+
+  let panelHiddenPromise = waitForPanelEvent(document, "popuphidden");
+
+  const openPreferencesStub = sinon.stub(window, "openPreferences");
+
+  content.settingsButtonEl.click();
+
+  await panelHiddenPromise;
+
   let panelView = PanelMultiView.getViewNode(
     document,
     lazy.IPProtectionWidget.PANEL_ID
   );
-
-  let panelShownPromise = waitForPanelEvent(document, "popupshown");
-  // Open the panel
-  button.click();
-  await panelShownPromise;
-
-  let content = panelView.querySelector(lazy.IPProtectionPanel.CONTENT_TAGNAME);
-
-  await setAndUpdateIsSignedIn(content, true);
-  IPProtectionService.isSignedIn = true;
+  Assert.ok(!BrowserTestUtils.isVisible(panelView), "Panel should be closed");
 
   Assert.ok(
-    BrowserTestUtils.isVisible(content),
-    "ipprotection content component should be present"
+    openPreferencesStub.calledWith("privacy-vpn"),
+    "openPreferences called with correct argument when settings button clicked"
   );
-  Assert.ok(content.statusCardEl, "Status card should be present");
-  Assert.ok(
-    content.connectionToggleEl,
-    "Status card connection toggle should be present"
-  );
-
-  let enableEventPromise = BrowserTestUtils.waitForEvent(
-    window,
-    userEnableEventName
-  );
-
-  IPProtectionService.isEnrolled = true;
-  IPProtectionService.isEntitled = true;
-
-  content.connectionToggleEl.click();
-
-  await enableEventPromise;
-  Assert.ok("Enable event was found after clicking the toggle");
-
-  let disableEventPromise = BrowserTestUtils.waitForEvent(
-    window,
-    userDisableEventName
-  );
-  content.connectionToggleEl.click();
-
-  await disableEventPromise;
-  Assert.ok("Disable event was found after clicking the toggle");
-
-  IPProtectionService.isEnrolled = false;
-  IPProtectionService.isEntitled = false;
-  IPProtectionService.isSignedIn = false;
-
-  // Close the panel
-  let panelHiddenPromise = waitForPanelEvent(document, "popuphidden");
-  EventUtils.synthesizeKey("KEY_Escape");
-  await panelHiddenPromise;
+  openPreferencesStub.restore();
 });
 
-add_task(async function test_support_link() {
-  let button = document.getElementById(lazy.IPProtectionWidget.WIDGET_ID);
+/**
+ * Tests settings link visibility in different panel states.
+ */
+add_task(async function test_settings_link_visibility() {
+  let content = await openPanel(PANELSTATES.signedOutVPNOff);
+
+  Assert.ok(
+    !content.settingsButtonEl,
+    "Settings button should NOT be present when not signed in"
+  );
+
+  await closePanel();
+
+  content = await openPanel(PANELSTATES.signedInVPNOff);
+
+  Assert.ok(
+    content.settingsButtonEl,
+    "Settings button should be present when VPN is disabled"
+  );
+
+  await closePanel();
+
+  content = await openPanel(PANELSTATES.signedInVPNOn);
+
+  Assert.ok(
+    content.settingsButtonEl,
+    "Settings button should be present when VPN is enabled"
+  );
+
+  await closePanel();
+});
+
+/**
+ * Tests that clicking the settings button closes the panel and calls
+ * openPreferences with the correct argument.
+ */
+add_task(async function test_settings_button_closes_panel() {
+  let content = await openPanel(PANELSTATES.signedInVPNOn);
+
+  Assert.ok(BrowserTestUtils.isVisible(content), "VPN panel should be present");
+
+  Assert.ok(content.settingsButtonEl, "Settings button should be present");
+
+  let panelHiddenPromise = waitForPanelEvent(document, "popuphidden");
+
+  const openPreferencesStub = sinon.stub(window, "openPreferences");
+
+  content.settingsButtonEl.click();
+
+  await panelHiddenPromise;
+
   let panelView = PanelMultiView.getViewNode(
     document,
     lazy.IPProtectionWidget.PANEL_ID
   );
+  Assert.ok(!BrowserTestUtils.isVisible(panelView), "Panel should be closed");
 
-  let panelShownPromise = waitForPanelEvent(document, "popupshown");
-  let panelInitPromise = BrowserTestUtils.waitForEvent(
-    document,
-    "IPProtection:Init"
+  Assert.ok(
+    openPreferencesStub.calledWith("privacy-vpn"),
+    "openPreferences called with correct argument when settings button clicked"
   );
-  // Open the panel
-  button.click();
-  await Promise.all([panelShownPromise, panelInitPromise]);
+  openPreferencesStub.restore();
+});
 
-  let content = panelView.querySelector(lazy.IPProtectionPanel.CONTENT_TAGNAME);
-  let originalState = structuredClone(content.state);
-  content.state.hasUpgraded = false;
-  content.state.isSignedIn = true;
-  content.requestUpdate();
-  await content.updateComplete;
+/**
+ * Tests the enrolling skeleton state renders in ipprotection-content.
+ */
+add_task(async function test_enrolling_skeleton() {
+  let content = await openPanel({
+    unauthenticated: false,
+    isEnrolling: true,
+  });
 
-  let supportLink = content.upgradeEl.querySelector("#vpn-support-link");
-  Assert.ok(supportLink, "Support link should be present");
-
-  let newTabPromise = BrowserTestUtils.waitForNewTab(
-    gBrowser,
-    LINKS.PRODUCT_URL
+  let container = content.shadowRoot.querySelector("#enrolling-container");
+  Assert.ok(container, "Enrolling container should be present");
+  Assert.ok(
+    container.querySelector(".skeleton-title"),
+    "Skeleton title element should be present"
   );
-  let panelHiddenPromise = waitForPanelEvent(document, "popuphidden");
-  supportLink.click();
-  let newTab = await newTabPromise;
-  await panelHiddenPromise;
-
+  Assert.ok(
+    container.querySelector(".skeleton-line"),
+    "Skeleton line element should be present"
+  );
   Assert.equal(
-    gBrowser.selectedTab,
-    newTab,
-    "New tab is now open in a new foreground tab"
+    container.querySelectorAll(".skeleton-line-thick").length,
+    2,
+    "Two skeleton line thick elements should be present"
+  );
+  Assert.ok(
+    container.querySelector(".skeleton-image"),
+    "Skeleton image element should be present"
   );
 
-  // To be safe, reset the entire state
-  await resetStateToObj(content, originalState);
+  Assert.ok(
+    !content.statusCardEl,
+    "Status card should be hidden while enrolling"
+  );
+  Assert.ok(
+    !content.statusBoxEl,
+    "Status box should be hidden while enrolling"
+  );
+  Assert.ok(
+    content.settingsButtonEl,
+    "Settings button should be present while enrolling"
+  );
 
-  BrowserTestUtils.removeTab(newTab);
+  await closePanel();
+});
+
+/**
+ * Tests that the enrolling state takes priority over the unauthenticated state.
+ */
+add_task(async function test_enrolling_overrides_unauthenticated() {
+  let content = await openPanel({
+    unauthenticated: true,
+    isEnrolling: true,
+  });
+
+  Assert.ok(
+    !content.unauthenticatedEl,
+    "Unauthenticated view should be hidden while enrolling"
+  );
+  Assert.ok(
+    content.shadowRoot.querySelector("#enrolling-container"),
+    "Enrolling skeleton should be shown instead"
+  );
+
+  await closePanel();
+});
+
+/**
+ * Tests that the panel transitions from the enrolling skeleton to the normal
+ * state once enrollment completes.
+ */
+add_task(async function test_enrolling_transitions_to_ready() {
+  setupService({
+    isReady: true,
+    canEnroll: true,
+    proxyPass: {
+      status: 200,
+      error: undefined,
+      pass: makePass(),
+    },
+  });
+
+  let content = await openPanel({
+    unauthenticated: false,
+    isProtectionEnabled: false,
+    isEnrolling: true,
+  });
+
+  Assert.ok(
+    content.shadowRoot.querySelector("#enrolling-container"),
+    "Skeleton shown initially"
+  );
+
+  await setPanelState({
+    unauthenticated: false,
+    isProtectionEnabled: false,
+    isEnrolling: false,
+  });
+
+  Assert.ok(
+    !content.shadowRoot.querySelector("#enrolling-container"),
+    "Skeleton hidden after enrollment completes"
+  );
+  Assert.ok(
+    content.statusCardEl,
+    "Status card shown after enrollment completes"
+  );
+
+  await closePanel();
+  cleanupService();
 });

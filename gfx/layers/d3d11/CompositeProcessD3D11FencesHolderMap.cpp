@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -27,11 +25,6 @@ void CompositeProcessD3D11FencesHolderMap::Shutdown() {
   MOZ_ASSERT(XRE_IsGPUProcess() || XRE_IsParentProcess());
   sInstance = nullptr;
 }
-
-CompositeProcessD3D11FencesHolderMap::CompositeProcessD3D11FencesHolderMap()
-    : mMonitor("CompositeProcessD3D11FencesHolderMap::mMonitor") {}
-
-CompositeProcessD3D11FencesHolderMap::~CompositeProcessD3D11FencesHolderMap() {}
 
 void CompositeProcessD3D11FencesHolderMap::Register(
     CompositeProcessFencesHolderId aHolderId) {
@@ -163,6 +156,25 @@ bool CompositeProcessD3D11FencesHolderMap::WaitWriteFence(
   }
 
   return writeFence->Wait(aDevice);
+}
+
+std::pair<const RefPtr<gfx::FileHandleWrapper>, uint64_t>
+CompositeProcessD3D11FencesHolderMap::GetWriteFenceHandleAndValue(
+    CompositeProcessFencesHolderId aHolderId) const {
+  MonitorAutoLock lock(mMonitor);
+  RefPtr<FenceD3D11> writeFence;
+  MOZ_ASSERT(aHolderId.IsValid());
+
+  auto it = mFencesHolderById.find(aHolderId);
+  MOZ_ASSERT(it != mFencesHolderById.end());
+  if (it != mFencesHolderById.end()) {
+    writeFence = it->second->mWriteFence;
+  }
+
+  if (writeFence) {
+    return {writeFence->mHandle, writeFence->GetFenceValue()};
+  }
+  return {};
 }
 
 bool CompositeProcessD3D11FencesHolderMap::WaitAllFencesAndForget(

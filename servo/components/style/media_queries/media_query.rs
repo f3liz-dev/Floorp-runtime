@@ -6,12 +6,13 @@
 //!
 //! https://drafts.csswg.org/mediaqueries/#typedef-media-query
 
+use crate::derives::*;
 use crate::parser::ParserContext;
 use crate::queries::{FeatureFlags, FeatureType, QueryCondition};
 use crate::str::string_as_ascii_lowercase;
 use crate::values::CustomIdent;
 use crate::Atom;
-use cssparser::Parser;
+use cssparser::{match_ignore_ascii_case, Parser};
 use std::fmt::{self, Write};
 use style_traits::{CssWriter, ParseError, ToCss};
 
@@ -129,10 +130,7 @@ impl MediaQuery {
     /// Parse a media query given css input.
     ///
     /// Returns an error if any of the expressions is unknown.
-    pub fn parse<'i, 't>(
-        context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    pub fn parse(context: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let (qualifier, explicit_media_type) = input
             .try_parse(|input| -> Result<_, ()> {
                 let qualifier = input.try_parse(Qualifier::parse).ok();

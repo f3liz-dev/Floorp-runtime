@@ -1,5 +1,4 @@
-/* vim: se cin sw=2 ts=2 et filetype=javascript :
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -37,11 +36,9 @@ export const TaskbarTabsPageAction = {
   init(aWindow) {
     let isPopupWindow = !aWindow.toolbar.visible;
     let isPrivate = lazy.PrivateBrowsingUtils.isWindowPrivate(aWindow);
-    let isWin32 = AppConstants.platform === "win";
-    let isMsix =
-      isWin32 && Services.sysinfo.getProperty("hasWinPackageId", false); // Bug 1979190
+    let isSupportedPlatform = ["win", "linux"].includes(AppConstants.platform);
 
-    if (isPopupWindow || isPrivate || !isWin32 || isMsix) {
+    if (isPopupWindow || isPrivate || !isSupportedPlatform) {
       lazy.logConsole.info("Not initializing Taskbar Tabs Page Action.");
       return;
     }
@@ -75,7 +72,7 @@ export const TaskbarTabsPageAction = {
       return;
     }
 
-    let window = aEvent.target.ownerGlobal;
+    let window = aEvent.target.documentGlobal;
     let currentTab = window.gBrowser.selectedTab;
 
     if (this._processingTabs.has(currentTab)) {
@@ -126,20 +123,37 @@ function initVisibilityChanges(aWindow, aElement) {
   // Filled in at the end; memoized to avoid performance failures.
   let isTaskbarTabsEnabled = false;
 
-  const shouldHide = aLocation =>
-    !(aLocation.scheme.startsWith("http") && isTaskbarTabsEnabled);
+  const shouldShow = aLocation => {
+    if (!isTaskbarTabsEnabled) {
+      return false;
+    }
+
+    // Forcefully initialize Taskbar Tabs. At some point, this will also affect
+    // the page action; in the meantime, ensures that telemetry info is
+    // prepared whenever the pref is enabled.
+    //
+    // This is a promise, but we don't care when it finishes. It's a no-op if
+    // TaskbarTabs already initialized.
+    lazy.TaskbarTabs.waitUntilReady();
+
+    if (!(aLocation instanceof Ci.nsIURL)) {
+      return false;
+    }
+
+    return ["http", "https", "moz-extension"].includes(aLocation.scheme);
+  };
 
   aWindow.gBrowser.addProgressListener({
     onLocationChange(aWebProgress, aRequest, aLocation) {
       if (aWebProgress.isTopLevel) {
-        aElement.hidden = shouldHide(aLocation);
+        aElement.hidden = !shouldShow(aLocation);
       }
     },
   });
 
   const observer = () => {
     isTaskbarTabsEnabled = lazy.TaskbarTabsUtils.isEnabled();
-    aElement.hidden = shouldHide(aWindow.gBrowser.currentURI);
+    aElement.hidden = !shouldShow(aWindow.gBrowser.currentURI);
   };
 
   Services.prefs.addObserver("browser.taskbarTabs.enabled", observer);

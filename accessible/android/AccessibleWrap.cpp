@@ -1,40 +1,38 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "AccessibleWrap.h"
 
-#include "JavaBuiltins.h"
-#include "LocalAccessible-inl.h"
-#include "HyperTextAccessible-inl.h"
 #include "AccAttributes.h"
 #include "AccEvent.h"
 #include "AndroidInputType.h"
 #include "DocAccessibleWrap.h"
-#include "SessionAccessibility.h"
-#include "TextLeafAccessible.h"
-#include "TraversalRule.h"
+#include "HyperTextAccessible-inl.h"
+#include "JavaBuiltins.h"
+#include "LocalAccessible-inl.h"
 #include "Pivot.h"
 #include "Platform.h"
+#include "RootAccessible.h"
+#include "SessionAccessibility.h"
+#include "TextLeafAccessible.h"
+#include "TextLeafRange.h"
+#include "TraversalRule.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/a11y/DocAccessibleParent.h"
+#include "mozilla/a11y/PDocAccessibleChild.h"
+#include "mozilla/jni/GeckoBundleUtils.h"
+#include "nsAccUtils.h"
 #include "nsAccessibilityService.h"
 #include "nsEventShell.h"
 #include "nsIAccessibleAnnouncementEvent.h"
 #include "nsIAccessiblePivot.h"
-#include "nsAccUtils.h"
 #include "nsTextEquivUtils.h"
 #include "nsWhitespaceTokenizer.h"
-#include "RootAccessible.h"
-#include "TextLeafRange.h"
-
-#include "mozilla/a11y/PDocAccessibleChild.h"
-#include "mozilla/jni/GeckoBundleUtils.h"
-#include "mozilla/a11y/DocAccessibleParent.h"
-#include "mozilla/Maybe.h"
 
 // icu TRUE conflicting with java::sdk::Boolean::TRUE()
 // https://searchfox.org/mozilla-central/rev/ce02064d8afc8673cef83c92896ee873bd35e7ae/intl/icu/source/common/unicode/umachine.h#265
-// https://searchfox.org/mozilla-central/source/__GENERATED__/widget/android/bindings/JavaBuiltins.h#78
+// https://searchfox.org/firefox-main/source/__GENERATED__/widget/android/bindings/JavaBuiltins.h#78
 #ifdef TRUE
 #  undef TRUE
 #endif
@@ -180,8 +178,8 @@ Maybe<std::pair<int32_t, int32_t>> AccessibleWrap::NavigateText(
   uint16_t endBoundaryType = nsIAccessibleText::BOUNDARY_LINE_END;
   switch (aGranularity) {
     case 1:  // MOVEMENT_GRANULARITY_CHARACTER
-      startBoundaryType = nsIAccessibleText::BOUNDARY_CHAR;
-      endBoundaryType = nsIAccessibleText::BOUNDARY_CHAR;
+      startBoundaryType = nsIAccessibleText::BOUNDARY_CLUSTER;
+      endBoundaryType = nsIAccessibleText::BOUNDARY_CLUSTER;
       break;
     case 2:  // MOVEMENT_GRANULARITY_WORD
       startBoundaryType = nsIAccessibleText::BOUNDARY_WORD_START;
@@ -234,67 +232,80 @@ Maybe<std::pair<int32_t, int32_t>> AccessibleWrap::NavigateText(
   return Some(std::make_pair(startOffset, endOffset));
 }
 
-uint32_t AccessibleWrap::GetFlags(role aRole, uint64_t aState,
-                                  uint8_t aActionCount) {
+uint32_t AccessibleWrap::GetFlags(Accessible* aAccessible) {
   uint32_t flags = 0;
-  if (aState & states::CHECKABLE) {
+  uint64_t state = aAccessible->State();
+  role role = aAccessible->Role();
+  if (aAccessible->IsScrollable()) {
+    flags |= java::SessionAccessibility::FLAG_SCROLLABLE;
+  }
+
+  if (state & states::CHECKABLE) {
     flags |= java::SessionAccessibility::FLAG_CHECKABLE;
   }
 
-  if (aState & states::CHECKED) {
+  if (state & states::CHECKED) {
     flags |= java::SessionAccessibility::FLAG_CHECKED;
   }
 
-  if (aState & states::INVALID) {
+  if (state & states::MIXED) {
+    flags |= java::SessionAccessibility::FLAG_MIXED;
+  }
+
+  if (state & states::INVALID) {
     flags |= java::SessionAccessibility::FLAG_CONTENT_INVALID;
   }
 
-  if (aState & states::EDITABLE) {
+  if (state & states::EDITABLE) {
     flags |= java::SessionAccessibility::FLAG_EDITABLE;
   }
 
-  if (aActionCount && aRole != roles::TEXT_LEAF) {
+  if (aAccessible->ActionCount() && role != roles::TEXT_LEAF) {
     flags |= java::SessionAccessibility::FLAG_CLICKABLE;
   }
 
-  if (aState & states::ENABLED) {
+  if (state & states::ENABLED) {
     flags |= java::SessionAccessibility::FLAG_ENABLED;
   }
 
-  if (aState & states::FOCUSABLE) {
+  if (state & states::FOCUSABLE) {
     flags |= java::SessionAccessibility::FLAG_FOCUSABLE;
   }
 
-  if (aState & states::FOCUSED) {
+  if (state & states::FOCUSED) {
     flags |= java::SessionAccessibility::FLAG_FOCUSED;
   }
 
-  if (aState & states::MULTI_LINE) {
+  if (state & states::MULTI_LINE) {
     flags |= java::SessionAccessibility::FLAG_MULTI_LINE;
   }
 
-  if (aState & states::SELECTABLE) {
+  if (state & states::SELECTABLE) {
     flags |= java::SessionAccessibility::FLAG_SELECTABLE;
   }
 
-  if (aState & states::SELECTED) {
+  if (state & states::SELECTED) {
     flags |= java::SessionAccessibility::FLAG_SELECTED;
   }
 
-  if (aState & states::EXPANDABLE) {
+  if (state & states::EXPANDABLE) {
     flags |= java::SessionAccessibility::FLAG_EXPANDABLE;
   }
 
-  if (aState & states::EXPANDED) {
+  if (state & states::EXPANDED) {
     flags |= java::SessionAccessibility::FLAG_EXPANDED;
   }
 
-  if ((aState & (states::INVISIBLE | states::OFFSCREEN)) == 0) {
+  if ((state & (states::INVISIBLE | states::OFFSCREEN)) == 0) {
     flags |= java::SessionAccessibility::FLAG_VISIBLE_TO_USER;
   }
 
-  if (aRole == roles::PASSWORD_TEXT) {
+  if (role == roles::PASSWORD_TEXT) {
     flags |= java::SessionAccessibility::FLAG_PASSWORD;
+  }
+
+  if (state & states::REQUIRED) {
+    flags |= java::SessionAccessibility::FLAG_REQUIRED;
   }
 
   return flags;
@@ -362,7 +373,7 @@ int32_t AccessibleWrap::GetAndroidClass(role aRole) {
     return androidClass;
 
   switch (aRole) {
-#include "RoleMap.h"
+#include "RoleMap.inc"
     default:
       return java::SessionAccessibility::CLASSNAME_VIEW;
   }
@@ -436,7 +447,7 @@ bool AccessibleWrap::HandleLiveRegionEvent(AccEvent* aEvent) {
     return false;
   }
 
-  RefPtr<AccAttributes> attributes = new AccAttributes();
+  auto attributes = MakeRefPtr<AccAttributes>();
   nsAccUtils::SetLiveContainerAttributes(attributes, this);
   nsString live;
   if (!attributes->GetAttribute(nsGkAtoms::containerLive, live)) {

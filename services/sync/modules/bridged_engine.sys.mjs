@@ -5,12 +5,12 @@
 /**
  * This file has all the machinery for hooking up bridged engines implemented
  * in Rust. It's the JavaScript side of the Golden Gate bridge that connects
- * Desktop Sync to a Rust `BridgedEngine`, via the `mozIBridgedSyncEngine`
- * XPCOM interface.
+ * Desktop Sync to a Rust sync engine, via the UniFFI-generated bridged engine
+ * object (a thin wrapper over the Rust `SyncEngine` trait).
  *
  * Creating a bridged engine only takes a few lines of code, since most of the
  * hard work is done on the Rust side. On the JS side, you'll need to subclass
- * `BridgedEngine` (instead of `SyncEngine`), supply a `mozIBridgedSyncEngine`
+ * `BridgedEngine` (instead of `SyncEngine`), supply a bridged engine object
  * for your subclass to wrap, and optionally implement and override the tracker.
  */
 
@@ -75,9 +75,9 @@ class BridgedRecord extends RawCryptoWrapper {
   /**
    * Creates an outgoing record from a BSO returned by a bridged engine.
    *
-   * @param  {String} collection The collection name.
-   * @param  {Object} bso   The outgoing bso (ie, a sync15::bso::OutgoingBso) returned from
-   *                        `mozIBridgedSyncEngine::apply`.
+   * @param  {string} collection The collection name.
+   * @param  {object} bso   The outgoing bso (ie, a sync15::bso::OutgoingBso) returned from
+   *                        the bridged engine's `apply`.
    * @return {BridgedRecord}     A Sync record ready to encrypt and upload.
    */
   static fromOutgoingBso(collection, bso) {
@@ -108,12 +108,12 @@ class BridgedRecord extends RawCryptoWrapper {
     return cleartext;
   }
 
-  /*
+  /**
    * Converts this incoming record into an envelope to pass to a bridged engine.
    * This object must be kept in sync with `sync15::IncomingBso`.
    *
-   * @return {Object} The incoming envelope, to pass to
-   *                  `mozIBridgedSyncEngine::storeIncoming`.
+   * @return {object} The incoming envelope, to pass to
+   *                  the bridged engine's `storeIncoming`.
    */
   toIncomingBso() {
     return {
@@ -205,7 +205,7 @@ BridgedEngine.prototype = {
    * Sync code always calls `resetSyncID()` and `ensureCurrentSyncID()`,
    * not this.
    *
-   * @returns {String?} The sync ID, or `null` if one isn't set.
+   * @returns {string?} The sync ID, or `null` if one isn't set.
    */
   async getSyncID() {
     // Note that all methods on an XPCOM class instance are automatically bound,
@@ -237,8 +237,10 @@ BridgedEngine.prototype = {
     return Math.round(lastSyncMS / 10) / 100;
   },
 
-  async setLastSync(lastSyncSeconds) {
-    await this._bridge.setLastSync(Math.round(lastSyncSeconds * 1000));
+  // Engines own their own last-sync timestamp, Only use-case to set it is a reset.
+  async resetLastSync() {
+    this._log.debug(`Resetting ${this.name} last sync time`);
+    await this._bridge.resetLastSync();
   },
 
   /**
@@ -280,14 +282,19 @@ BridgedEngine.prototype = {
   async _processIncoming(newitems) {
     await super._processIncoming(newitems);
 
-    let outgoingBsosAsJSON = await this._bridge.apply();
+    // Pass the collection's server last-modified time (which the base engine
+    // has just stored as our last sync time) so the engine can reconcile
+    // against the real timestamp. `lastModified` is in seconds; the bridge
+    // works in integer milliseconds.
+    let serverModifiedMillis = Math.round((this.lastModified ?? 0) * 1000);
+    let outgoingBsosAsJSON = await this._bridge.apply(serverModifiedMillis);
     let changeset = {};
     for (let bsoAsJSON of outgoingBsosAsJSON) {
-      this._log.trace("outgoing bso", bsoAsJSON);
       let record = BridgedRecord.fromOutgoingBso(
         this.name,
         JSON.parse(bsoAsJSON)
       );
+      this._log.trace(`outgoing bso with length ${record.cleartext?.length}`);
       changeset[record.id] = {
         synced: false,
         record,

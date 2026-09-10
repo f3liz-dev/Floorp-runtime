@@ -16,6 +16,7 @@ import {
   teardownWorkers,
 } from "./utils/bootstrap";
 
+import { initialTabState } from "./reducers/tabs";
 import { initialBreakpointsState } from "./reducers/breakpoints";
 import { initialSourcesState } from "./reducers/sources";
 import { initialSourcesTreeState } from "./reducers/sources-tree";
@@ -26,6 +27,11 @@ import { initialEventListenerState } from "./reducers/event-listeners";
 const {
   sanitizeBreakpoints,
 } = require("resource://devtools/client/shared/thread-utils.js");
+const {
+  START_IGNORE_ACTION,
+} = require("resource://devtools/client/shared/redux/middleware/ignore.js");
+
+let gStore;
 
 async function syncBreakpoints() {
   const breakpoints = await asyncStore.pendingBreakpoints;
@@ -68,35 +74,14 @@ function setPauseOnExceptions() {
   );
 }
 
-/**
- * bug 1971817: When upgrading from Firefox <141 to Firefox >=142, we have to:
- * - remove redundant tabs which used to be stored for minimized *and* pretty printed tabs,
- * - automatically add the new `isPrettyPrinted` boolean on pretty printed tabs.
- */
-function sanitizeTabs(tabs) {
-  // Retrieve the list of source url of minimized source which used to have a pretty printed tab opened
-  const minimizedSourceUrlsForPrettyPrintedTabs = tabs
-    .filter(t => t.url.endsWith(":formatted"))
-    .map(tab => tab.url.replace(":formatted", ""));
-
-  return tabs
-    .filter(tab => {
-      // Remove the tabs for these minimized source in order to only keep the tab of the pretty printed tab
-      return !minimizedSourceUrlsForPrettyPrintedTabs.includes(tab.url);
-    })
-    .map(tab => {
-      // Add the new `isPrettyPrinted` flag for tabs refering to pretty printed sources
-      return tab.url.endsWith(":formatted") && !tab.isPrettyPrinted
-        ? { ...tab, isPrettyPrinted: true }
-        : tab;
-    });
-}
-
 async function loadInitialState(commands) {
   const pendingBreakpoints = sanitizeBreakpoints(
     await asyncStore.pendingBreakpoints
   );
-  const tabs = { tabs: sanitizeTabs(await asyncStore.tabs) };
+  const tabs = initialTabState({
+    urls: await asyncStore.openedURLs,
+    prettyPrintedURLs: new Set(await asyncStore.prettyPrintedURLs),
+  });
   const xhrBreakpoints = await asyncStore.xhrBreakpoints;
   const blackboxedRanges = await asyncStore.blackboxedRanges;
   const eventListenerBreakpoints = await asyncStore.eventListenerBreakpoints;
@@ -148,6 +133,7 @@ export async function bootstrap({
     panel,
     initialState
   );
+  gStore = store;
 
   const connected = firefox.onConnect(
     commands,
@@ -179,7 +165,18 @@ export async function bootstrap({
 }
 
 export async function destroy() {
+  // Instruct redux to start ignoring any further action
+  if (gStore) {
+    gStore.dispatch(START_IGNORE_ACTION);
+    gStore = null;
+  }
+
+  // Unregister all listeners set on DevTools RDP client
   firefox.onDisconnect();
+
+  // Unmount all React components
   unmountRoot();
+
+  // Unregister and cleanup everything about parser, pretty print and source map workers
   teardownWorkers();
 }

@@ -1,40 +1,38 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "base/basictypes.h"
-
 #include "gfxAndroidPlatform.h"
-#include "mozilla/gfx/2D.h"
-#include "mozilla/gfx/gfxVars.h"
-#include "mozilla/CountingAllocatorBase.h"
-#include "mozilla/intl/LocaleService.h"
-#include "mozilla/intl/OSPreferences.h"
-#include "mozilla/java/GeckoAppShellWrappers.h"
-#include "mozilla/jni/Utils.h"
-#include "mozilla/layers/AndroidHardwareBuffer.h"
-#include "mozilla/Preferences.h"
-#include "mozilla/StaticPrefs_gfx.h"
-#include "mozilla/StaticPrefs_webgl.h"
-#include "mozilla/widget/AndroidVsync.h"
 
 #include "AndroidBuild.h"
 #include "AndroidSystemFontIterator.h"
 #include "GeckoProfiler.h"
+#include "VsyncSource.h"
+#include "base/basictypes.h"
+#include "cairo.h"
+#include "ft2build.h"
 #include "gfx2DGlue.h"
 #include "gfxFT2FontList.h"
 #include "gfxImageSurface.h"
 #include "gfxTextRun.h"
-#include "nsXULAppAPI.h"
+#include "mozilla/CountingAllocatorBase.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/StaticPrefs_gfx.h"
+#include "mozilla/StaticPrefs_webgl.h"
+#include "mozilla/Utf16.h"
+#include "mozilla/gfx/2D.h"
+#include "mozilla/gfx/gfxVars.h"
+#include "mozilla/intl/LocaleService.h"
+#include "mozilla/intl/OSPreferences.h"
+#include "mozilla/java/GeckoAppShellWrappers.h"
+#include "mozilla/java/HardwareCodecCapabilityUtilsWrappers.h"
+#include "mozilla/jni/Utils.h"
+#include "mozilla/layers/AndroidHardwareBuffer.h"
+#include "mozilla/widget/AndroidVsync.h"
 #include "nsIScreen.h"
 #include "nsServiceManagerUtils.h"
 #include "nsUnicodeProperties.h"
-#include "cairo.h"
-#include "VsyncSource.h"
-
-#include "ft2build.h"
+#include "nsXULAppAPI.h"
 #include FT_FREETYPE_H
 #include FT_MODULE_H
 
@@ -77,7 +75,7 @@ NS_IMPL_ISUPPORTS(FreetypeReporter, nsIMemoryReporter)
 static FT_MemoryRec_ sFreetypeMemoryRecord;
 
 PRThread* gfxAndroidPlatform::sFontAPIInitializeThread = nullptr;
-MOZ_CONSTINIT nsCString gfxAndroidPlatform::sManufacturer;
+constinit nsCString gfxAndroidPlatform::sManufacturer;
 
 // static
 bool gfxAndroidPlatform::IsFontAPIDisabled(bool aDontCheckPref) {
@@ -86,15 +84,16 @@ bool gfxAndroidPlatform::IsFontAPIDisabled(bool aDontCheckPref) {
     return false;
   }
 
-  // OPPO, realme and OnePlus device seem to crash when using font match API
-  // (Bug 1787551).
+  // Some manufacturer devices seem to crash when using font match API
+  // (Bug 1787551 / Bug 1990734).
 
   if (sManufacturer.IsEmpty()) {
     sManufacturer = java::sdk::Build::MANUFACTURER()->ToCString();
   }
   return (sManufacturer.EqualsLiteral("OPPO") ||
           sManufacturer.EqualsLiteral("realme") ||
-          sManufacturer.EqualsLiteral("OnePlus"));
+          sManufacturer.EqualsLiteral("OnePlus") ||
+          sManufacturer.EqualsLiteral("HONOR"));
 }
 
 // static
@@ -135,6 +134,25 @@ void gfxAndroidPlatform::WaitForInitializeFontAPI() {
   }
 }
 
+// static
+bool gfxAndroidPlatform::IsHwCodecSupported(media::MediaCodec aCodec,
+                                            bool aEncoder) {
+  switch (aCodec) {
+    case media::MediaCodec::H264:
+      return java::HardwareCodecCapabilityUtils::HasHWH264(aEncoder);
+    case media::MediaCodec::VP8:
+      return java::HardwareCodecCapabilityUtils::HasHWVP8(aEncoder);
+    case media::MediaCodec::VP9:
+      return java::HardwareCodecCapabilityUtils::HasHWVP9(aEncoder);
+    case media::MediaCodec::AV1:
+      return java::HardwareCodecCapabilityUtils::HasHWAV1(aEncoder);
+    case media::MediaCodec::HEVC:
+      return java::HardwareCodecCapabilityUtils::HasHWHEVC(aEncoder);
+    default:
+      return false;
+  }
+}
+
 gfxAndroidPlatform::gfxAndroidPlatform() {
   // A custom allocator.  It counts allocations, enabling memory reporting.
   sFreetypeMemoryRecord.user = nullptr;
@@ -149,7 +167,7 @@ gfxAndroidPlatform::gfxAndroidPlatform() {
 
   Factory::SetFTLibrary(gPlatformFTLibrary);
 
-  RegisterStrongMemoryReporter(new FreetypeReporter());
+  RegisterStrongMemoryReporter(MakeAndAddRef<FreetypeReporter>());
 
   // Bug 1886573: At this point, we don't yet have primary screen depth.
   // This setting of screen depth to 0 is preserving existing behavior,
@@ -157,17 +175,12 @@ gfxAndroidPlatform::gfxAndroidPlatform() {
   int32_t screenDepth = 0;
   mOffscreenFormat = screenDepth == 16 ? SurfaceFormat::R5G6B5_UINT16
                                        : SurfaceFormat::X8R8G8B8_UINT32;
-
-  if (StaticPrefs::gfx_android_rgb16_force_AtStartup()) {
-    mOffscreenFormat = SurfaceFormat::R5G6B5_UINT16;
-  }
 }
 
 gfxAndroidPlatform::~gfxAndroidPlatform() {
   FT_Done_Library(gPlatformFTLibrary);
   gPlatformFTLibrary = nullptr;
   layers::AndroidHardwareBufferManager::Shutdown();
-  layers::AndroidHardwareBufferApi::Shutdown();
 }
 
 void gfxAndroidPlatform::InitAcceleration() { gfxPlatform::InitAcceleration(); }
@@ -222,7 +235,7 @@ void gfxAndroidPlatform::GetCommonFallbackFonts(
     aFontList.AppendElement(kNotoColorEmoji);
   }
 
-  if (IS_IN_BMP(aCh)) {
+  if (mozilla::IsInBMP(aCh)) {
     // try language-specific "Droid Sans *" and "Noto Sans *" fonts for
     // certain blocks, as most devices probably have these
     uint8_t block = (aCh >> 8) & 0xff;
@@ -351,13 +364,6 @@ bool gfxAndroidPlatform::RequiresLinearZoom() {
 
   MOZ_ASSERT_UNREACHABLE("oops, what platform is this?");
   return gfxPlatform::RequiresLinearZoom();
-}
-
-bool gfxAndroidPlatform::CheckVariationFontSupport() {
-  // Don't attempt to use variations on Android API versions up to Marshmallow,
-  // because the system freetype version is too old and the parent process may
-  // access it during printing (bug 1845174).
-  return jni::GetAPIVersion() > 23;
 }
 
 class AndroidVsyncSource final : public VsyncSource,

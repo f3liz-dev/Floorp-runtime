@@ -79,8 +79,7 @@ class CodeSigningTrustDomain final : public TrustDomain {
       EndEntityOrCA endEntityOrCA, const CertID& certID, Time time,
       Duration validityDuration,
       /*optional*/ const Input* stapledOCSPresponse,
-      /*optional*/ const Input* aiaExtension,
-      /*optional*/ const Input* sctExtension) override {
+      /*optional*/ const Input* aiaExtension) override {
     return Success;
   }
 
@@ -188,7 +187,8 @@ bool VerifyCodeSigningCertificateChain(
   if (!error) {
     return false;
   }
-  if (!certificates || !certificateLengths || !rootSHA256Digest) {
+  if (!certificates || !certificateLengths || numCertificates < 1 ||
+      !rootSHA256Digest) {
     *error = SEC_ERROR_INVALID_ARGS;
     return false;
   }

@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -66,8 +64,8 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/UserActivation.h"
 #include "mozilla/dom/nsCSPContext.h"
+#include "mozilla/net/ChannelClassifierUtils.h"
 #include "mozilla/net/DocumentChannel.h"
-#include "mozilla/net/UrlClassifierFeatureFactory.h"
 #include "mozilla/widget/IMEData.h"
 #include "nsChannelClassifier.h"
 #include "nsFocusManager.h"
@@ -211,8 +209,8 @@ already_AddRefed<nsIDocShell> nsObjectLoadingContent::SetupDocShell(
   }
 
   if (!docShell) {
-    mFrameLoader->Destroy();
-    mFrameLoader = nullptr;
+    RefPtr<nsFrameLoader> loader = std::move(mFrameLoader);
+    loader->Destroy();
     return nullptr;
   }
 
@@ -295,7 +293,8 @@ nsObjectLoadingContent::OnStartRequest(nsIRequest* aRequest) {
           NS_GetFinalChannelURI(mChannel, getter_AddRefs(mURI)));
     }
 
-    return mFinalListener->OnStartRequest(aRequest);
+    nsCOMPtr<nsIStreamListener> listener = mFinalListener;
+    return listener->OnStartRequest(aRequest);
   }
 
   // Otherwise we should be state loading, and call LoadObject with the channel
@@ -325,7 +324,7 @@ nsObjectLoadingContent::OnStartRequest(nsIRequest* aRequest) {
     return NS_ERROR_FAILURE;
   }
 
-  if (UrlClassifierFeatureFactory::IsClassifierBlockingErrorCode(status)) {
+  if (ChannelClassifierUtils::IsClassifierBlockingErrorCode(status)) {
     mContentBlockingEnabled = true;
     return NS_ERROR_FAILURE;
   }
@@ -352,7 +351,7 @@ nsObjectLoadingContent::OnStopRequest(nsIRequest* aRequest,
   // fingerprinting, cryptomining, etc.).
   // We make a note of this object node by including it in a dedicated
   // array of blocked tracking nodes under its parent document.
-  if (UrlClassifierFeatureFactory::IsClassifierBlockingErrorCode(aStatusCode)) {
+  if (ChannelClassifierUtils::IsClassifierBlockingErrorCode(aStatusCode)) {
     nsCOMPtr<nsIContent> thisNode =
         do_QueryInterface(static_cast<nsIObjectLoadingContent*>(this));
     if (thisNode && thisNode->IsInComposedDoc()) {
@@ -422,7 +421,7 @@ class ObjectInterfaceRequestorShim final : public nsIInterfaceRequestor,
                                            public nsIChannelEventSink,
                                            public nsIStreamListener {
  public:
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(ObjectInterfaceRequestorShim,
                                            nsIInterfaceRequestor)
   NS_DECL_NSIINTERFACEREQUESTOR
@@ -588,7 +587,8 @@ void nsObjectLoadingContent::MaybeRewriteYoutubeEmbed(nsIURI* aURI,
   if (NS_FAILED(rv)) {
     return;
   }
-  AutoTArray<nsString, 2> params = {utf16OldURI, utf16URI};
+  AutoTArray<nsString, 2> params = {std::move(utf16OldURI),
+                                    std::move(utf16URI)};
   const char* msgName;
   // If there's no query to rewrite, just notify in the developer console
   // that we're changing the embed.
@@ -598,7 +598,7 @@ void nsObjectLoadingContent::MaybeRewriteYoutubeEmbed(nsIURI* aURI,
     msgName = "RewriteYouTubeEmbedPathParams";
   }
   nsContentUtils::ReportToConsole(nsIScriptError::warningFlag, "Plugins"_ns,
-                                  doc, nsContentUtils::eDOM_PROPERTIES, msgName,
+                                  doc, PropertiesFile::DOM_PROPERTIES, msgName,
                                   params);
 }
 
@@ -698,7 +698,6 @@ nsObjectLoadingContent::UpdateObjectParameters() {
 
   nsresult rv;
   nsAutoCString newMime;
-  nsAutoString typeAttr;
   nsCOMPtr<nsIURI> newURI;
   nsCOMPtr<nsIURI> newBaseURI;
   ObjectType newType;
@@ -726,7 +725,6 @@ nsObjectLoadingContent::UpdateObjectParameters() {
       el->HasNonEmptyAttr(nsGkAtoms::classid)) {
     // We don't support class ID plugin references, so we should always treat
     // having class Ids as attributes as invalid, and fallback accordingly.
-    newMime.Truncate();
     stateInvalid = true;
   }
 
@@ -754,16 +752,6 @@ nsObjectLoadingContent::UpdateObjectParameters() {
   // If we failed to build a valid URI, use the document's base URI
   if (!newBaseURI) {
     newBaseURI = docBaseURI;
-  }
-
-  nsAutoString rawTypeAttr;
-  el->GetAttr(nsGkAtoms::type, rawTypeAttr);
-  if (!rawTypeAttr.IsEmpty()) {
-    typeAttr = rawTypeAttr;
-    nsAutoString params;
-    nsAutoString mime;
-    nsContentUtils::SplitMimeType(rawTypeAttr, mime, params);
-    CopyUTF16toUTF8(mime, newMime);
   }
 
   ///
@@ -797,6 +785,41 @@ nsObjectLoadingContent::UpdateObjectParameters() {
 
     if (NS_FAILED(rv)) {
       stateInvalid = true;
+    }
+  }
+
+  ///
+  /// type
+  ///
+  nsAutoString rawTypeAttr;
+  el->GetAttr(nsGkAtoms::type, rawTypeAttr);
+  // YouTube embeds might be using type="application/x-shockwave-flash"
+  // which needs to be allowed, but must not override the text/html MIME set
+  // above.
+  if (!mRewrittenYoutubeEmbed && !rawTypeAttr.IsEmpty()) {
+    nsAutoString params;
+    nsAutoString mime;
+    nsContentUtils::SplitMimeType(rawTypeAttr, mime, params);
+
+    if (!StaticPrefs::dom_object_embed_type_hint_enabled()) {
+      NS_ConvertUTF16toUTF8 mimeUTF8(mime);
+      if (imgLoader::SupportImageWithMimeType(mimeUTF8)) {
+        // Normally the type attribute should not be used as a hint, but for
+        // images it does seem to happen in Chrome and Safari. Images generally
+        // don't lead to code execution and we don't use
+        // AcceptedMimeTypes::IMAGES_AND_DOCUMENTS above.
+        newMime = mimeUTF8;
+      } else if (GetTypeOfContent(mimeUTF8) != ObjectType::Document) {
+        LOG(
+            ("OBJLC [%p]: MIME '%s' from type attribute is not supported, "
+             "forcing fallback.",
+             this, mimeUTF8.get()));
+        stateInvalid = true;
+      }
+
+      // Don't use the type attribute as a Content-Type hint in other cases.
+    } else {
+      CopyUTF16toUTF8(mime, newMime);
     }
   }
 
@@ -1258,8 +1281,8 @@ nsresult nsObjectLoadingContent::LoadObject(bool aNotify, bool aForceLoad,
       nsCOMPtr<nsIURILoader> uriLoader(components::URILoader::Service());
       if (NS_WARN_IF(!uriLoader)) {
         MOZ_ASSERT_UNREACHABLE("Failed to get uriLoader service");
-        mFrameLoader->Destroy();
-        mFrameLoader = nullptr;
+        RefPtr<nsFrameLoader> loader = std::move(mFrameLoader);
+        loader->Destroy();
         break;
       }
 
@@ -1381,11 +1404,17 @@ nsresult nsObjectLoadingContent::CloseChannel() {
 
 bool nsObjectLoadingContent::IsAboutBlankLoadOntoInitialAboutBlank(
     nsIURI* aURI, bool aInheritPrincipal, nsIPrincipal* aPrincipalToInherit) {
-  return NS_IsAboutBlank(aURI) && aInheritPrincipal &&
-         (!mFrameLoader || !mFrameLoader->GetExistingDocShell() ||
-          mFrameLoader->GetExistingDocShell()
-              ->IsAboutBlankLoadOntoInitialAboutBlank(aURI, aInheritPrincipal,
-                                                      aPrincipalToInherit));
+  if (!NS_IsAboutBlankAllowQueryAndFragment(aURI) || !aInheritPrincipal) {
+    return false;
+  }
+
+  if (!mFrameLoader || !mFrameLoader->GetExistingDocShell()) {
+    return false;
+  }
+
+  RefPtr<nsDocShellLoadState> dummyLoadState = new nsDocShellLoadState(mURI);
+  return mFrameLoader->GetExistingDocShell()->ShouldDoInitialAboutBlankSyncLoad(
+      aURI, dummyLoadState, aPrincipalToInherit);
 }
 
 nsresult nsObjectLoadingContent::OpenChannel() {
@@ -1399,6 +1428,17 @@ nsresult nsObjectLoadingContent::OpenChannel() {
   // E.g. mms://
   if (!mURI || !CanHandleURI(mURI)) {
     return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  // The channel's own security check happens in the parent process, which for
+  // a document load is only reached after the nsDocShellLoadState has already
+  // crossed IPC. Check here as well so that a load which content is not
+  // allowed to trigger never gets that far.
+  rv = nsContentUtils::GetSecurityManager()->CheckLoadURIWithPrincipal(
+      el->NodePrincipal(), mURI, nsIScriptSecurityManager::STANDARD,
+      doc->InnerWindowID());
+  if (NS_FAILED(rv)) {
+    return rv;
   }
 
   nsCOMPtr<nsILoadGroup> group = doc->GetDocumentLoadGroup();
@@ -1540,7 +1580,7 @@ nsresult nsObjectLoadingContent::OpenChannel() {
   rv = chan->AsyncOpen(shim);
   NS_ENSURE_SUCCESS(rv, rv);
   LOG(("OBJLC [%p]: Channel opened", this));
-  mChannel = chan;
+  mChannel = std::move(chan);
   return NS_OK;
 }
 
@@ -1549,11 +1589,6 @@ uint32_t nsObjectLoadingContent::GetCapabilities() const {
 }
 
 void nsObjectLoadingContent::Destroy() {
-  if (mFrameLoader) {
-    mFrameLoader->Destroy();
-    mFrameLoader = nullptr;
-  }
-
   // Reset state so that if the element is re-appended to tree again (e.g.
   // adopting to another document), it will reload resource again.
   UnloadObject();
@@ -1577,8 +1612,8 @@ void nsObjectLoadingContent::Unlink(nsObjectLoadingContent* tmp) {
 
 void nsObjectLoadingContent::UnloadObject(bool aResetState) {
   if (mFrameLoader) {
-    mFrameLoader->Destroy();
-    mFrameLoader = nullptr;
+    RefPtr<nsFrameLoader> loader = std::move(mFrameLoader);
+    loader->Destroy();
   }
 
   if (aResetState) {
@@ -1676,21 +1711,28 @@ void nsObjectLoadingContent::TriggerInnerFallbackLoads() {
   }
   // Do a depth-first traverse of node tree with the current element as root,
   // looking for non-<param> elements.  If we find some then we have an HTML
-  // fallback for this element.
+  // fallback for this element
+  AutoTArray<RefPtr<nsIContent>, 4> targets;
   for (nsIContent* child = el->GetFirstChild(); child;) {
     // <object> and <embed> elements in the fallback need to StartObjectLoad.
     // Their children should be ignored since they are part of those element's
     // fallback.
-    if (auto* embed = HTMLEmbedElement::FromNode(child)) {
-      embed->StartObjectLoad(true, true);
-      // Skip the children
-      child = child->GetNextNonChildNode(el);
-    } else if (auto* object = HTMLObjectElement::FromNode(child)) {
-      object->StartObjectLoad(true, true);
-      // Skip the children
+    if (child->IsAnyOfHTMLElements(nsGkAtoms::embed, nsGkAtoms::object)) {
+      targets.AppendElement(child);
       child = child->GetNextNonChildNode(el);
     } else {
       child = child->GetNextNode(el);
+    }
+  }
+
+  for (RefPtr<nsIContent>& target : targets) {
+    if (!target->IsInclusiveDescendantOf(el)) {
+      continue;
+    }
+    if (auto* embed = HTMLEmbedElement::FromNode(target)) {
+      embed->StartObjectLoad(true, true);
+    } else if (auto* object = HTMLObjectElement::FromNode(target)) {
+      object->StartObjectLoad(true, true);
     }
   }
 }
@@ -1861,7 +1903,7 @@ void nsObjectLoadingContent::MaybeStoreCrossOriginFeaturePolicy() {
   }
 
   if (ContentChild* cc = ContentChild::GetSingleton()) {
-    Unused << cc->SendSetContainerFeaturePolicy(
+    (void)cc->SendSetContainerFeaturePolicy(
         browsingContext, Some(mFeaturePolicy->ToFeaturePolicyInfo()));
   }
 }

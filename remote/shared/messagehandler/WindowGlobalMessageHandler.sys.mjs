@@ -2,10 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import {
-  ContextDescriptorType,
-  MessageHandler,
-} from "chrome://remote/content/shared/messagehandler/MessageHandler.sys.mjs";
+import { MessageHandler } from "chrome://remote/content/shared/messagehandler/MessageHandler.sys.mjs";
 
 const lazy = {};
 
@@ -27,6 +24,7 @@ ChromeUtils.defineESModuleGetters(lazy, {
  */
 export class WindowGlobalMessageHandler extends MessageHandler {
   #innerWindowId;
+  #debuggerEnvironment;
   #realms;
 
   constructor() {
@@ -36,6 +34,9 @@ export class WindowGlobalMessageHandler extends MessageHandler {
 
     // Maps sandbox names to instances of window realms.
     this.#realms = new Map();
+
+    // The currently paused DebuggerEnvironment.
+    this.#debuggerEnvironment = null;
   }
 
   initialize(sessionDataItems) {
@@ -62,6 +63,7 @@ export class WindowGlobalMessageHandler extends MessageHandler {
       innerWindowId: this.innerWindowId,
     });
     this.#realms = null;
+    this.#debuggerEnvironment = null;
 
     super.destroy();
   }
@@ -96,6 +98,39 @@ export class WindowGlobalMessageHandler extends MessageHandler {
    */
   static getIdFromContext(context) {
     return context.id;
+  }
+
+  /**
+   * An object describing the current paused debugger environment, including the
+   * current Debugger.Frame and global object reference.
+   *
+   * @typedef {object} DebuggerEnvironment
+   * @property {Debugger.Frame} frame
+   *     The paused frame.
+   * @property {Debugger.Object} global
+   *     The global object reference created by the debugger instance which
+   *     paused the execution.
+   */
+
+  /**
+   * Get the currently paused DebuggerEnvironment.
+   *
+   * @returns {DebuggerEnvironment|null}
+   *     The paused debugger environment, or null if not paused.
+   */
+  get debuggerEnvironment() {
+    return this.#debuggerEnvironment;
+  }
+
+  /**
+   * Set the debugger environment for the currently paused Debugger.Frame and
+   * global object.
+   *
+   * @param {object|null} debuggerEnvironment
+   *     An object describing the current debugger environment, null to clear.
+   */
+  set debuggerEnvironment(debuggerEnvironment) {
+    this.#debuggerEnvironment = debuggerEnvironment;
   }
 
   get innerWindowId() {
@@ -248,13 +283,7 @@ export class WindowGlobalMessageHandler extends MessageHandler {
    *     false otherwise.
    */
   matchesContext(contextDescriptor) {
-    return (
-      contextDescriptor.type === ContextDescriptorType.All ||
-      (contextDescriptor.type === ContextDescriptorType.TopBrowsingContext &&
-        contextDescriptor.id === this.context.browserId) ||
-      (contextDescriptor.type === ContextDescriptorType.UserContext &&
-        contextDescriptor.id === this.context.originAttributes.userContextId)
-    );
+    return this.contextsMatchDescriptor([this.context], contextDescriptor);
   }
 
   /**

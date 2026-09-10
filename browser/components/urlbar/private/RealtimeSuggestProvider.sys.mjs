@@ -2,15 +2,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { SuggestProvider } from "resource:///modules/urlbar/private/SuggestFeature.sys.mjs";
+import { SuggestProvider } from "moz-src:///browser/components/urlbar/private/SuggestFeature.sys.mjs";
 
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
-  QuickSuggest: "resource:///modules/QuickSuggest.sys.mjs",
-  UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
-  UrlbarResult: "resource:///modules/UrlbarResult.sys.mjs",
-  UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
+  QuickSuggest: "moz-src:///browser/components/urlbar/QuickSuggest.sys.mjs",
+  UrlbarPrefs: "moz-src:///browser/components/urlbar/UrlbarPrefs.sys.mjs",
+  UrlbarResult: "chrome://browser/content/urlbar/UrlbarResult.mjs",
+  UrlbarSearchUtils:
+    "moz-src:///browser/components/urlbar/UrlbarSearchUtils.sys.mjs",
+  UrlbarShared: "chrome://browser/content/urlbar/UrlbarShared.mjs",
 });
 
 /**
@@ -26,15 +28,24 @@ ChromeUtils.defineESModuleGetters(lazy, {
 export class RealtimeSuggestProvider extends SuggestProvider {
   // The following methods must be overridden.
 
+  /**
+   * The type of the realtime suggestion provider.
+   *
+   * @type {string}
+   */
   get realtimeType() {
     throw new Error("Trying to access the base class, must be overridden");
   }
 
-  getViewTemplate(_result) {
+  getViewTemplateForDescriptionTop(_item, _index) {
     throw new Error("Trying to access the base class, must be overridden");
   }
 
-  getViewUpdate(_result) {
+  getViewTemplateForDescriptionBottom(_item, _index) {
+    throw new Error("Trying to access the base class, must be overridden");
+  }
+
+  getViewUpdateForPayloadItem(_item, _index) {
     throw new Error("Trying to access the base class, must be overridden");
   }
 
@@ -63,6 +74,10 @@ export class RealtimeSuggestProvider extends SuggestProvider {
     return this.realtimeType;
   }
 
+  get realtimeTypeForFtl() {
+    return this.realtimeType.replace(/([A-Z])/g, "-$1").toLowerCase();
+  }
+
   get featureGatePref() {
     return this.realtimeType + "FeatureGate";
   }
@@ -79,20 +94,58 @@ export class RealtimeSuggestProvider extends SuggestProvider {
     return this.realtimeType + ".showLessFrequentlyCount";
   }
 
+  get optInIcon() {
+    return `chrome://browser/skin/illustrations/${this.realtimeType}-opt-in.svg`;
+  }
+
+  get optInTitleL10n() {
+    return {
+      id: `urlbar-result-${this.realtimeTypeForFtl}-opt-in-title`,
+    };
+  }
+
+  get optInDescriptionL10n() {
+    return {
+      id: `urlbar-result-${this.realtimeTypeForFtl}-opt-in-description`,
+      parseMarkup: true,
+    };
+  }
+
   get notInterestedCommandL10n() {
     return {
-      id: "urlbar-result-menu-dont-show-" + this.realtimeType,
+      id: `urlbar-result-menu-dont-show-${this.realtimeTypeForFtl}2`,
     };
   }
 
   get acknowledgeDismissalL10n() {
     return {
-      id: "urlbar-result-dismissal-acknowledgment-" + this.realtimeType,
+      id: "urlbar-result-dismissal-acknowledgment-" + this.realtimeTypeForFtl,
+    };
+  }
+
+  get ariaGroupL10n() {
+    return {
+      id: "urlbar-result-aria-group-" + this.realtimeTypeForFtl,
+      attribute: "aria-label",
     };
   }
 
   get isSponsored() {
     return false;
+  }
+
+  /**
+   * @returns {string}
+   *   The dynamic result type that will be set in the Merino result's payload
+   *   as `result.payload.dynamicType`. Note that "dynamic" here refers to the
+   *   concept of dynamic result types as used in the view and
+   *   `UrlbarShared.RESULT_TYPE.DYNAMIC`, not Rust dynamic suggestions.
+   *
+   *   If you override this, make sure the value starts with "realtime-" because
+   *   there are CSS rules that depend on that.
+   */
+  get dynamicResultType() {
+    return "realtime-" + this.realtimeType;
   }
 
   // The following methods can be overridden but hopefully it's not necessary.
@@ -103,20 +156,21 @@ export class RealtimeSuggestProvider extends SuggestProvider {
 
   get enablingPreferences() {
     return [
+      "suggest.quicksuggest.all",
       "suggest.realtimeOptIn",
       "quicksuggest.realtimeOptIn.dismissTypes",
       "quicksuggest.realtimeOptIn.notNowTimeSeconds",
       "quicksuggest.realtimeOptIn.notNowReshowAfterPeriodDays",
-      "quicksuggest.dataCollection.enabled",
+      "quickSuggestOnlineAvailable",
+      "quicksuggest.online.enabled",
       this.featureGatePref,
       this.suggestPref,
 
-      // We could check `this.isSponsored` here and only include the appropriate
-      // pref, but for maximum flexibility `this.isSponsored` is only a fallback
-      // for when individual suggestions do not have an `isSponsored` property.
-      // Since individual suggestions may be sponsored or not, we include both
-      // prefs here.
-      "suggest.quicksuggest.nonsponsored",
+      // We could include the sponsored pref only if `this.isSponsored` is true,
+      // but for maximum flexibility `this.isSponsored` is only a fallback for
+      // when individual suggestions do not have an `isSponsored` property.
+      // Since individual suggestions may be sponsored or not, we include the
+      // pref here.
       "suggest.quicksuggest.sponsored",
     ];
   }
@@ -132,15 +186,20 @@ export class RealtimeSuggestProvider extends SuggestProvider {
   }
 
   get shouldEnable() {
-    if (!lazy.UrlbarPrefs.get(this.featureGatePref)) {
-      // The feature gate is disabled. Don't show opt-in or online suggestions
-      // for this realtime type.
+    if (
+      !lazy.UrlbarPrefs.get(this.featureGatePref) ||
+      !lazy.UrlbarPrefs.get("quickSuggestOnlineAvailable") ||
+      !lazy.UrlbarPrefs.get("suggest.quicksuggest.all")
+    ) {
+      // The feature gate is disabled, online suggestions aren't available, or
+      // all Suggest suggestions are disabled. Don't show opt-in or online
+      // suggestions for this realtime type.
       return false;
     }
 
-    if (lazy.UrlbarPrefs.get("quicksuggest.dataCollection.enabled")) {
-      // The user opted in to online suggestions. Show this realtime type if
-      // they didn't disable it.
+    if (lazy.UrlbarPrefs.get("quicksuggest.online.enabled")) {
+      // Online suggestions are enabled. Show this realtime type if the user
+      // didn't disable it.
       return lazy.UrlbarPrefs.get(this.suggestPref);
     }
 
@@ -224,9 +283,9 @@ export class RealtimeSuggestProvider extends SuggestProvider {
   }
 
   filterSuggestions(suggestions) {
-    // The Rust opt-in suggestion can continue to be matched after the user opts
-    // in, so always return only Merino suggestions after opt in.
-    if (lazy.UrlbarPrefs.get("quicksuggest.dataCollection.enabled")) {
+    // The Rust opt-in suggestion can always be matched regardless of whether
+    // online is enabled, so return only Merino suggestions when it is enabled.
+    if (lazy.UrlbarPrefs.get("quicksuggest.online.enabled")) {
       return suggestions.filter(s => s.source == "merino");
     }
     return suggestions;
@@ -235,12 +294,10 @@ export class RealtimeSuggestProvider extends SuggestProvider {
   makeResult(queryContext, suggestion, searchString) {
     // For maximum flexibility individual suggestions can indicate whether they
     // are sponsored or not, despite `this.isSponsored`, which is a fallback.
-    let isSponsored = this.isSuggestionSponsored(suggestion);
     if (
-      (isSponsored &&
-        !lazy.UrlbarPrefs.get("suggest.quicksuggest.sponsored")) ||
-      (!isSponsored &&
-        !lazy.UrlbarPrefs.get("suggest.quicksuggest.nonsponsored"))
+      !lazy.UrlbarPrefs.get("suggest.quicksuggest.all") ||
+      (this.isSuggestionSponsored(suggestion) &&
+        !lazy.UrlbarPrefs.get("suggest.quicksuggest.sponsored"))
     ) {
       return null;
     }
@@ -254,7 +311,12 @@ export class RealtimeSuggestProvider extends SuggestProvider {
     return null;
   }
 
-  makeMerinoResult(_queryContext, suggestion, searchString) {
+  makeMerinoResult(
+    queryContext,
+    suggestion,
+    searchString,
+    additionalOptions = {}
+  ) {
     if (!this.isEnabled) {
       return null;
     }
@@ -265,20 +327,54 @@ export class RealtimeSuggestProvider extends SuggestProvider {
     ) {
       return null;
     }
-    return Object.assign(
-      new lazy.UrlbarResult(
-        lazy.UrlbarUtils.RESULT_TYPE.DYNAMIC,
-        lazy.UrlbarUtils.RESULT_SOURCE.SEARCH,
-        {
-          ...suggestion.custom_details,
-          dynamicType: this.realtimeType,
-        }
-      ),
-      {
-        isBestMatch: true,
-        hideRowLabel: true,
+
+    let values = suggestion.custom_details?.[this.merinoProvider]?.values;
+    if (!values?.length) {
+      return null;
+    }
+
+    let engine;
+    if (values.some(v => v.query)) {
+      engine = lazy.UrlbarSearchUtils.getDefaultEngine(queryContext.isPrivate);
+      if (!engine) {
+        return null;
       }
-    );
+    }
+
+    let result = new lazy.UrlbarResult({
+      type: lazy.UrlbarShared.RESULT_TYPE.DYNAMIC,
+      source: lazy.UrlbarShared.RESULT_SOURCE.SEARCH,
+      isBestMatch: true,
+      ...additionalOptions,
+      payload: {
+        items: values.map((v, i) => this.makePayloadItem(v, i)),
+        dynamicType: this.dynamicResultType,
+        engine: engine?.name,
+      },
+    });
+
+    return result;
+  }
+
+  /**
+   * Returns the object that should be stored as `result.payload.items[i]` for
+   * the Merino result. The default implementation here returns the
+   * corresponding value in the suggestion.
+   *
+   * It's useful to override this if there's a significant amount of logic
+   * that's used by the different code paths of the view update. In that case,
+   * you can override this method, perform the logic, store the results in the
+   * item, and then your different view update paths can all use it.
+   *
+   * @param {object} value
+   *   The value in the suggestion's `values` array.
+   * @param {number} _index
+   *   The index of the value in the array.
+   * @returns {object}
+   *   The object that should be stored in `result.payload.items[_index]`.
+   */
+  makePayloadItem(value, _index) {
+    return value;
   }
 
   makeOptInResult(queryContext, _suggestion) {
@@ -290,66 +386,155 @@ export class RealtimeSuggestProvider extends SuggestProvider {
           command: "dismiss",
           l10n: {
             id: "urlbar-result-realtime-opt-in-dismiss",
-            cacheable: true,
           },
         }
       : {
           command: "not_now",
           l10n: {
             id: "urlbar-result-realtime-opt-in-not-now",
-            cacheable: true,
           },
         };
 
-    return Object.assign(
-      new lazy.UrlbarResult(
-        lazy.UrlbarUtils.RESULT_TYPE.TIP,
-        lazy.UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
-        {
-          // This `type` is the tip type, required for `TIP` results.
-          type: "realtime_opt_in",
-          icon: "chrome://browser/skin/illustrations/market-opt-in.svg",
-          titleL10n: {
-            id: "urlbar-result-market-opt-in-title",
-            cacheable: true,
-          },
-          descriptionL10n: {
-            id: "urlbar-result-market-opt-in-description",
-            cacheable: true,
-            parseMarkup: true,
-          },
-          descriptionLearnMoreTopic: lazy.QuickSuggest.HELP_TOPIC,
-          buttons: [
-            {
-              command: "opt_in",
-              l10n: {
-                id: "urlbar-result-realtime-opt-in-allow",
-                cacheable: true,
-              },
-              input: queryContext.searchString,
-              attributes: {
-                primary: "",
-              },
+    return new lazy.UrlbarResult({
+      type: lazy.UrlbarShared.RESULT_TYPE.TIP,
+      source: lazy.UrlbarShared.RESULT_SOURCE.OTHER_LOCAL,
+      isBestMatch: true,
+      payload: {
+        // This `type` is the tip type, required for `TIP` results.
+        type: "realtime_opt_in",
+        icon: this.optInIcon,
+        titleL10n: this.optInTitleL10n,
+        descriptionL10n: this.optInDescriptionL10n,
+        descriptionLearnMoreTopic: lazy.QuickSuggest.HELP_TOPIC,
+        buttons: [
+          {
+            command: "opt_in",
+            l10n: {
+              id: "urlbar-result-realtime-opt-in-allow",
             },
-            {
-              ...splitButtonMain,
-              menu: [
-                {
-                  name: "not_interested",
-                  l10n: {
-                    id: "urlbar-result-realtime-opt-in-dismiss-all",
-                  },
+            input: queryContext.searchString,
+            attributes: {
+              primary: "",
+            },
+          },
+          {
+            ...splitButtonMain,
+            menu: [
+              {
+                name: "not_interested",
+                l10n: {
+                  id: "urlbar-result-realtime-opt-in-dismiss-all2",
                 },
-              ],
-            },
-          ],
-        }
-      ),
+              },
+            ],
+          },
+        ],
+      },
+    });
+  }
+
+  getViewTemplate(result) {
+    let { items } = result.payload;
+    let hasMultipleItems = items.length > 1;
+    return {
+      name: "root",
+      overflowable: true,
+      attributes: {
+        selectable: hasMultipleItems ? null : "",
+        role: hasMultipleItems ? "group" : "option",
+      },
+      classList: ["urlbarView-realtime-root"],
+      dataset: {
+        // This `url` or `query` is used when there's only one item.
+        url: items[0].url,
+        query: items[0].query,
+      },
+      children: items.map((item, i) => ({
+        name: `item_${i}`,
+        tag: "span",
+        classList: ["urlbarView-realtime-item"],
+        attributes: {
+          selectable: !hasMultipleItems ? null : "",
+          role: hasMultipleItems ? "option" : "presentation",
+        },
+        dataset: {
+          // These `url`s or `query`s are used when there are multiple items.
+          url: item.url,
+          query: item.query,
+        },
+        children: [
+          ...this.getViewTemplateForImageContainer(item, i),
+          {
+            tag: "span",
+            classList: ["urlbarView-realtime-description"],
+            children: [
+              {
+                tag: "div",
+                classList: ["urlbarView-realtime-description-top"],
+                children: this.getViewTemplateForDescriptionTop(item, i),
+              },
+              {
+                tag: "div",
+                classList: ["urlbarView-realtime-description-bottom"],
+                children: this.getViewTemplateForDescriptionBottom(item, i),
+              },
+            ],
+          },
+        ],
+      })),
+    };
+  }
+
+  /**
+   * Returns the view template for the image container. This default
+   * implementation creates a `span` with an `img` inside. Override it if you
+   * need something else.
+   *
+   * @param {object} _item
+   *   An item from the `result.payload.items` array.
+   * @param {number} index
+   *   The index of the item in the array.
+   * @returns {Array}
+   *   View template for the image container, an array of objects.
+   */
+  getViewTemplateForImageContainer(_item, index) {
+    // Create an image inside a container so that the image appears inset into a
+    // square. This is atypical because we normally use only an image and give
+    // it padding and a background color to achieve that effect, but that only
+    // works when the image size is fixed. Unfortunately Merino serves market
+    // icons of different sizes due to its reliance on a third-party API.
+    return [
       {
-        isBestMatch: true,
-        hideRowLabel: true,
-      }
-    );
+        name: `image_container_${index}`,
+        tag: "span",
+        classList: ["urlbarView-realtime-image-container"],
+        children: [
+          {
+            name: `image_${index}`,
+            tag: "img",
+            classList: ["urlbarView-realtime-image"],
+          },
+        ],
+      },
+    ];
+  }
+
+  getViewUpdate(result) {
+    let { items } = result.payload;
+    let hasMultipleItems = items.length > 1;
+
+    let update = {
+      root: {
+        l10n: hasMultipleItems ? this.ariaGroupL10n : null,
+      },
+    };
+
+    for (let i = 0; i < items.length; i++) {
+      let item = items[i];
+      Object.assign(update, this.getViewUpdateForPayloadItem(item, i));
+    }
+
+    return update;
   }
 
   getResultCommands(result) {
@@ -358,34 +543,34 @@ export class RealtimeSuggestProvider extends SuggestProvider {
       return null;
     }
 
-    let commands = [
-      {
-        name: "not_interested",
-        l10n: this.notInterestedCommandL10n,
-      },
-    ];
+    /** @type {UrlbarResultCommand[]} */
+    let commands = [];
 
     if (this.canShowLessFrequently) {
       commands.push({
         name: "show_less_frequently",
         l10n: {
-          id: "urlbar-result-menu-show-less-frequently",
+          id: "urlbar-result-menu-show-less-frequently2",
         },
       });
     }
 
     commands.push(
+      {
+        name: "not_interested",
+        l10n: this.notInterestedCommandL10n,
+      },
       { name: "separator" },
       {
         name: "manage",
         l10n: {
-          id: "urlbar-result-menu-manage-firefox-suggest",
+          id: "urlbar-result-menu-manage-firefox-suggest2",
         },
       },
       {
         name: "help",
         l10n: {
-          id: "urlbar-result-menu-learn-more-about-firefox-suggest",
+          id: "urlbar-result-menu-learn-more2",
         },
       }
     );
@@ -420,16 +605,13 @@ export class RealtimeSuggestProvider extends SuggestProvider {
       }
       case "not_interested": {
         lazy.UrlbarPrefs.set(this.suggestPref, false);
-        result.acknowledgeDismissalL10n = this.acknowledgeDismissalL10n;
-        controller.removeResult(result);
+        controller.removeResult(result, {
+          acknowledgeDismissalL10n: this.acknowledgeDismissalL10n,
+        });
         break;
       }
       case "show_less_frequently": {
-        controller.view.acknowledgeFeedback(result);
-        this.incrementShowLessFrequentlyCount();
-        if (!this.canShowLessFrequently) {
-          controller.view.invalidateResultMenuCommands();
-        }
+        this.handleShowLessFrequently(controller, result);
         lazy.UrlbarPrefs.set(
           this.minKeywordLengthPref,
           searchString.length + 1
@@ -442,7 +624,7 @@ export class RealtimeSuggestProvider extends SuggestProvider {
   onOptInEngagement(queryContext, controller, details, _searchString) {
     switch (details.selType) {
       case "opt_in":
-        lazy.UrlbarPrefs.set("quicksuggest.dataCollection.enabled", true);
+        lazy.UrlbarPrefs.set("quicksuggest.online.enabled", true);
         controller.input.startQuery({ allowAutofill: false });
         break;
       case "not_now": {
@@ -462,16 +644,18 @@ export class RealtimeSuggestProvider extends SuggestProvider {
           "quicksuggest.realtimeOptIn.dismissTypes",
           this.realtimeType
         );
-        details.result.acknowledgeDismissalL10n = this.acknowledgeDismissalL10n;
-        controller.removeResult(details.result);
+        controller.removeResult(details.result, {
+          acknowledgeDismissalL10n: this.acknowledgeDismissalL10n,
+        });
         break;
       }
       case "not_interested": {
         lazy.UrlbarPrefs.set("suggest.realtimeOptIn", false);
-        details.result.acknowledgeDismissalL10n = {
-          id: "urlbar-result-dismissal-acknowledgment-all",
-        };
-        controller.removeResult(details.result);
+        controller.removeResult(details.result, {
+          acknowledgeDismissalL10n: {
+            id: "urlbar-result-dismissal-acknowledgment-all",
+          },
+        });
         break;
       }
     }

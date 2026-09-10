@@ -29,8 +29,6 @@ var gExceptionPaths = [
   "chrome://activity-stream/content/data/content/tippytop/images/",
   "chrome://activity-stream/content/data/content/tippytop/favicons/",
   // These resources are referenced by messages delivered through Remote Settings
-  "chrome://activity-stream/content/data/content/assets/mobile-download-qr-new-user-cn.svg",
-  "chrome://activity-stream/content/data/content/assets/mobile-download-qr-existing-user-cn.svg",
   "chrome://activity-stream/content/data/content/assets/mr-amo-collection.svg",
   "chrome://activity-stream/content/data/content/assets/person-typing.svg",
   "chrome://activity-stream/content/data/content/assets/tabs-side-zap-transparent.svg",
@@ -40,27 +38,35 @@ var gExceptionPaths = [
   "chrome://activity-stream/content/data/content/assets/euo-chatbot.svg",
   "chrome://browser/content/assets/moz-vpn.svg",
   "chrome://browser/content/assets/vpn-logo.svg",
-  "chrome://browser/content/assets/focus-promo.png",
-  "chrome://browser/content/assets/klar-qr-code.svg",
   "chrome://browser/content/asrouter/assets/fox-with-box-on-cloud.svg",
   "chrome://browser/content/asrouter/assets/fox-with-devices.svg",
   "chrome://browser/content/asrouter/assets/fox-with-locked-box.svg",
   "chrome://browser/content/asrouter/assets/fox-with-mobile.svg",
+  "chrome://browser/content/asrouter/assets/desktop-to-mobile-banner.svg",
+  "chrome://browser/content/asrouter/assets/desktop-to-mobile-non-eu-QR.svg",
+  "chrome://browser/content/asrouter/assets/desktop-to-mobile-eu-QR.svg",
+  "chrome://activity-stream/content/data/content/assets/fox-doodle-backup-restore.svg",
+  "chrome://browser/content/asrouter/assets/kit-peek-bottom.svg",
+  "chrome://browser/content/asrouter/assets/kit-peek.svg",
+  "chrome://browser/content/asrouter/assets/tabgroups/vert-animated-dark.svg",
+  "chrome://browser/content/asrouter/assets/tabgroups/vert-animated-light.svg",
+  "chrome://browser/content/asrouter/assets/tabgroups/vert-static-dark.svg",
+  "chrome://browser/content/asrouter/assets/tabgroups/vert-static-light.svg",
+  "chrome://activity-stream/content/data/content/assets/backdrop-adaptive.svg",
+  "chrome://activity-stream/content/data/content/assets/kit-sit-look-up.svg",
 
   // toolkit/components/pdfjs/content/build/pdf.js
   "resource://pdf.js/web/images/",
-  // This file is only loaded in using a dynamic import in pdf.js in case wasm
-  // is not available.
+  // These files are only loaded in using a dynamic import in pdf.js in case
+  // wasm is not available.
   "resource://pdf.js/web/wasm/openjpeg_nowasm_fallback.js",
+  "resource://pdf.js/web/wasm/jbig2_nowasm_fallback.js",
 
   // Exclude the form autofill path that has been moved out of the extensions to
   // toolkit, see bug 1691821.
   "resource://gre-resources/autofill/",
   // Localization file added programatically in FormAutofillUtils.sys.mjs
   "resource://gre/localization/en-US/toolkit/formautofill",
-
-  // Exclude all search-extensions because they aren't referenced by filename
-  "resource://search-extensions/",
 
   // Exclude all services-automation because they are used through webdriver
   "resource://gre/modules/services-automation/",
@@ -71,7 +77,8 @@ var gExceptionPaths = [
 
   // Points to theme preview images, which are defined in browser/ but only used
   // in toolkit/mozapps/extensions/content/aboutaddons.js.
-  "resource://usercontext-content/builtin-themes/",
+  "resource://builtin-themes/",
+  "resource://extra-themes-previews/",
 
   // Page data schemas are referenced programmatically.
   "chrome://browser/content/pagedata/schemas/",
@@ -106,6 +113,9 @@ var gExceptionPaths = [
   // The profile avatars are directly referenced.
   "chrome://browser/content/profiles/assets/",
 
+  // The custom model choice icon is referenced programatically in input-model-select.mjs.
+  "chrome://browser/content/aiwindow/assets/model-choice-0.svg",
+
   // The picture-in-picture add-on.
   "resource://builtin-addons/pictureinpicture/",
 
@@ -126,7 +136,16 @@ var gExceptionPaths = [
   // Used for Market suggestions on the urlbar. This is specified from Remote
   // Settings.
   "chrome://browser/skin/illustrations/market-opt-in.svg",
+
+  // Used for Yelp realtime suggestions on the urlbar. This is specified from
+  // Remote Settings.
+  "chrome://browser/skin/illustrations/yelpRealtime-opt-in.svg",
 ];
+
+if (AppConstants.platform == "win") {
+  // Referenced via resource://gfxsanity/
+  gExceptionPaths.push("resource://gre-resources/gfxsanity/");
+}
 
 // These are not part of the omni.ja file, so we find them only when running
 // the test on a non-packaged build.
@@ -174,15 +193,17 @@ var allowlist = [
 
   // devtools/client/inspector/bin/dev-server.js
   {
-    file: "chrome://devtools/content/inspector/markup/markup.xhtml",
+    file: "chrome://devtools/content/inspector/markup/markup.html",
     isFromDevTools: true,
   },
 
-  // used by devtools/client/memory/index.xhtml
-  { file: "chrome://global/content/third_party/d3/d3.js" },
-
   // SpiderMonkey parser API, currently unused in browser/ and toolkit/
-  { file: "resource://gre/modules/reflect.sys.mjs" },
+  { file: "moz-src:///toolkit/components/reflect/reflect.sys.mjs" },
+
+  // TODO Bug 2065560: Connect AITabStore to Tool calls
+  {
+    file: "moz-src:///browser/components/aiwindow/ui/modules/AITabStore.sys.mjs",
+  },
 
   // extensions/pref/autoconfig/src/nsReadConfig.cpp
   { file: "resource://gre/defaults/autoconfig/prefcalls.js" },
@@ -192,15 +213,8 @@ var allowlist = [
   {
     file: "chrome://browser/content/preferences/more-from-mozilla-qr-code-simple.svg",
   },
-  {
-    file: "chrome://browser/content/preferences/more-from-mozilla-qr-code-simple-cn.svg",
-  },
 
   { file: "resource://gre/greprefs.js" },
-
-  // layout/mathml/nsMathMLChar.cpp
-  { file: "resource://gre/res/fonts/mathfontSTIXGeneral.properties" },
-  { file: "resource://gre/res/fonts/mathfontUnicode.properties" },
 
   // toolkit/mozapps/extensions/AddonContentPolicy.cpp
   { file: "resource://gre/localization/en-US/toolkit/global/cspErrors.ftl" },
@@ -214,10 +228,6 @@ var allowlist = [
     platforms: ["linux", "win"],
   },
   {
-    file: "resource://gre/chrome/en-US/locale/en-US/global-platform/mac/intl.properties",
-    platforms: ["linux", "win"],
-  },
-  {
     file: "resource://gre/chrome/en-US/locale/en-US/global-platform/mac/platformKeys.properties",
     platforms: ["linux", "win"],
   },
@@ -226,19 +236,11 @@ var allowlist = [
     platforms: ["macosx", "win"],
   },
   {
-    file: "resource://gre/chrome/en-US/locale/en-US/global-platform/unix/intl.properties",
-    platforms: ["macosx", "win"],
-  },
-  {
     file: "resource://gre/chrome/en-US/locale/en-US/global-platform/unix/platformKeys.properties",
     platforms: ["macosx", "win"],
   },
   {
     file: "resource://gre/chrome/en-US/locale/en-US/global-platform/win/accessible.properties",
-    platforms: ["linux", "macosx"],
-  },
-  {
-    file: "resource://gre/chrome/en-US/locale/en-US/global-platform/win/intl.properties",
     platforms: ["linux", "macosx"],
   },
   {
@@ -262,7 +264,7 @@ var allowlist = [
   // Bug 1348559
   { file: "chrome://pippki/content/resetpassword.xhtml" },
   // Bug 1337345
-  { file: "resource://gre/modules/Manifest.sys.mjs" },
+  { file: "moz-src:///dom/manifest/Manifest.sys.mjs" },
   // Bug 1494170
   // (The references to these files are dynamically generated, so the test can't
   // find the references)
@@ -320,9 +322,17 @@ var allowlist = [
   // toolkit/xre/MacRunFromDmgUtils.mm
   { file: "resource://gre/localization/en-US/toolkit/global/run-from-dmg.ftl" },
 
+  // toolkit/modules/RosettaUtils.sys.mjs
+  {
+    file: "resource://gre/localization/en-US/toolkit/global/rosettaNotification.ftl",
+    platforms: ["linux", "win"],
+  },
+
   // Referenced programmatically
   { file: "chrome://browser/content/backup/BackupManifest.1.schema.json" },
+  { file: "chrome://browser/content/backup/BackupManifest.2.schema.json" },
   { file: "chrome://browser/content/backup/ArchiveJSONBlock.1.schema.json" },
+  { file: "chrome://browser/content/backup/ArchiveJSONBlock.2.schema.json" },
 
   // Bug 1733498 - Migrate necko errors l10n strings from .properties to Fluent
   {
@@ -335,10 +345,16 @@ var allowlist = [
   // A QA and dev debug tool.
   { file: "chrome://browser/content/places/interactionsViewer.html" },
 
-  // A uniffi-generated file which isn't used directly by 1969013 but will be by a followup.
+  // Bug 1984409: We're doing backups to cloud-synced locations first. We'll do local backups eventually,
+  // and this file will be needed for that.
   {
-    file: "moz-src:///toolkit/components/uniffi-bindgen-gecko-js/components/generated/RustTracing.sys.mjs",
+    file: "resource://app/modules/backup/CookiesBackupResource.sys.mjs",
   },
+
+  // Referenced dynamically in newtab components via template literals:
+  // `chrome://global/skin/icons/shaft-arrow-${isRTL ? "right" : "left"}.svg`
+  { file: "chrome://global/skin/icons/shaft-arrow-left.svg" },
+  { file: "chrome://global/skin/icons/shaft-arrow-right.svg" },
 ];
 
 if (AppConstants.NIGHTLY_BUILD) {
@@ -346,6 +362,15 @@ if (AppConstants.NIGHTLY_BUILD) {
     // A debug tool that is only available in Nightly builds, and is accessed
     // directly by developers via the chrome URI (bug 1888491)
     { file: "chrome://browser/content/backup/debug.html" }
+  );
+}
+
+if (!AppConstants.RELEASE_OR_BETA) {
+  allowlist.push(
+    // browser/extensions/newtab/actors/AboutNewTabChild.sys.mjs constructs the
+    // URL dynamically: `chrome://global/content/vendor/react${debugString}.js`
+    { file: "chrome://global/content/vendor/react-dev.js" },
+    { file: "chrome://global/content/vendor/react-dom-dev.js" }
   );
 }
 
@@ -984,8 +1009,9 @@ add_task(async function checkAllTheFiles() {
     "chrome://devtools",
     "moz-src:///devtools/",
     "resource://devtools/",
-    "resource://devtools-shared-images/",
     "resource://devtools-highlighter-styles/",
+    "resource://devtools-shared-images/",
+    "resource://devtools-webextension-fallback/",
     "resource://app/modules/devtools",
     "resource://gre/modules/devtools",
     "resource://app/localization/en-US/startup/aboutDevTools.ftl",

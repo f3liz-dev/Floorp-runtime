@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -17,7 +15,6 @@
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_threads.h"
-#include "mozilla/Unused.h"
 #include "mozilla/dom/BrowserHost.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
@@ -204,6 +201,11 @@ class ProcessPriorityManagerImpl final : public nsIObserver,
   void BrowserPriorityChanged(CanonicalBrowsingContext* aBC, bool aPriority);
   void BrowserPriorityChanged(BrowserParent* aBrowserParent, bool aPriority);
 
+  ProcessPriorityManagerImpl(const ProcessPriorityManagerImpl&) = delete;
+
+  const ProcessPriorityManagerImpl& operator=(
+      const ProcessPriorityManagerImpl&) = delete;
+
  private:
   static bool sPrefListenersRegistered;
   static bool sInitialized;
@@ -213,10 +215,6 @@ class ProcessPriorityManagerImpl final : public nsIObserver,
 
   ProcessPriorityManagerImpl();
   ~ProcessPriorityManagerImpl();
-  ProcessPriorityManagerImpl(const ProcessPriorityManagerImpl&) = delete;
-
-  const ProcessPriorityManagerImpl& operator=(
-      const ProcessPriorityManagerImpl&) = delete;
 
   void Init();
 
@@ -246,15 +244,16 @@ class ProcessPriorityManagerChild final : public nsIObserver {
 
   bool CurrentProcessIsForeground();
 
+  ProcessPriorityManagerChild(const ProcessPriorityManagerChild&) = delete;
+
+  const ProcessPriorityManagerChild& operator=(
+      const ProcessPriorityManagerChild&) = delete;
+
  private:
   static StaticRefPtr<ProcessPriorityManagerChild> sSingleton;
 
   ProcessPriorityManagerChild();
   ~ProcessPriorityManagerChild() = default;
-  ProcessPriorityManagerChild(const ProcessPriorityManagerChild&) = delete;
-
-  const ProcessPriorityManagerChild& operator=(
-      const ProcessPriorityManagerChild&) = delete;
 
   void Init();
 
@@ -849,7 +848,7 @@ void ParticularProcessPriorityManager::SetPriorityNow(
     }
 #endif
 
-    Unused << mContentParent->SendNotifyProcessPriorityChanged(mPriority);
+    (void)mContentParent->SendNotifyProcessPriorityChanged(mPriority);
   }
 
   FireTestOnlyObserverNotification("process-priority-set",

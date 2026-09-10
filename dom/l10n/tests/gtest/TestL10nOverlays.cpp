@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,14 +19,15 @@ static already_AddRefed<Document> SetUpDocument() {
   nsCOMPtr<nsIPrincipal> principal =
       NullPrincipal::CreateWithoutOriginAttributes();
   nsCOMPtr<Document> document;
-  nsresult rv = NS_NewDOMDocument(getter_AddRefs(document),
-                                  u""_ns,   // aNamespaceURI
-                                  u""_ns,   // aQualifiedName
-                                  nullptr,  // aDoctype
-                                  uri, uri, principal,
-                                  false,    // aLoadedAsData
-                                  nullptr,  // aEventObject
-                                  DocumentFlavor::HTML);
+  nsresult rv =
+      NS_NewDOMDocument(getter_AddRefs(document),
+                        u""_ns,   // aNamespaceURI
+                        u""_ns,   // aQualifiedName
+                        nullptr,  // aDoctype
+                        uri, uri, principal,
+                        mozilla::dom::LoadedAsData::No,  // aLoadedAsData
+                        nullptr,                         // aEventObject
+                        DocumentFlavor::HTML);
 
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return nullptr;

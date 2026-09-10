@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* Copyright (c) 2011, The WebRTC project authors. All rights reserved.
  * Copyright (c) 2014, Mozilla
  *
@@ -35,8 +34,6 @@
 #define GMP_VIDEO_ENCODE_h_
 
 #include <stdint.h>
-
-#include <vector>
 
 #include "gmp-errors.h"
 #include "gmp-video-codec.h"

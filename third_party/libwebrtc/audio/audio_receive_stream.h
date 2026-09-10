@@ -16,9 +16,11 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
+#include "absl/base/nullability.h"
 #include "absl/strings/string_view.h"
 #include "api/audio/audio_frame.h"
 #include "api/audio/audio_mixer.h"
@@ -31,17 +33,32 @@
 #include "api/scoped_refptr.h"
 #include "api/sequence_checker.h"
 #include "api/transport/rtp/rtp_source.h"
+#include "api/units/time_delta.h"
+#include "api/units/timestamp.h"
+// This can be removed after Bug 1768116 enables
+// c++20 builds across the entire Mozilla tree.
+#if !defined(WEBRTC_MOZILLA_BUILD)
 #include "audio/audio_state.h"
+#endif
 #include "call/audio_receive_stream.h"
 #include "call/audio_state.h"
 #include "call/syncable.h"
 #include "rtc_base/system/no_unique_address.h"
 #include "rtc_base/thread_annotations.h"
+#include "system_wrappers/include/ntp_time.h"
 
 namespace webrtc {
 class PacketRouter;
 class RtpStreamReceiverControllerInterface;
 class RtpStreamReceiverInterface;
+
+// This can be removed after Bug 1768116 enables
+// c++20 builds across the entire Mozilla tree.
+#if defined(WEBRTC_MOZILLA_BUILD)
+namespace internal {
+class AudioState;
+}
+#endif
 
 namespace voe {
 class ChannelReceiveInterface;
@@ -53,17 +70,17 @@ class AudioReceiveStreamImpl final : public webrtc::AudioReceiveStreamInterface,
  public:
   AudioReceiveStreamImpl(
       const Environment& env,
-      PacketRouter* packet_router,
-      NetEqFactory* neteq_factory,
+      PacketRouter* absl_nonnull packet_router,
+      NetEqFactory* absl_nullable neteq_factory,
       const webrtc::AudioReceiveStreamInterface::Config& config,
       const scoped_refptr<webrtc::AudioState>& audio_state);
   // For unit tests, which need to supply a mock channel receive.
   AudioReceiveStreamImpl(
       const Environment& env,
-      PacketRouter* packet_router,
       const webrtc::AudioReceiveStreamInterface::Config& config,
       const scoped_refptr<webrtc::AudioState>& audio_state,
-      std::unique_ptr<voe::ChannelReceiveInterface> channel_receive);
+      absl_nonnull std::unique_ptr<voe::ChannelReceiveInterface>
+          channel_receive);
 
   AudioReceiveStreamImpl() = delete;
   AudioReceiveStreamImpl(const AudioReceiveStreamImpl&) = delete;
@@ -103,6 +120,8 @@ class AudioReceiveStreamImpl final : public webrtc::AudioReceiveStreamInterface,
       bool get_and_clear_legacy_stats) const override;
   void SetSink(AudioSinkInterface* sink) override;
   void SetGain(float gain) override;
+  void SetJitterBufferMaxPackets(size_t max_packets) override;
+  void SetJitterBufferFastAccelerate(bool fast_accelerate) override;
   bool SetBaseMinimumPlayoutDelayMs(int delay_ms) override;
   int GetBaseMinimumPlayoutDelayMs() const override;
   std::vector<webrtc::RtpSource> GetSources() const override;
@@ -117,37 +136,25 @@ class AudioReceiveStreamImpl final : public webrtc::AudioReceiveStreamInterface,
   // Syncable
   uint32_t id() const override;
   std::optional<Syncable::Info> GetInfo() const override;
-  bool GetPlayoutRtpTimestamp(uint32_t* rtp_timestamp,
-                              int64_t* time_ms) const override;
-  void SetEstimatedPlayoutNtpTimestampMs(int64_t ntp_timestamp_ms,
-                                         int64_t time_ms) override;
-  bool SetMinimumPlayoutDelay(int delay_ms) override;
+  std::optional<Syncable::PlayoutInfo> GetPlayoutRtpTimestamp() const override;
+  void SetEstimatedPlayoutNtpTimestamp(NtpTime ntp_time,
+                                       Timestamp time) override;
+  bool SetMinimumPlayoutDelay(TimeDelta delay) override;
 
-  void DeliverRtcp(const uint8_t* packet, size_t length);
+  void DeliverRtcp(std::span<const uint8_t> packet);
 
   void SetSyncGroup(absl::string_view sync_group);
 
-  void SetLocalSsrc(uint32_t local_ssrc);
-
-  uint32_t local_ssrc() const;
-
-  uint32_t remote_ssrc() const override {
-    // The remote_ssrc member variable of config_ will never change and can be
-    // considered const.
-    return config_.rtp.remote_ssrc;
-  }
+  uint32_t remote_ssrc() const override;
 
   // Returns a reference to the currently set sync group of the stream.
   // Must be called on the packet delivery thread.
   const std::string& sync_group() const;
 
-  // TODO(tommi): Remove this method.
-  void ReconfigureForTesting(
-      const webrtc::AudioReceiveStreamInterface::Config& config);
-
  private:
   internal::AudioState* audio_state() const;
 
+  const Environment env_;
   RTC_NO_UNIQUE_ADDRESS SequenceChecker worker_thread_checker_;
   // TODO(bugs.webrtc.org/11993): This checker conceptually represents
   // operations that belong to the network thread. The Call class is currently
@@ -159,7 +166,7 @@ class AudioReceiveStreamImpl final : public webrtc::AudioReceiveStreamInterface,
   RTC_NO_UNIQUE_ADDRESS SequenceChecker packet_sequence_checker_{
       SequenceChecker::kDetached};
   webrtc::AudioReceiveStreamInterface::Config config_;
-  scoped_refptr<webrtc::AudioState> audio_state_;
+  const scoped_refptr<webrtc::AudioState> audio_state_;
   const std::unique_ptr<voe::ChannelReceiveInterface> channel_receive_;
 
   bool playing_ RTC_GUARDED_BY(worker_thread_checker_) = false;

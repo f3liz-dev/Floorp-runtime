@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -18,7 +17,6 @@
 #include "mozilla/PendingStyles.h"       // for PendingStyle, PendingStyleCache
 #include "mozilla/RangeBoundary.h"       // for RawRangeBoundary, RangeBoundary
 #include "mozilla/SelectionState.h"      // for RangeUpdater, etc.
-#include "mozilla/StyleSheet.h"          // for StyleSheet
 #include "mozilla/TransactionManager.h"  // for TransactionManager
 #include "mozilla/WeakPtr.h"             // for WeakPtr
 #include "mozilla/dom/DataTransfer.h"    // for dom::DataTransfer
@@ -73,6 +71,7 @@ class PresShell;
 class TextComposition;
 class TextInputListener;
 class TextServicesDocument;
+struct LimitersAndCaretData;
 namespace dom {
 class AbstractRange;
 class DataTransfer;
@@ -145,32 +144,14 @@ class EditorBase : public nsIEditor,
   nsPIDOMWindowInner* GetInnerWindow() const;
 
   /**
-   * MayHaveMutationEventListeners() returns true when the window may have
-   * mutation event listeners.
+   * MaybeNodeRemovalsObservedByDevTools() returns true when the mutations in
+   * the document is observed by DevTools.
    *
-   * @param aMutationEventType  One or multiple of NS_EVENT_BITS_MUTATION_*.
-   * @return                    true if the editor is an HTMLEditor instance,
-   *                            and at least one of NS_EVENT_BITS_MUTATION_* is
-   *                            set to the window or in debug build.
+   * @return                    true if the editor is an HTMLEditor instance
+   *                            and the mutations in the document is observed by
+   *                            DevTools.
    */
-  bool MayHaveMutationEventListeners(
-      uint32_t aMutationEventType = 0xFFFFFFFF) const {
-    if (IsTextEditor()) {
-      // DOM mutation event listeners cannot catch the changes of
-      // <input type="text"> nor <textarea>.
-      return false;
-    }
-#ifdef DEBUG
-    // On debug build, this should always return true for testing complicated
-    // path without mutation event listeners because when mutation event
-    // listeners do not touch the DOM, editor needs to run as there is no
-    // mutation event listeners.
-    return true;
-#else   // #ifdef DEBUG
-    nsPIDOMWindowInner* window = GetInnerWindow();
-    return window ? window->HasMutationListeners(aMutationEventType) : false;
-#endif  // #ifdef DEBUG #else
-  }
+  [[nodiscard]] bool MaybeNodeRemovalsObservedByDevTools() const;
 
   /**
    * MayHaveBeforeInputEventListenersForTelemetry() returns true when the
@@ -211,7 +192,7 @@ class EditorBase : public nsIEditor,
 
   PresShell* GetPresShell() const;
   nsPresContext* GetPresContext() const;
-  already_AddRefed<nsCaret> GetCaret() const;
+  already_AddRefed<nsCaret> GetCaretForSelection() const;
 
   already_AddRefed<nsIWidget> GetWidget() const;
 
@@ -233,6 +214,13 @@ class EditorBase : public nsIEditor,
     Selection* selection = sc->GetSelection(ToRawSelectionType(aSelectionType));
     return selection;
   }
+
+  /**
+   * Get frame selection from SelectionRef(), but returns null
+   * for canvas-based EditContext, where we don't want to touch
+   * the DOM selection (since it may be in accessible content.)
+   */
+  nsFrameSelection* GetEditableFrameSelection() const;
 
   /**
    * @return Ancestor limiter of normal selection
@@ -262,6 +250,13 @@ class EditorBase : public nsIEditor,
   Element* GetExposedRoot() const;
 
   /**
+   * Compute EditContext which this editor is currently attached to.
+   * While handling an edit action, use GetEditActionEditContext instead,
+   * in case the active EditContext changed since the edit action started.
+   */
+  virtual dom::EditContext* ComputeEditContext() const { return nullptr; }
+
+  /**
    * Set or unset TextInputListener.  If setting non-nullptr when the editor
    * already has a TextInputListener, this will crash in debug build.
    */
@@ -281,7 +276,8 @@ class EditorBase : public nsIEditor,
   /**
    * Get preferred IME status of current widget.
    */
-  virtual nsresult GetPreferredIMEState(widget::IMEState* aState);
+  [[nodiscard]] virtual Result<widget::IMEState, nsresult>
+  GetPreferredIMEState() const = 0;
 
   /**
    * Returns true if there is composition string and not fixed.
@@ -611,7 +607,10 @@ class EditorBase : public nsIEditor,
   [[nodiscard]] virtual Element* FindSelectionRoot(const nsINode& aNode) const;
 
   /**
-   * OnFocus() is called when we get a focus event.
+   * Called before `eFocus` event is dispatched into the DOM. Any state of the
+   * DOM which can be referred by web content's script should be initialized
+   * during this call because `focus` event should be fired after the focus move
+   * finished.
    *
    * @param aOriginalEventTargetNode    The original event target node of the
    *                                    focus event.
@@ -620,11 +619,23 @@ class EditorBase : public nsIEditor,
       const nsINode& aOriginalEventTargetNode);
 
   /**
-   * OnBlur() is called when we're blurred.
+   * Called when `eFocus` event propagation ends in the web content. The focused
+   * element may be redirected by a `focus` event listener so this editor may
+   * not have focus anymore when this is called.
+   */
+  MOZ_CAN_RUN_SCRIPT virtual void PostHandleFocusEvent(
+      const nsINode& aFocusEventTargetNode);
+
+  /**
+   * Called before `eBlur` event is dispatched into the DOM. Any state of the
+   * DOM which can be referred by web content's script should be finalized
+   * during this call because `blur` event should be fired after the blur
+   * finished.
    *
    * @param aEventTarget        The event target of the blur event.
    */
-  virtual nsresult OnBlur(const dom::EventTarget* aEventTarget) = 0;
+  MOZ_CAN_RUN_SCRIPT virtual nsresult OnBlur(
+      const dom::EventTarget* aEventTarget) = 0;
 
   /** Resyncs spellchecking state (enabled/disabled).  This should be called
    * when anything that affects spellchecking state changes, such as the
@@ -838,6 +849,8 @@ class EditorBase : public nsIEditor,
   struct MOZ_STACK_CLASS TopLevelEditSubActionData final {
     friend class AutoEditActionDataSetter;
 
+    TopLevelEditSubActionData(const TopLevelEditSubActionData& aOther) = delete;
+
     // Set selected range before edit.  Then, RangeUpdater keep modifying
     // the range while we're changing the DOM tree.
     RefPtr<RangeItem> mSelectedRange;
@@ -959,7 +972,6 @@ class EditorBase : public nsIEditor,
                                     const EditorRawDOMPoint& aEnd);
 
     TopLevelEditSubActionData() = default;
-    TopLevelEditSubActionData(const TopLevelEditSubActionData& aOther) = delete;
   };
 
   struct MOZ_STACK_CLASS EditSubActionData final {
@@ -1002,6 +1014,8 @@ class EditorBase : public nsIEditor,
     AutoEditActionDataSetter(const EditorBase& aEditorBase,
                              EditAction aEditAction,
                              nsIPrincipal* aPrincipal = nullptr);
+    AutoEditActionDataSetter() = delete;
+    AutoEditActionDataSetter(const AutoEditActionDataSetter& aOther) = delete;
     ~AutoEditActionDataSetter();
 
     void SetSelectionCreatedByDoubleclick(bool aSelectionCreatedByDoubleclick) {
@@ -1031,11 +1045,11 @@ class EditorBase : public nsIEditor,
     [[nodiscard]] bool CanHandle() const {
 #ifdef DEBUG
       mHasCanHandleChecked = true;
-#endif  // #ifdefn DEBUG
+#endif  // #ifdef DEBUG
       // Don't allow to run new edit action when an edit action caused
       // destroying the editor while it's being handled.
       if (mEditAction != EditAction::eInitializing &&
-          mEditorWasDestroyedDuringHandlingEditAction) {
+          HasEditorDestroyedDuringHandlingEditActionAndNotYetReinitialized()) {
         NS_WARNING("Editor was destroyed during an edit action being handled");
         return false;
       }
@@ -1142,8 +1156,21 @@ class EditorBase : public nsIEditor,
       return *mSelection;
     }
 
+    LimitersAndCaretData SelectionLimitersAndCaretData() const;
+
+    Text* GetCachedTextNode() const {
+      MOZ_ASSERT(mEditorBase.IsTextEditor());
+      return mTextNode;
+    }
+
     nsIPrincipal* GetPrincipal() const { return mPrincipal; }
     EditAction GetEditAction() const { return mEditAction; }
+
+    dom::EditContext* GetEditContext() const { return mEditContext; }
+    void UpdateEditContext();
+    bool EditContextHasBeenChanged() const {
+      return mEditContext != mEditorBase.ComputeEditContext();
+    }
 
     template <typename PT, typename CT>
     void SetSpellCheckRestartPoint(const EditorDOMPointBase<PT, CT>& aPoint) {
@@ -1232,13 +1259,30 @@ class EditorBase : public nsIEditor,
         // something other unexpected event listeners.  In the cases, new child
         // edit action shouldn't been aborted.
         mEditorWasDestroyedDuringHandlingEditAction = true;
+        mEditorWasReinitialized = false;
       }
       if (mParentData) {
         mParentData->OnEditorDestroy();
       }
     }
-    bool HasEditorDestroyedDuringHandlingEditAction() const {
+    void OnEditorInitialized();
+    /**
+     * Return true if the editor was destroyed at least once while the
+     * EditAction is being handled.  Note that the editor may have already been
+     * reinitialized even if this returns true.
+     */
+    [[nodiscard]] bool HasEditorDestroyedDuringHandlingEditAction() const {
       return mEditorWasDestroyedDuringHandlingEditAction;
+    }
+    /**
+     * Return true if the editor was destroyed while the EditAction is being
+     * handled and has not been reinitialized.  I.e., the editor is still under
+     * the destroyed state.
+     */
+    [[nodiscard]] bool
+    HasEditorDestroyedDuringHandlingEditActionAndNotYetReinitialized() const {
+      return mEditorWasDestroyedDuringHandlingEditAction &&
+             !mEditorWasReinitialized;
     }
 
     void SetTopLevelEditSubAction(EditSubAction aEditSubAction,
@@ -1427,6 +1471,11 @@ class EditorBase : public nsIEditor,
     RefPtr<Selection> mSelection;
     nsTArray<OwningNonNull<Selection>> mRetiredSelections;
 
+    // mTextNode is the text node if and only if the instance is TextEditor.
+    // This is set when the instance is created and updated when the TextEditor
+    // is reinitialized with the new native anonymous subtree.
+    RefPtr<Text> mTextNode;
+
     // True if the selection was created by doubleclicking a word.
     bool mSelectionCreatedByDoubleclick{false};
 
@@ -1455,6 +1504,9 @@ class EditorBase : public nsIEditor,
     // by TextEditor.
     EditorDOMPoint mSpellCheckRestartPoint;
 
+    // EditContext which this edit action is targeting.
+    RefPtr<dom::EditContext> mEditContext;
+
     // Different from mTopLevelEditSubAction, its data should be stored only
     // in the most ancestor AutoEditActionDataSetter instance since we don't
     // want to pay the copying cost and sync cost.
@@ -1475,40 +1527,40 @@ class EditorBase : public nsIEditor,
     // instance's mTopLevelEditSubAction member since it's copied from the
     // parent instance at construction and it's always cleared before this
     // won't be overwritten and cleared before destruction.
-    EditSubAction mTopLevelEditSubAction;
+    EditSubAction mTopLevelEditSubAction = EditSubAction::eNone;
 
-    EDirection mDirectionOfTopLevelEditSubAction;
+    EDirection mDirectionOfTopLevelEditSubAction = nsIEditor::eNone;
 
-    bool mAborted;
+    bool mAborted = false;
 
     // Set to true when this handles "beforeinput" event dispatching.  Note
     // that even if "beforeinput" event shouldn't be dispatched for this,
     // instance, this is set to true when it's considered.
-    bool mHasTriedToDispatchBeforeInputEvent;
+    bool mHasTriedToDispatchBeforeInputEvent = false;
     // Set to true if "beforeinput" event was dispatched and it's canceled.
-    bool mBeforeInputEventCanceled;
+    bool mBeforeInputEventCanceled = false;
     // Set to true if `beforeinput` event must not be cancelable even if
     // its inputType is defined as cancelable by the standards.
-    bool mMakeBeforeInputEventNonCancelable;
+    bool mMakeBeforeInputEventNonCancelable = false;
     // Set to true when the edit action handler tries to dispatch a clipboard
     // event.
-    bool mHasTriedToDispatchClipboardEvent;
+    bool mHasTriedToDispatchClipboardEvent = false;
     // The editor instance may be destroyed once temporarily if `document.write`
     // etc runs.  In such case, we should mark this flag of being handled
     // edit action.
     bool mEditorWasDestroyedDuringHandlingEditAction;
+    // This is set to `true` if the editor was destroyed but now, it's
+    // initialized again.
+    bool mEditorWasReinitialized;
     // This is set before dispatching `input` event and notifying editor
     // observers.
-    bool mHandled;
+    bool mHandled = false;
     // Whether the editor is dispatching a `beforeinput` or `input` event.
     bool mDispatchingInputEvent = false;
 
 #ifdef DEBUG
     mutable bool mHasCanHandleChecked = false;
 #endif  // #ifdef DEBUG
-
-    AutoEditActionDataSetter() = delete;
-    AutoEditActionDataSetter(const AutoEditActionDataSetter& aOther) = delete;
   };
 
   void UpdateEditActionData(const nsAString& aData) {
@@ -1584,10 +1636,37 @@ class EditorBase : public nsIEditor,
                SelectionType::eNormal);
     return mEditActionData->SelectionRef();
   }
+  LimitersAndCaretData SelectionLimitersAndCaretData() const;
+
+  // Return the Text if and only if we're a TextEditor instance.  It's cached
+  // while we're handling an edit action, so, this stores the latest value even
+  // after we have been destroyed.
+  Text* GetCachedTextNode() {
+    MOZ_ASSERT(IsTextEditor());
+    return mEditActionData ? mEditActionData->GetCachedTextNode() : nullptr;
+  }
+
+  // Return the Text if and only if we're a TextEditor instance.  It's cached
+  // while we're handling an edit action, so, this stores the latest value even
+  // after we have been destroyed.
+  const Text* GetCachedTextNode() const {
+    MOZ_ASSERT(IsTextEditor());
+    return const_cast<EditorBase*>(this)->GetCachedTextNode();
+  }
 
   nsIPrincipal* GetEditActionPrincipal() const {
     MOZ_ASSERT(mEditActionData);
     return mEditActionData->GetPrincipal();
+  }
+
+  dom::EditContext* GetEditActionEditContext() const {
+    MOZ_ASSERT(mEditActionData);
+    return mEditActionData->GetEditContext();
+  }
+
+  bool EditContextChangedSinceStartOfEditAction() const {
+    MOZ_ASSERT(mEditActionData);
+    return mEditActionData->EditContextHasBeenChanged();
   }
 
   /**
@@ -1799,12 +1878,12 @@ class EditorBase : public nsIEditor,
     SpecifiedPoint,
     ExistingTextNodeIfAvailable,
     ExistingTextNodeIfAvailableAndNotStart,
-    AlwaysCreateNewTextNode
+    AlwaysCreateNewTextNode,
   };
   [[nodiscard]] MOZ_CAN_RUN_SCRIPT virtual Result<InsertTextResult, nsresult>
   InsertTextWithTransaction(const nsAString& aStringToInsert,
                             const EditorDOMPoint& aPointToInsert,
-                            InsertTextTo aInsertTextTo);
+                            InsertTextTo aInsertTextTo, InsertTextFor aPurpose);
 
   /**
    * Compute insertion point from aPoint and aInsertTextTo.
@@ -1818,7 +1897,7 @@ class EditorBase : public nsIEditor,
   [[nodiscard]] MOZ_CAN_RUN_SCRIPT Result<InsertTextResult, nsresult>
   InsertTextIntoTextNodeWithTransaction(
       const nsAString& aStringToInsert,
-      const EditorDOMPointInText& aPointToInsert);
+      const EditorDOMPointInText& aPointToInsert, InsertTextFor aPurpose);
 
   /**
    * SetTextNodeWithoutTransaction() is optimized path to set new value to
@@ -1874,6 +1953,16 @@ class EditorBase : public nsIEditor,
     PaddingForEmptyEditor,
     PaddingForEmptyLastLine
   };
+  friend inline auto format_as(const BRElementType& aType) {
+    constexpr const char* sNames[] = {"Normal", "PaddingForEmptyEditor",
+                                      "PaddingForEmptyLastLine"};
+    return std::string(sNames[static_cast<size_t>(aType)]);
+  }
+  friend inline std::ostream& operator<<(std::ostream& aStream,
+                                         const BRElementType& aType) {
+    return aStream << format_as(aType);
+  }
+
   /**
    * Updates the type of aBRElement.  If it will be hidden or shown from
    * IMEContentObserver and ContentEventHandler points of view, this temporarily
@@ -1988,8 +2077,7 @@ class EditorBase : public nsIEditor,
    *
    * @param aElement    The element for which to insert formatting.
    */
-  [[nodiscard]] MOZ_CAN_RUN_SCRIPT nsresult
-  MarkElementDirty(Element& aElement) const;
+  [[nodiscard]] MOZ_CAN_RUN_SCRIPT nsresult MarkElementDirty(Element& aElement);
 
   MOZ_CAN_RUN_SCRIPT nsresult
   DoTransactionInternal(nsITransaction* aTransaction);
@@ -2130,6 +2218,16 @@ class EditorBase : public nsIEditor,
     AutoCaretBidiLevelManager(const EditorBase& aEditorBase,
                               nsIEditor::EDirection aDirectionAndAmount,
                               const EditorDOMPointBase<PT, CT>& aPointAtCaret);
+    /**
+     * Initialize for use with EditContext.
+     * @param aEditorBase         The editor.
+     * @param aDirectionAndAmount The direction and amount to delete.
+     */
+    AutoCaretBidiLevelManager(const EditorBase& aEditorBase,
+                              nsIEditor::EDirection aDirectionAndAmount,
+                              const dom::EditContext& aEditContext) {
+      InitForEditContext(aEditorBase, aDirectionAndAmount, aEditContext);
+    }
 
     /**
      * Failed() returns true if the constructor failed to handle the bidi
@@ -2151,6 +2249,13 @@ class EditorBase : public nsIEditor,
     void MaybeUpdateCaretBidiLevel(const EditorBase& aEditorBase) const;
 
    private:
+    template <typename PT, typename CT>
+    void Init(const EditorBase& aEditorBase,
+              nsIEditor::EDirection aDirectionAndAmount,
+              const EditorDOMPointBase<PT, CT>& aPointAtCaret);
+    void InitForEditContext(const EditorBase& aEditorBase,
+                            nsIEditor::EDirection aDirectionAndAmount,
+                            const dom::EditContext&);
     Maybe<mozilla::intl::BidiEmbeddingLevel> mNewCaretBidiLevel;
     bool mFailed = false;
     bool mCanceled = false;
@@ -2489,6 +2594,18 @@ class EditorBase : public nsIEditor,
   MOZ_CAN_RUN_SCRIPT void DispatchInputEvent();
 
   /**
+   * Return true if it's NOT blocked by the pref to dispatch `input` event
+   * immediately before `compositionend`.
+   */
+  [[nodiscard]] bool CanDispatchInputEventBeforeCompositionEnd() const;
+
+  /**
+   * Return true if it's NOT blocked by the pref to dispatch `input` event
+   * immediately after `compositionend`.
+   */
+  [[nodiscard]] bool CanDispatchInputEventAfterCompositionEnd() const;
+
+  /**
    * Called after a transaction is done successfully.
    */
   MOZ_CAN_RUN_SCRIPT void DoAfterDoTransaction(nsITransaction* aTransaction);
@@ -2824,7 +2941,7 @@ class EditorBase : public nsIEditor,
    * Should use SwitchTextDirectionTo() or ToggleTextDirection() instead.
    * This is a helper class of them.
    */
-  nsresult SetTextDirectionTo(TextDirection aTextDirection);
+  MOZ_CAN_RUN_SCRIPT nsresult SetTextDirectionTo(TextDirection aTextDirection);
 
  protected:  // helper classes which may be used by friends
   /**

@@ -25,7 +25,6 @@
 #include "modules/rtp_rtcp/include/rtp_rtcp_defines.h"
 #include "api/crypto/crypto_options.h"
 #include "api/crypto/frame_decryptor_interface.h"
-#include "api/crypto/frame_encryptor_interface.h"
 #include "api/frame_transformer_interface.h"
 #include "api/rtp_headers.h"
 #include "api/scoped_refptr.h"
@@ -87,7 +86,8 @@ class VideoReceiveStreamInterface : public MediaReceiveStreamInterface {
   struct Stats {
     Stats();
     ~Stats();
-    std::string ToString(int64_t time_ms) const;
+    std::string ToString(int64_t time_ms,
+                         std::optional<Stats> previous_stats) const;
 
     int network_frame_rate = 0;
     int decode_frame_rate = 0;
@@ -194,6 +194,11 @@ class VideoReceiveStreamInterface : public MediaReceiveStreamInterface {
     uint32_t sender_reports_packets_sent = 0;
     uint64_t sender_reports_bytes_sent = 0;
     uint64_t sender_reports_reports_count = 0;
+    // Non-sender RTT (RRTR/DLRR), surfaced into
+    // RTCRemoteOutboundRtpStreamStats for recvonly endpoints.
+    std::optional<TimeDelta> round_trip_time;
+    TimeDelta total_round_trip_time = TimeDelta::Zero();
+    int round_trip_time_measurements = 0;
   };
 
   struct Config {
@@ -365,7 +370,7 @@ class VideoReceiveStreamInterface : public MediaReceiveStreamInterface {
   virtual void UpdateRtxSsrc(uint32_t ssrc) = 0;
 
  protected:
-  virtual ~VideoReceiveStreamInterface() {}
+  ~VideoReceiveStreamInterface() override {}
 };
 
 }  // namespace webrtc

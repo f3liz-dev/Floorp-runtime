@@ -25,7 +25,7 @@ const URL_ROOT = CHROME_URL_ROOT.replace(
  *
  * @param {Browser} browser
  *     The browser element where the URL should be loaded.
- * @param {String} url
+ * @param {string} url
  *     The URL to load in the new tab
  */
 async function loadURL(browser, url) {
@@ -38,7 +38,7 @@ async function loadURL(browser, url) {
  * Create a new foreground tab loading the provided url.
  * Returns a promise which will resolve when the page is loaded.
  *
- * @param {String} url
+ * @param {string} url
  *     The URL to load in the new tab
  */
 async function addTab(url) {
@@ -59,6 +59,7 @@ class NetworkEventOwner {
   hasRawHeaders = false;
   hasResponseCache = false;
   hasResponseContent = false;
+  hasResponseContentComplete = false;
   hasResponseStart = false;
   hasSecurityInfo = false;
   hasServerTimings = false;
@@ -77,6 +78,9 @@ class NetworkEventOwner {
   }
   addResponseContent() {
     this.hasResponseContent = true;
+  }
+  addResponseContentComplete() {
+    this.hasResponseContentComplete = true;
   }
   addResponseStart() {
     this.hasResponseStart = true;
@@ -128,7 +132,7 @@ async function waitForNetworkEvents(expectedUrl = null, expectedRequestsCount) {
   registerCleanupFunction(() => networkObserver.destroy());
 
   info("Wait until the events count reaches " + expectedRequestsCount);
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => events.length >= expectedRequestsCount
   );
   return events;
@@ -139,7 +143,7 @@ async function waitForNetworkEvents(expectedUrl = null, expectedRequestsCount) {
  * a network event.
  */
 class ResponseContentOwner extends NetworkEventOwner {
-  addResponseContent(response, { truncated }) {
+  addResponseContent(response) {
     super.addResponseContent();
     this.compressionEncodings = response.compressionEncodings;
     this.contentCharset = response.contentCharset;
@@ -149,6 +153,10 @@ class ResponseContentOwner extends NetworkEventOwner {
     this.encoding = response.encoding;
     this.isContentEncoded = response.isContentEncoded;
     this.text = response.text;
+  }
+
+  addResponseContentComplete({ truncated }) {
+    super.addResponseContentComplete();
     this.truncated = truncated;
   }
 

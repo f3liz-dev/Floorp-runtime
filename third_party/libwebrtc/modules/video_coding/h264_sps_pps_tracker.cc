@@ -13,10 +13,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
-#include "api/array_view.h"
 #include "api/video/video_codec_type.h"
 #include "common_video/h264/h264_common.h"
 #include "common_video/h264/pps_parser.h"
@@ -35,7 +35,7 @@ const uint8_t start_code_h264[] = {0, 0, 0, 1};
 }  // namespace
 
 H264SpsPpsTracker::FixedBitstream H264SpsPpsTracker::CopyAndFixBitstream(
-    ArrayView<const uint8_t> bitstream,
+    std::span<const uint8_t> bitstream,
     RTPVideoHeader* video_header) {
   RTC_DCHECK(video_header);
   RTC_DCHECK(video_header->codec == kVideoCodecH264);
@@ -67,21 +67,21 @@ H264SpsPpsTracker::FixedBitstream H264SpsPpsTracker::CopyAndFixBitstream(
         if (video_header->is_first_packet_in_frame) {
           if (nalu.pps_id == -1) {
             RTC_LOG(LS_WARNING) << "No PPS id in IDR nalu.";
-            return {kRequestKeyframe};
+            return {.action = kRequestKeyframe};
           }
 
           pps = pps_data_.find(nalu.pps_id);
           if (pps == pps_data_.end()) {
             RTC_LOG(LS_WARNING)
                 << "No PPS with id << " << nalu.pps_id << " received";
-            return {kRequestKeyframe};
+            return {.action = kRequestKeyframe};
           }
 
           sps = sps_data_.find(pps->second.sps_id);
           if (sps == sps_data_.end()) {
             RTC_LOG(LS_WARNING)
                 << "No SPS with id << " << pps->second.sps_id << " received";
-            return {kRequestKeyframe};
+            return {.action = kRequestKeyframe};
           }
 
           // Since the first packet of every keyframe should have its width and
@@ -115,16 +115,16 @@ H264SpsPpsTracker::FixedBitstream H264SpsPpsTracker::CopyAndFixBitstream(
   }
 
   if (h264_header.packetization_type == kH264StapA) {
-    ByteBufferReader nalu(bitstream.subview(1));
+    ByteBufferReader nalu(bitstream.subspan(1));
     while (nalu.Length() > 0) {
       required_size += sizeof(start_code_h264);
 
       // The first two bytes describe the length of a segment.
       uint16_t segment_length;
       if (!nalu.ReadUInt16(&segment_length))
-        return {kDrop};
+        return {.action = kDrop};
       if (segment_length == 0 || segment_length > nalu.Length()) {
-        return {kDrop};
+        return {.action = kDrop};
       }
       required_size += segment_length;
       nalu.Consume(segment_length);
@@ -159,16 +159,16 @@ H264SpsPpsTracker::FixedBitstream H264SpsPpsTracker::CopyAndFixBitstream(
 
   // Copy the rest of the bitstream and insert start codes.
   if (h264_header.packetization_type == kH264StapA) {
-    ByteBufferReader nalu(bitstream.subview(1));
+    ByteBufferReader nalu(bitstream.subspan(1));
     while (nalu.Length() > 0) {
       fixed.bitstream.AppendData(start_code_h264);
 
       // The first two bytes describe the length of a segment.
       uint16_t segment_length;
       if (!nalu.ReadUInt16(&segment_length))
-        return {kDrop};
+        return {.action = kDrop};
       if (segment_length == 0 || segment_length > nalu.Length()) {
-        return {kDrop};
+        return {.action = kDrop};
       }
       fixed.bitstream.AppendData(nalu.Data(), segment_length);
       nalu.Consume(segment_length);
@@ -206,9 +206,9 @@ void H264SpsPpsTracker::InsertSpsPpsNalus(const std::vector<uint8_t>& sps,
     return;
   }
   std::optional<SpsParser::SpsState> parsed_sps = SpsParser::ParseSps(
-      ArrayView<const uint8_t>(sps).subview(kNaluHeaderOffset));
+      std::span<const uint8_t>(sps).subspan(kNaluHeaderOffset));
   std::optional<PpsParser::PpsState> parsed_pps = PpsParser::ParsePps(
-      ArrayView<const uint8_t>(pps).subview(kNaluHeaderOffset));
+      std::span<const uint8_t>(pps).subspan(kNaluHeaderOffset));
 
   if (!parsed_sps) {
     RTC_LOG(LS_WARNING) << "Failed to parse SPS.";

@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -154,7 +152,7 @@ MIDIPermissionRequest::Run() {
         } else {
           nsContentUtils::ReportToConsoleNonLocalized(
               u"Silently denying site request for MIDI access because no devices were detected. You may need to restart your browser after connecting a new device."_ns,
-              nsIScriptError::infoFlag, "WebMIDI"_ns, mWindow->GetDoc());
+              nsIScriptError::infoFlag, "WebMIDI"_ns, self->mWindow->GetDoc());
           self->CancelWithRandomizedDelay();
         }
       },
@@ -180,7 +178,8 @@ void MIDIPermissionRequest::CancelWithRandomizedDelay() {
   RefPtr<MIDIPermissionRequest> self = this;
   NS_NewTimerWithCallback(
       getter_AddRefs(mCancelTimer), [=](auto) { self->Cancel(); }, delay,
-      nsITimer::TYPE_ONE_SHOT, __func__);
+      nsITimer::TYPE_ONE_SHOT,
+      "MIDIPermissionRequest::CancelWithRandomizedDelay"_ns);
 }
 
 nsresult MIDIPermissionRequest::DoPrompt() {

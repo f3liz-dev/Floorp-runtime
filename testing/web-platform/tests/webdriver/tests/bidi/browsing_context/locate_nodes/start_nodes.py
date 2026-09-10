@@ -3,6 +3,8 @@ import pytest
 from webdriver.bidi.modules.script import ContextTarget
 from ... import any_string, recursive_compare
 
+pytestmark = pytest.mark.asyncio
+
 
 @pytest.mark.parametrize("type,value,expected", [
     ("css", "p", [{
@@ -140,7 +142,6 @@ from ... import any_string, recursive_compare
         }
     ])
 ])
-@pytest.mark.asyncio
 async def test_locate_with_context_nodes(bidi_session, inline, top_context, type, value, expected):
     url = inline("""<div id="parent">
         <p data-class="one" role="banner" aria-label="bar">foo</p>
@@ -176,7 +177,6 @@ async def test_locate_with_context_nodes(bidi_session, inline, top_context, type
     ("accessibility", {"name": "bar"}),
     ("accessibility", {"role": "banner", "name": "bar"}),
 ])
-@pytest.mark.asyncio
 async def test_locate_with_multiple_context_nodes(bidi_session, inline, top_context, type, value):
     url = inline("""
         <div id="parent-one">
@@ -240,7 +240,6 @@ async def test_locate_with_multiple_context_nodes(bidi_session, inline, top_cont
     ("innerText", "foo"),
     ("accessibility", {"role": "banner", "name": "bar"}),
 ])
-@pytest.mark.asyncio
 async def test_locate_with_document_context_node(bidi_session, inline, top_context, type, value):
     url = inline("""
         <p data-class="one" role="banner" aria-label="bar">foo</p>
@@ -304,8 +303,8 @@ async def test_locate_with_document_context_node(bidi_session, inline, top_conte
         "sharedId": any_string,
         "value": {
             "childNodeCount": 1,
-            "localName": "p",
-            "namespaceURI": "http://www.w3.org/1999/xhtml",
+            "localName": "text",
+            "namespaceURI": "http://www.w3.org/2000/svg",
             "nodeType": 1,
         }
     }]),
@@ -314,18 +313,17 @@ async def test_locate_with_document_context_node(bidi_session, inline, top_conte
         "sharedId": any_string,
         "value": {
             "childNodeCount": 1,
-            "localName": "p",
-            "namespaceURI": "http://www.w3.org/1999/xhtml",
+            "localName": "text",
+            "namespaceURI": "http://www.w3.org/2000/svg",
             "nodeType": 1,
         }
     }]),
 ])
-@pytest.mark.asyncio
 async def test_locate_with_svg_context_node(bidi_session, inline, top_context, type, value, expected):
     url = inline("""
       <svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
         <circle aria-label="circle" cx="5" cy="5" r="5" />
-        <p role="banner" aria-label="bar">foo</p>
+        <text role="banner" aria-label="bar">foo</text>
       </svg>
     """)
     await bidi_session.browsing_context.navigate(

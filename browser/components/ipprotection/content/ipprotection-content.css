@@ -5,10 +5,13 @@
 @import "chrome://global/skin/global.css";
 
 :host {
-  --status-card-connected-background-color: var(--color-violet-90);
-  --connection-shield-color: var(--panel-background);
-  --connection-shield-off-background-color: var(--icon-color-critical);
-  --connection-shield-on-background-color: var(--color-accent-primary);
+  --skeleton-container-bg-color: var(--background-color-box-info);
+  --skeleton-placeholder-bg-color: var(--card-border-color);
+
+  @media -moz-pref("browser.nova.enabled") {
+    --skeleton-container-bg-color: light-dark(var(--color-gray-0), var(--color-black-alpha-50));
+    --skeleton-placeholder-bg-color: light-dark(var(--color-black-alpha-10), var(--color-white-alpha-20));
+  }
 }
 
 hr {
@@ -18,123 +21,234 @@ hr {
 }
 
 #ipprotection-content-wrapper {
+  --panel-subview-body-padding-inline: 0;
   display: flex;
   flex-direction: column;
-  padding-inline: var(--panel-subview-body-padding-inline);
-  padding-block: var(--panel-subview-body-padding-block);
+
+  @media -moz-pref("browser.nova.enabled") {
+    margin-inline: var(--space-small);
+  }
 }
 
 .vpn-top-content {
-  margin-inline: var(--space-large);
   margin-block-start: var(--space-small);
-}
-
-.vpn-status-group {
-  position: relative;
-  margin: var(--space-large);
-  overflow: hidden;
-}
-
-.is-enabled {
-  color: #fff;
-  background-color: var(--status-card-connected-background-color);
-}
-
-#status-card {
-  --shield-bgcolor: var(--connection-shield-off-background-color);
-  --box-icon-fill: var(--connection-shield-color);
-  --box-icon-stroke: var(--shield-bgcolor);
-  -moz-context-properties: fill, stroke;
-  /**
-   * moz-box-group changes the border of items based on its position in the group.
-   * Undo it to preserve the border radius even though the animation rings are
-   * loaded first in the group.
-   */
-  --box-border-radius-start: initial;
-  fill: var(--connection-shield-color);
-  stroke: var(--shield-bgcolor);
-
-  &.is-enabled {
-    --shield-bgcolor: var(--connection-shield-on-background-color);
-  }
-}
-
-#connection-toggle {
-  margin-inline-end: var(--space-small);
-}
-
-#connection-toggle {
-  --toggle-width: var(--size-item-xlarge);
-  --toggle-height: var(--size-item-medium);
-  --toggle-dot-margin: 2px;
-}
-
-#status-card-animation {
-  display: block;
-  position: absolute;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 1;
-}
-
-#animation-rings {
-  display: block;
-  width: 100%;
-  height: 100%;
-  contain: strict;
-  /**
-   * A hacky attempt at centering the rings with the globe icon.
-   * It makes some assumptions about the icon size and padding pixels used in moz-box-item.
-   * The rings are 200px in height and width, so they have a radius of 100px.
-   * Additional px gap is merely for alignment and not tied to any element.
-   * TODO: (Bug 1981251) See if we can better calculate the center coords.
-   */
-  background-position-x: calc(-100px + var(--icon-size-xlarge) + var(--space-large) - 15px);
-  background-position-y: calc(-100px + var(--icon-size-xlarge) + var(--space-large) - 13px);
-  background-image: url("chrome://browser/content/ipprotection/assets/rings.svg");
-  background-repeat: no-repeat;
-
-  &:dir(rtl) {
-    /* Shift by approximately 100% of the element's width to move the rings to the opposite side. */
-    background-position-x: calc(100% + var(--icon-size-xlarge) + var(--space-large) + 28px);
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    display: none;
-  }
-}
-
-#location-wrapper {
-  --box-icon-fill: currentColor;
 }
 
 .vpn-bottom-content {
   display: flex;
   flex-direction: column;
-  padding: var(--space-small) var(--space-large);
+  margin-block-start: var(--space-small);
+  moz-button {
+    --button-content-alignment: start;
+    --button-font-weight: var(--font-weight);
+    --button-padding: var(--space-small);
+    --focus-outline-offset: calc(-1 * var(--focus-outline-width));
+    width: 100%;
+
+    @media not -moz-pref("browser.nova.enabled") {
+      --button-border-radius: var(--border-radius-small);
+    }
+  }
+}
+
+.vpn-title {
+  font-size: var(--font-size-heading-medium);
+  font-weight: var(--font-weight-semibold);
+  padding-top: var(--space-large);
+  padding-bottom: var(--space-xsmall);
+  margin-block: 0;
 }
 
 .vpn-subtitle {
   margin: 0;
 }
 
+.vpn-description {
+  font-size: var(--font-size-large);
+
+  ul {
+    padding-inline-start: var(--space-large);
+  }
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-small);
+    padding-block-start: var(--space-medium);
+
+    > span {
+      flex: 1;
+    }
+
+    &:last-of-type {
+      padding-block-end: var(--space-xlarge);
+    }
+
+    &.with-icon::before {
+      content: "";
+      display: inline-block;
+      width: var(--icon-size-small);
+      height: var(--icon-size-small);
+      flex-shrink: 0;
+      background-size: contain;
+      background-repeat: no-repeat;
+      background-position: center;
+      -moz-context-properties: fill;
+      fill: currentColor;
+    }
+  }
+}
+
 .vpn-button {
-  align-self: end;
+  display: block;
+  padding-top: var(--space-medium);
 }
 
-#signed-out-vpn-title {
-  margin-bottom: 0;
+#unauthenticated-vpn-title {
+  font-size: var(--font-size-heading-xlarge);
 }
 
-#signed-out-vpn-content {
+#unauthenticated-vpn-content {
   display: flex;
   flex-direction: column;
-  padding: var(--space-medium) var(--space-large) var(--space-small);
+  padding-block-start: 0;
+  padding-block-end: var(--space-small);
+  padding-inline-start: var(--space-large);
+  padding-inline-end: var(--space-large);
+  @media not -moz-pref("browser.nova.enabled") {
+    color: var(--text-color);
+  }
 }
 
-@media (prefers-color-scheme: dark) {
-  #signed-out-vpn-img {
-    content: url("chrome://browser/content/ipprotection/assets/ipprotection-darkmode.svg");
+#unauthenticated-vpn-img {
+  width: max-content;
+  align-self: center;
+  margin-block-start: var(--space-large);
+  margin-block-end: var(--space-large);
+}
+
+#unauthenticated-vpn-message {
+  margin: 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+#upgrade-vpn-description {
+  color: var(--text-color-deemphasized);
+}
+
+#unauthenticated-private-location::before {
+  background-image: url("chrome://browser/skin/notification-icons/geo.svg");
+}
+
+#unauthenticated-choose-location::before {
+  background-image: url("chrome://global/skin/icons/defaultFavicon.svg");
+}
+
+#unauthenticated-get-started {
+  --button-padding: var(--space-medium);
+  margin: 0 auto;
+  width: var(--size-layout-small);
+
+  @media not -moz-pref("browser.nova.enabled") {
+    width: 100%;
+  }
+}
+
+#unauthenticated-footer {
+  margin-block-start: var(--space-medium);
+  margin-block-end: var(--space-medium);
+  color: var(--text-color-deemphasized);
+  text-align: center;
+}
+
+ipprotection-message-bar.vpn-top-content {
+  margin-block-start: 0;
+  margin-block-end: var(--space-small);
+}
+
+#enrolling-container {
+  background-color: var(--skeleton-container-bg-color);
+  border: var(--border-width) solid var(--border-color-deemphasized);
+  border-radius: var(--border-radius-medium);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-large);
+  padding: var(--space-medium);
+}
+
+#enrolling-header {
+  display: flex;
+  justify-content: space-between;
+
+  > span {
+    gap: var(--space-medium);
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+  }
+}
+
+.skeleton {
+  background-color: var(--skeleton-placeholder-bg-color);
+}
+
+.skeleton-title {
+  height: 1lh;
+  width: var(--size-layout-xsmall);
+  border-radius: var(--space-xxsmall);
+  margin-block: var(--space-medium) var(--space-small);
+
+  @media -moz-pref("browser.nova.enabled") {
+    margin-block: var(--space-xsmall) 0;
+  }
+}
+
+.skeleton-line {
+  height: var(--size-item-xsmall);
+  width: var(--size-layout-small);
+  border-radius: var(--space-xxsmall);
+}
+
+.skeleton-line-thick {
+  height: var(--button-min-height);
+  width: 100%;
+  border-radius: var(--border-radius-small);
+
+  &:first-of-type {
+    margin-block-start: var(--space-xxlarge);
+  }
+
+  @media -moz-pref("browser.nova.enabled") {
+    padding-block: var(--space-xsmall);
+    border-radius: var(--border-radius-circle);
+  }
+}
+
+.skeleton-image {
+  width: var(--size-item-large);
+  height: var(--size-item-large);
+  border-radius: var(--border-radius-circle);
+  margin: var(--space-xsmall);
+}
+
+#site-exclusion-control {
+  display: flex;
+
+  margin-block-start: var(--space-medium);
+  padding: var(--space-medium);
+}
+
+#site-exclusion-toggle {
+  flex: 1;
+
+  > [slot="description"] {
+    /* Add space equivalent to the size of the icon in the row above
+     * var(--icon-size-small) is the width of the icon
+     * var(--space-small) is the gap between the icon and the label
+     */
+    padding-inline-start: var(--icon-size-small);
+    margin-inline-start: var(--space-small);
+    display: inline-block;
   }
 }

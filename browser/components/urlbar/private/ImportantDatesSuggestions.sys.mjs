@@ -2,15 +2,16 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { SuggestProvider } from "resource:///modules/urlbar/private/SuggestFeature.sys.mjs";
+import { SuggestProvider } from "moz-src:///browser/components/urlbar/private/SuggestFeature.sys.mjs";
 
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
-  QuickSuggest: "resource:///modules/QuickSuggest.sys.mjs",
-  UrlbarResult: "resource:///modules/UrlbarResult.sys.mjs",
-  UrlbarSearchUtils: "resource:///modules/UrlbarSearchUtils.sys.mjs",
-  UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
+  QuickSuggest: "moz-src:///browser/components/urlbar/QuickSuggest.sys.mjs",
+  UrlbarResult: "chrome://browser/content/urlbar/UrlbarResult.mjs",
+  UrlbarSearchUtils:
+    "moz-src:///browser/components/urlbar/UrlbarSearchUtils.sys.mjs",
+  UrlbarShared: "chrome://browser/content/urlbar/UrlbarShared.mjs",
 });
 
 const SHOW_COUNTDOWN_THRESHOLD_DAYS = 30;
@@ -50,7 +51,7 @@ export class ImportantDatesSuggestions extends SuggestProvider {
     return this.dynamicRustSuggestionTypes[0];
   }
 
-  makeResult(queryContext, suggestion, _searchString) {
+  async makeResult(queryContext, suggestion, _searchString) {
     if (
       !suggestion.data?.result?.payload ||
       typeof suggestion.data.result.payload != "object"
@@ -206,43 +207,32 @@ export class ImportantDatesSuggestions extends SuggestProvider {
     } else {
       descriptionL10n = {
         ...this.#formatDateCountdown(eventDateOrRange, payload.name),
-        cacheable: true,
-        excludeArgsFromCacheKey: true,
       };
     }
 
     let dateString = this.#formatDateOrRange(eventDateOrRange);
-    return Object.assign(
-      new lazy.UrlbarResult(
-        lazy.UrlbarUtils.RESULT_TYPE.SEARCH,
-        lazy.UrlbarUtils.RESULT_SOURCE.SEARCH,
-        {
-          title: dateString,
-          description,
-          engine: lazy.UrlbarSearchUtils.getDefaultEngine(
-            queryContext.isPrivate
-          ).name,
-          descriptionL10n,
-          query: payload.name,
-          lowerCaseSuggestion: payload.name.toLowerCase(),
-          icon: "chrome://browser/skin/calendar-24.svg",
-          helpUrl: lazy.QuickSuggest.HELP_URL,
-          isManageable: true,
-          isBlockable: true,
-        },
-        {
-          title: [
-            // Make whole title bold.
-            [0, dateString.length],
-          ],
-        }
-      ),
-      {
-        isBestMatch: true,
-        hideRowLabel: true,
-        richSuggestionIconSize: 24,
-      }
-    );
+    return new lazy.UrlbarResult({
+      type: lazy.UrlbarShared.RESULT_TYPE.SEARCH,
+      source: lazy.UrlbarShared.RESULT_SOURCE.SEARCH,
+      isBestMatch: true,
+      richSuggestionIconSize: 24,
+      payload: {
+        title: dateString,
+        description,
+        engine: lazy.UrlbarSearchUtils.getDefaultEngine(queryContext.isPrivate)
+          .name,
+        descriptionL10n,
+        query: payload.name,
+        lowerCaseSuggestion: payload.name.toLowerCase(),
+        icon: "chrome://browser/skin/calendar-24.svg",
+        helpUrl: lazy.QuickSuggest.HELP_URL,
+        isManageable: true,
+        isBlockable: true,
+      },
+      highlights: {
+        title: lazy.UrlbarShared.HIGHLIGHT.ALL,
+      },
+    });
   }
 
   onEngagement(_queryContext, controller, details, _searchString) {
@@ -253,10 +243,11 @@ export class ImportantDatesSuggestions extends SuggestProvider {
       case "dismiss": {
         let { result } = details;
         lazy.QuickSuggest.dismissResult(result);
-        result.acknowledgeDismissalL10n = {
-          id: "firefox-suggest-dismissal-acknowledgment-one",
-        };
-        controller.removeResult(result);
+        controller.removeResult(result, {
+          acknowledgeDismissalL10n: {
+            id: "firefox-suggest-dismissal-acknowledgment-one",
+          },
+        });
         break;
       }
     }

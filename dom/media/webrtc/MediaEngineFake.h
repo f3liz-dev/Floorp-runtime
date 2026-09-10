@@ -20,8 +20,11 @@ class MediaEngineFake : public MediaEngine {
 
   void EnumerateDevices(dom::MediaSourceEnum, MediaSinkEnum,
                         nsTArray<RefPtr<MediaDevice>>*) override;
+  void InvalidateDesktopCaptureDeviceCache(dom::MediaSourceEnum) override {}
   void Shutdown() override {}
   RefPtr<MediaEngineSource> CreateSource(const MediaDevice* aDevice) override;
+  RefPtr<MediaEngineSource> CreateSourceFrom(
+      const MediaEngineSource* aSource, const MediaDevice* aDevice) override;
 
   MediaEventSource<void>& DeviceListChangeEvent() override {
     return mDeviceListChangeEvent;

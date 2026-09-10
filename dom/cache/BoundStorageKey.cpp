@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -33,6 +31,11 @@ nsresult BoundStorageKey::Init(Namespace aNamespace,
                                nsISerialEventTarget* aTarget) {
   MOZ_DIAGNOSTIC_ASSERT(aTarget);
 
+  if (!BackgroundChild::ValidatePrincipalInfo(aPrincipalInfo, {})) {
+    MOZ_ASSERT_UNREACHABLE("BoundStorageKey failed to validate principal");
+    return NS_ERROR_UNEXPECTED;
+  }
+
   // setup child and parent actors and retarget to aTarget
   auto* actor = new BoundStorageKeyChild(this);
   MOZ_ASSERT(actor);
@@ -42,7 +45,7 @@ nsresult BoundStorageKey::Init(Namespace aNamespace,
     ::mozilla::ipc::Endpoint<PBoundStorageKeyParent> parentEP;
 
     auto rv = PBoundStorageKey::CreateEndpoints(&parentEP, &childEP);
-    Unused << NS_WARN_IF(NS_FAILED(rv));
+    (void)NS_WARN_IF(NS_FAILED(rv));
 
     PBackgroundChild* bgActor = BackgroundChild::GetOrCreateForCurrentThread();
     if (NS_WARN_IF(!bgActor)) {
@@ -214,9 +217,9 @@ void BoundStorageKeyCacheStorage::RunRequest(EntryType&& aEntry) {
   MOZ_ASSERT(mActor);
   MOZ_ASSERT(mCacheStorageChild);
 
-  // AutoChildOpArgs args(this, aEntry.mArgs, 1);
-  // RefPtr<CacheStoragePromise> p{aEntry.mPromise.forget()};
-  // mCacheStorageChild->ExecuteOp(mGlobal, p, this, args.SendAsOpArgs());
+  AutoChildOpArgs args(this, aEntry.mArgs, 1);
+  RefPtr<CacheStoragePromise> p{aEntry.mPromise.forget()};
+  mCacheStorageChild->ExecuteOp(mGlobal, p, this, args.SendAsOpArgs());
 }
 
 auto BoundStorageKeyCacheStorage::Open(const nsAString& aKey, ErrorResult& aRv)

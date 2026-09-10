@@ -14,27 +14,16 @@
   --avatar-selection-width: 100%;
 }
 
+dialog {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background-color: transparent;
+  z-index: 1;
+}
+
 .button-group {
-  display: flex;
-  justify-content: center;
-
-  moz-button::part(button) {
-    border-radius: 0;
-  }
-
-  moz-button:first-child::part(button) {
-    border-end-end-radius: 0;
-    border-start-end-radius: 0;
-    border-start-start-radius: var(--button-border-radius);
-    border-end-start-radius: var(--button-border-radius);
-  }
-
-  moz-button:last-child::part(button) {
-    border-end-start-radius: 0;
-    border-start-start-radius: 0;
-    border-end-end-radius: var(--button-border-radius);
-    border-start-end-radius: var(--button-border-radius);
-  }
+  align-self: center;
 }
 
 #avatars::part(inputs) {
@@ -75,7 +64,7 @@
   align-items: center;
   padding-bottom: var(--space-large);
   border-bottom: var(--card-border);
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-heading);
 
   #back-button {
     margin-inline-end: auto;
@@ -216,8 +205,8 @@
   }
 
   .mover {
-    background-color: #fff;
-    border-radius: 50%;
+    background-color: white;
+    border-radius: var(--border-radius-circle);
     box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
     transition: transform 125ms cubic-bezier(0.07, 0.95, 0, 1);
     position: relative;
@@ -250,4 +239,5 @@
 
 moz-visual-picker-item {
   --visual-picker-item-border-color: transparent;
+  --visual-picker-item-border-radius: var(--button-border-radius);
 }

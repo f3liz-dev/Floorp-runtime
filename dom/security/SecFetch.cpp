@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -36,6 +34,9 @@ nsCString MapInternalContentPolicyTypeToDest(nsContentPolicyType aType) {
     case nsIContentPolicy::TYPE_JSON:
     case nsIContentPolicy::TYPE_INTERNAL_JSON_PRELOAD:
       return "json"_ns;
+    case nsIContentPolicy::TYPE_TEXT:
+    case nsIContentPolicy::TYPE_INTERNAL_TEXT_PRELOAD:
+      return "text"_ns;
     case nsIContentPolicy::TYPE_INTERNAL_WORKER:
     case nsIContentPolicy::TYPE_INTERNAL_WORKER_STATIC_MODULE:
       return "worker"_ns;
@@ -51,6 +52,7 @@ nsCString MapInternalContentPolicyTypeToDest(nsContentPolicyType aType) {
     case nsIContentPolicy::TYPE_INTERNAL_IMAGE:
     case nsIContentPolicy::TYPE_INTERNAL_IMAGE_PRELOAD:
     case nsIContentPolicy::TYPE_INTERNAL_IMAGE_FAVICON:
+    case nsIContentPolicy::TYPE_INTERNAL_IMAGE_NOTIFICATION:
     case nsIContentPolicy::TYPE_IMAGE:
       return "image"_ns;
     case nsIContentPolicy::TYPE_STYLESHEET:
@@ -118,7 +120,6 @@ nsCString MapInternalContentPolicyTypeToDest(nsContentPolicyType aType) {
       return "webtransport"_ns;
     case nsIContentPolicy::TYPE_INTERNAL_EXTERNAL_RESOURCE:
       return "image"_ns;
-    case nsIContentPolicy::TYPE_END:
     case nsIContentPolicy::TYPE_INVALID:
       break;
       // Do not add default: so that compilers can catch the missing case.
@@ -202,13 +203,13 @@ bool IsSameSite(nsIChannel* aHTTPChannel) {
   nsAutoCString hostDomain;
   nsCOMPtr<nsILoadInfo> loadInfo = aHTTPChannel->LoadInfo();
   nsresult rv = loadInfo->TriggeringPrincipal()->GetBaseDomain(hostDomain);
-  mozilla::Unused << NS_WARN_IF(NS_FAILED(rv));
+  (void)NS_WARN_IF(NS_FAILED(rv));
 
   nsAutoCString channelDomain;
   nsCOMPtr<nsIURI> channelURI;
   NS_GetFinalChannelURI(aHTTPChannel, getter_AddRefs(channelURI));
   rv = thirdPartyUtil->GetBaseDomain(channelURI, channelDomain);
-  mozilla::Unused << NS_WARN_IF(NS_FAILED(rv));
+  (void)NS_WARN_IF(NS_FAILED(rv));
 
   // if the initial request is not same-site, or not https, we can
   // return here because we already know it's not a same-site request
@@ -239,6 +240,8 @@ bool IsSameSite(nsIChannel* aHTTPChannel) {
 
 // Helper function to determine whether a request was triggered
 // by the end user in the context of SecFetch.
+// The more secure/closed state to return for this function is "false".
+// A user triggered action is less restricted because it is not cross-origin.
 bool IsUserTriggeredForSecFetchSite(nsIHttpChannel* aHTTPChannel) {
   /*
    * The goal is to distinguish between "webby" navigations that are controlled
@@ -250,8 +253,7 @@ bool IsUserTriggeredForSecFetchSite(nsIHttpChannel* aHTTPChannel) {
   ExtContentPolicyType contentType = loadInfo->GetExternalContentPolicyType();
 
   // A request issued by the browser is always user initiated.
-  if (loadInfo->TriggeringPrincipal()->IsSystemPrincipal() &&
-      contentType == ExtContentPolicy::TYPE_OTHER) {
+  if (loadInfo->TriggeringPrincipal()->IsSystemPrincipal()) {
     return true;
   }
 
@@ -286,12 +288,12 @@ bool IsUserTriggeredForSecFetchSite(nsIHttpChannel* aHTTPChannel) {
   if (referrerInfo) {
     nsCOMPtr<nsIURI> originalReferrer;
     referrerInfo->GetOriginalReferrer(getter_AddRefs(originalReferrer));
-    if (originalReferrer) {
-      return false;
+    if (!originalReferrer) {
+      return true;
     }
   }
 
-  return true;
+  return false;
 }
 
 void mozilla::dom::SecFetch::AddSecFetchDest(nsIHttpChannel* aHTTPChannel) {
@@ -301,7 +303,7 @@ void mozilla::dom::SecFetch::AddSecFetchDest(nsIHttpChannel* aHTTPChannel) {
 
   nsresult rv =
       aHTTPChannel->SetRequestHeader("Sec-Fetch-Dest"_ns, dest, false);
-  mozilla::Unused << NS_WARN_IF(NS_FAILED(rv));
+  (void)NS_WARN_IF(NS_FAILED(rv));
 }
 
 void mozilla::dom::SecFetch::AddSecFetchMode(nsIHttpChannel* aHTTPChannel) {
@@ -323,7 +325,7 @@ void mozilla::dom::SecFetch::AddSecFetchMode(nsIHttpChannel* aHTTPChannel) {
 
   nsresult rv =
       aHTTPChannel->SetRequestHeader("Sec-Fetch-Mode"_ns, mode, false);
-  mozilla::Unused << NS_WARN_IF(NS_FAILED(rv));
+  (void)NS_WARN_IF(NS_FAILED(rv));
 }
 
 void mozilla::dom::SecFetch::AddSecFetchSite(nsIHttpChannel* aHTTPChannel) {
@@ -345,7 +347,7 @@ void mozilla::dom::SecFetch::AddSecFetchSite(nsIHttpChannel* aHTTPChannel) {
 
   nsresult rv =
       aHTTPChannel->SetRequestHeader("Sec-Fetch-Site"_ns, site, false);
-  mozilla::Unused << NS_WARN_IF(NS_FAILED(rv));
+  (void)NS_WARN_IF(NS_FAILED(rv));
 }
 
 void mozilla::dom::SecFetch::AddSecFetchUser(nsIHttpChannel* aHTTPChannel) {
@@ -368,7 +370,7 @@ void mozilla::dom::SecFetch::AddSecFetchUser(nsIHttpChannel* aHTTPChannel) {
   nsAutoCString user("?1");
   nsresult rv =
       aHTTPChannel->SetRequestHeader("Sec-Fetch-User"_ns, user, false);
-  mozilla::Unused << NS_WARN_IF(NS_FAILED(rv));
+  (void)NS_WARN_IF(NS_FAILED(rv));
 }
 
 void mozilla::dom::SecFetch::AddSecFetchHeader(nsIHttpChannel* aHTTPChannel) {

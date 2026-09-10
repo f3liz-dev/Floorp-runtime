@@ -91,6 +91,10 @@ const COMMON_PREFERENCES = new Map([
   // of Firefox aren't downloaded and applied, enforce its presence.
   ["app.update.disabledForTesting", true],
 
+  // Disable scroll axis lock, WebDriver should be able to scroll arbitrary
+  // directions.
+  ["apz.axis_lock.mode", 0],
+
   // Increase the APZ content response timeout in tests to 1 minute.
   // This is to accommodate the fact that test environments tends to be
   // slower than production environments (with the b2g emulator being
@@ -100,13 +104,25 @@ const COMMON_PREFERENCES = new Map([
   // (bug 1176798, bug 1177018, bug 1210465)
   ["apz.content_response_timeout", 60000],
 
+  // Disable the profile backup service.
+  ["browser.backup.enabled", false],
+
   // Don't show the content blocking introduction panel.
   // We use a larger number than the default 22 to have some buffer
   // This can be removed once Firefox 69 and 68 ESR and are no longer supported.
   ["browser.contentblocking.introCount", 99],
 
+  // Disable extension discovery
+  ["browser.discovery.enabled", false],
+
   // Set global `dump` function to log strings to `stdout` for release builds as well.
   ["browser.dom.window.dump.enabled", true],
+
+  // Don't open the downloads panel every time a download begins.
+  // The first download ever run in a new profile will still open the panel,
+  // but because "browser.download.panel.shown" is set to true,
+  // this preference is going to act as the first download already happened.
+  ["browser.download.alwaysOpenPanel", false],
 
   // Indicate that the download panel has been shown once so that
   // whichever download test runs first doesn't show the popup
@@ -116,27 +132,24 @@ const COMMON_PREFERENCES = new Map([
   // Make sure error page is not shown for blank pages with 4xx or 5xx response code
   ["browser.http.blank_page_with_error_response.enabled", true],
 
+  // Disable all machine learning features by default
+  ["browser.ml.enable", false],
+
   // Disable CFR features for automated tests.
   ["browser.newtabpage.activity-stream.asrouter.userprefs.cfr.features", false],
 
-  // Make sure newtab weather doesn't hit the network to retrieve weather data.
-  [
-    "browser.newtabpage.activity-stream.discoverystream.region-weather-config",
-    "",
-  ],
-
-  // Make sure newtab wallpapers don't hit the network to retrieve wallpaper data.
-  ["browser.newtabpage.activity-stream.newtabWallpapers.enabled", false],
+  // Do not initialize any activitystream features
+  ["browser.newtabpage.activity-stream.testing.shouldInitializeFeeds", false],
 
   // Make sure Topsites doesn't hit the network to retrieve sponsored tiles.
   ["browser.newtabpage.activity-stream.showSponsoredTopSites", false],
 
-  // Always display a blank page
-  ["browser.newtabpage.enabled", false],
-
   // Background thumbnails in particular cause grief, and disabling
   // thumbnails in general cannot hurt
   ["browser.pagethumbnails.capturing_disabled", true],
+
+  // Do not show the preonboarding modal/splash which can interfere with tests
+  ["browser.preonboarding.enabled", false],
 
   // Disable geolocation ping(#1)
   ["browser.region.network.url", ""],
@@ -192,12 +205,17 @@ const COMMON_PREFERENCES = new Map([
   // Make sure Topsites doesn't hit the network to retrieve tiles from Contile.
   ["browser.topsites.contile.enabled", false],
 
+  // Disable translations
+  ["browser.translations.enable", false],
+
   // Disable first run splash page on Windows 10
   ["browser.usedOnWindows10.introURL", ""],
 
   // Turn off Merino suggestions in the location bar so as not to trigger
   // network connections.
   ["browser.urlbar.merino.endpointURL", ""],
+  ["browser.urlbar.merino.ohttpConfigURL", ""],
+  ["browser.urlbar.merino.ohttpRelayURL", ""],
 
   // Turn off search suggestions in the location bar so as not to trigger
   // network connections.
@@ -250,6 +268,9 @@ const COMMON_PREFERENCES = new Map([
   // Disable location change rate limitation
   ["dom.navigation.navigationRateLimit.count", 0],
 
+  // Disable system permission checks for navigator.permissions.query
+  ["dom.permissions.testing.enabled", true],
+
   // DOM Push
   ["dom.push.connection.enabled", false],
 
@@ -265,6 +286,10 @@ const COMMON_PREFERENCES = new Map([
   // Should be set in profile.
   ["extensions.autoDisableScopes", 0],
   ["extensions.enabledScopes", 5],
+
+  // Disable form autofill for extensions and credit cards
+  ["extensions.formautofill.addresses.enabled", false],
+  ["extensions.formautofill.creditCards.enabled", false],
 
   // Disable metadata caching for installed add-ons by default
   ["extensions.getAddons.cache.enabled", false],
@@ -314,6 +339,9 @@ const COMMON_PREFERENCES = new Map([
   // Disable useragent updates
   ["general.useragent.updates.enabled", false],
 
+  // Do not open system settings when geolocation is requested without OS permission
+  ["geo.prompt.open_system_prefs", false],
+
   // Disable geolocation ping(#2)
   ["geo.provider.network.url", ""],
 
@@ -327,11 +355,14 @@ const COMMON_PREFERENCES = new Map([
   // Disable Firefox accounts ping
   ["identity.fxaccounts.auth.uri", "https://{server}/dummy/fxa"],
 
+  // Allow scroll amount larger than one page on a single mouse wheel event.
+  ["mousewheel.allow_scrolling_more_than_one_page", true],
+
+  // Disable captive portal service
+  ["network.captive-portal-service.enabled", false],
+
   // Disable connectivity service pings
   ["network.connectivity-service.enabled", false],
-
-  // Do not prompt with long usernames or passwords in URLs
-  ["network.http.phishy-userpass-length", 255],
 
   // Do not prompt for temporary redirects
   ["network.http.prompt-temp-redirect", false],
@@ -342,8 +373,13 @@ const COMMON_PREFERENCES = new Map([
   // Make sure SNTP requests do not hit the network
   ["network.sntp.pools", "%(server)s"],
 
+  // Turn off semantic history search as it triggers network connections to
+  // download ML models.
+  ["places.semanticHistory.featureGate", false],
+
   // Privacy and Tracking Protection
   ["privacy.trackingprotection.enabled", false],
+  ["privacy.trackingprotection.pbmode.enabled", false],
 
   // Used to check if recommended preferences are applied
   ["remote.prefs.recommended.applied", true],
@@ -361,6 +397,9 @@ const COMMON_PREFERENCES = new Map([
   // Do not download intermediate certificates
   ["security.remote_settings.intermediates.enabled", false],
 
+  // Disable the WebAuthn consents prompt
+  ["security.webauthn.related_origin_requests_mode", 1],
+
   // Disable logging for remote settings
   ["services.settings.loglevel", "off"],
 
@@ -370,6 +409,10 @@ const COMMON_PREFERENCES = new Map([
   // Do not automatically fill sign-in forms with known usernames and
   // passwords
   ["signon.autofillForms", false],
+
+  // Disable alerts for credential issues
+  ["signon.management.page.breach-alerts.enabled", false],
+  ["signon.management.page.vulnerable-passwords.enabled", false],
 
   // Disable password capture, so that tests that include forms are not
   // influenced by the presence of the persistent doorhanger notification
@@ -420,7 +463,7 @@ export const RecommendedPreferences = {
       // single map. Hereby the extra preferences have higher priority.
       preferences = new Map([...COMMON_PREFERENCES, ...preferences]);
 
-      Services.obs.addObserver(this, "quit-application");
+      Services.obs.addObserver(this, "xpcom-shutdown");
       this.isInitialized = true;
     }
 
@@ -443,15 +486,14 @@ export const RecommendedPreferences = {
         }
 
         // Keep track all the altered preferences to restore them on
-        // quit-application.
+        // xpcom-shutdown.
         this.alteredPrefs.add(k);
       }
     }
   },
 
   observe(subject, topic) {
-    if (topic === "quit-application") {
-      Services.obs.removeObserver(this, "quit-application");
+    if (topic === "xpcom-shutdown") {
       this.restoreAllPreferences();
     }
   },
@@ -461,6 +503,9 @@ export const RecommendedPreferences = {
    */
   restoreAllPreferences() {
     this.restorePreferences(this.alteredPrefs);
+    if (this.isInitialized) {
+      Services.obs.removeObserver(this, "xpcom-shutdown");
+    }
     this.isInitialized = false;
   },
 

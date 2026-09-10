@@ -305,7 +305,6 @@ g.test('compute,split')
 enable subgroups;
 
 diagnostic(off, subgroup_uniformity);
-diagnostic(off, subgroup_branching);
 
 @group(0) @binding(0)
 var<storage> input : array<u32>;
@@ -483,10 +482,7 @@ g.test('fragment')
   )
   .fn(async t => {
     t.skipIfDeviceDoesNotHaveFeature('subgroups' as GPUFeatureName);
-    interface SubgroupProperties extends GPUAdapterInfo {
-      subgroupMinSize: number;
-    }
-    const { subgroupMinSize } = t.device.adapterInfo as SubgroupProperties;
+    const subgroupMinSize = t.device.adapterInfo.subgroupMinSize!;
     const innerTexels = (t.params.size[0] - 1) * (t.params.size[1] - 1);
     t.skipIf(innerTexels < subgroupMinSize, 'Too few texels to be reliable');
 

@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -49,9 +47,8 @@ namespace mozilla {
 using namespace dom;
 using EmptyCheckOption = HTMLEditUtils::EmptyCheckOption;
 using EmptyCheckOptions = HTMLEditUtils::EmptyCheckOptions;
-using LeafNodeType = HTMLEditUtils::LeafNodeType;
-using LeafNodeTypes = HTMLEditUtils::LeafNodeTypes;
-using WalkTreeOption = HTMLEditUtils::WalkTreeOption;
+using LeafNodeOption = HTMLEditUtils::LeafNodeOption;
+using LeafNodeOptions = HTMLEditUtils::LeafNodeOptions;
 
 Result<EditActionResult, nsresult>
 HTMLEditor::InsertParagraphSeparatorAsSubAction(const Element& aEditingHost) {
@@ -60,8 +57,8 @@ HTMLEditor::InsertParagraphSeparatorAsSubAction(const Element& aEditingHost) {
   }
 
   {
-    Result<EditActionResult, nsresult> result = CanHandleHTMLEditSubAction(
-        CheckSelectionInReplacedElement::OnlyWhenNotInSameNode);
+    Result<EditActionResult, nsresult> result =
+        CanHandleHTMLEditSubAction(CheckSelectionInReplacedElement::No);
     if (MOZ_UNLIKELY(result.isErr())) {
       NS_WARNING("HTMLEditor::CanHandleHTMLEditSubAction() failed");
       return result;
@@ -69,6 +66,11 @@ HTMLEditor::InsertParagraphSeparatorAsSubAction(const Element& aEditingHost) {
     if (result.inspect().Canceled()) {
       return result;
     }
+  }
+
+  if (GetEditActionEditContext()) {
+    // Don't insert paragraph if there is an EditContext
+    return EditActionResult::HandledResult();
   }
 
   // XXX This may be called by execCommand() with "insertParagraph".
@@ -150,20 +152,15 @@ HTMLEditor::AutoInsertParagraphHandler::Run() {
   if (NS_WARN_IF(!pointToInsert.IsInContentNode())) {
     return Err(NS_ERROR_FAILURE);
   }
-  while (true) {
-    Element* element = pointToInsert.GetContainerOrContainerParentElement();
-    if (MOZ_UNLIKELY(!element)) {
-      return Err(NS_ERROR_FAILURE);
-    }
-    // If the element can have a <br> element (it means that the element or its
-    // container must be able to have <div> or <p> too), we can handle
-    // insertParagraph at the point.
-    if (HTMLEditUtils::CanNodeContain(*element, *nsGkAtoms::br)) {
-      break;
-    }
-    // Otherwise, try to insert paragraph at the parent.
-    pointToInsert = pointToInsert.ParentPoint();
+  // If the element can have a <br> element (it means that the element or its
+  // container must be able to have <div> or <p> too), we can handle
+  // insertParagraph at the point.
+  pointToInsert = HTMLEditUtils::GetPossiblePointToInsert(
+      pointToInsert, *nsGkAtoms::br, mEditingHost);
+  if (NS_WARN_IF(!pointToInsert.IsSet())) {
+    return Err(NS_ERROR_FAILURE);
   }
+  MOZ_ASSERT(pointToInsert.IsInContentNode());
 
   if (mHTMLEditor.IsMailEditor()) {
     if (const RefPtr<Element> mailCiteElement =
@@ -285,8 +282,9 @@ HTMLEditor::AutoInsertParagraphHandler::Run() {
     if (NS_WARN_IF(!editableBlockElement)) {
       return Err(NS_ERROR_UNEXPECTED);
     }
-    if (NS_WARN_IF(!HTMLEditUtils::IsSplittableNode(*editableBlockElement))) {
-      // Didn't create a new block for some reason, fall back to <br>
+    if (!HTMLEditUtils::IsSplittableNode(*editableBlockElement)) {
+      // Didn't create a new block for some reason, e.g., it's a inline-block,
+      // fall back to <br>.
       Result<EditActionResult, nsresult> insertBRElementResultOrError =
           HandleInsertBRElement(pointToInsert, blockElementToPutCaret);
       NS_WARNING_ASSERTION(
@@ -368,7 +366,7 @@ HTMLEditor::AutoInsertParagraphHandler::Run() {
     return EditActionResult::HandledResult();
   }
 
-  if (HTMLEditUtils::IsHeader(*editableBlockElement)) {
+  if (HTMLEditUtils::IsHeadingElement(*editableBlockElement)) {
     Result<InsertParagraphResult, nsresult>
         insertParagraphInHeadingElementResult =
             HandleInHeadingElement(*editableBlockElement, pointToInsert);
@@ -415,9 +413,10 @@ HTMLEditor::AutoInsertParagraphHandler::Run() {
        editableBlockElement->IsAnyOfHTMLElements(nsGkAtoms::p,
                                                  nsGkAtoms::div))) {
     const EditorDOMPoint pointToSplit = GetBetterPointToSplitParagraph(
-        *editableBlockElement, insertedPaddingBRElement
-                                   ? EditorDOMPoint(insertedPaddingBRElement)
-                                   : pointToInsert);
+        *editableBlockElement,
+        insertedPaddingBRElement ? EditorDOMPoint(insertedPaddingBRElement)
+                                 : pointToInsert,
+        mEditingHost);
     if (ShouldCreateNewParagraph(*editableBlockElement, pointToSplit)) {
       MOZ_ASSERT(pointToSplit.IsInContentNodeAndValidInComposedDoc());
       // Paragraphs: special rules to look for <br>s
@@ -606,9 +605,8 @@ HTMLEditor::AutoInsertParagraphHandler::InsertBRElement(
 
   const bool editingHostIsEmpty = HTMLEditUtils::IsEmptyNode(
       mEditingHost, {EmptyCheckOption::TreatNonEditableContentAsInvisible});
-  const WSRunScanner wsRunScanner(WSRunScanner::Scan::EditableNodes,
-                                  aPointToBreak,
-                                  BlockInlineCheck::UseComputedDisplayStyle);
+  const WSRunScanner wsRunScanner({WSRunScanner::Option::OnlyEditableNodes},
+                                  aPointToBreak);
   const WSScanResult backwardScanResult =
       wsRunScanner.ScanPreviousVisibleNodeOrBlockBoundaryFrom(aPointToBreak);
   if (MOZ_UNLIKELY(backwardScanResult.Failed())) {
@@ -758,8 +756,7 @@ HTMLEditor::AutoInsertParagraphHandler::InsertBRElement(
 
   const WSScanResult forwardScanFromAfterBRElementResult =
       WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-          WSRunScanner::Scan::EditableNodes, afterBRElement,
-          BlockInlineCheck::UseComputedDisplayStyle);
+          {WSRunScanner::Option::OnlyEditableNodes}, afterBRElement);
   if (MOZ_UNLIKELY(forwardScanFromAfterBRElementResult.Failed())) {
     NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundary() failed");
     return Err(NS_ERROR_FAILURE);
@@ -983,8 +980,9 @@ HTMLEditor::AutoInsertParagraphHandler::SplitMailCiteElement(
   // mailquote may affect wrapping behavior, or font color, etc.
   const WSScanResult forwardScanFromPointToSplitResult =
       WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-          WSRunScanner::Scan::EditableNodes, pointToSplit,
-          BlockInlineCheck::UseHTMLDefaultStyle);
+          {WSRunScanner::Option::OnlyEditableNodes,
+           WSRunScanner::Option::ReferHTMLDefaultStyle},
+          pointToSplit);
   if (forwardScanFromPointToSplitResult.Failed()) {
     return Err(NS_ERROR_FAILURE);
   }
@@ -1054,8 +1052,9 @@ nsresult HTMLEditor::AutoInsertParagraphHandler::
   //     resultOfInsertingBRElement.inspect()?
   const WSScanResult backwardScanFromPointToCreateNewBRElementResult =
       WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary(
-          WSRunScanner::Scan::EditableNodes, aPointToInsertBRElement,
-          BlockInlineCheck::UseHTMLDefaultStyle);
+          {WSRunScanner::Option::OnlyEditableNodes,
+           WSRunScanner::Option::ReferHTMLDefaultStyle},
+          aPointToInsertBRElement);
   if (MOZ_UNLIKELY(backwardScanFromPointToCreateNewBRElementResult.Failed())) {
     NS_WARNING(
         "WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary() "
@@ -1065,14 +1064,16 @@ nsresult HTMLEditor::AutoInsertParagraphHandler::
   if (!backwardScanFromPointToCreateNewBRElementResult
            .InVisibleOrCollapsibleCharacters() &&
       !backwardScanFromPointToCreateNewBRElementResult
-           .ReachedSpecialContent()) {
+           .ReachedSpecialContent() &&
+      !backwardScanFromPointToCreateNewBRElementResult
+           .ReachedEmptyInlineContainerElement()) {
     return NS_SUCCESS_DOM_NO_OPERATION;
   }
   const WSScanResult forwardScanFromPointAfterNewBRElementResult =
       WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-          WSRunScanner::Scan::EditableNodes,
-          EditorRawDOMPoint::After(aPointToInsertBRElement),
-          BlockInlineCheck::UseHTMLDefaultStyle);
+          {WSRunScanner::Option::OnlyEditableNodes,
+           WSRunScanner::Option::ReferHTMLDefaultStyle},
+          EditorRawDOMPoint::After(aPointToInsertBRElement));
   if (MOZ_UNLIKELY(forwardScanFromPointAfterNewBRElementResult.Failed())) {
     NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundary() failed");
     return NS_ERROR_FAILURE;
@@ -1080,6 +1081,8 @@ nsresult HTMLEditor::AutoInsertParagraphHandler::
   if (!forwardScanFromPointAfterNewBRElementResult
            .InVisibleOrCollapsibleCharacters() &&
       !forwardScanFromPointAfterNewBRElementResult.ReachedSpecialContent() &&
+      !forwardScanFromPointAfterNewBRElementResult
+           .ReachedEmptyInlineContainerElement() &&
       // In case we're at the very end.
       !forwardScanFromPointAfterNewBRElementResult
            .ReachedCurrentBlockBoundary()) {
@@ -1107,8 +1110,8 @@ HTMLEditor::AutoInsertParagraphHandler::HandleInHeadingElement(
     Element& aHeadingElement, const EditorDOMPoint& aPointToSplit) {
   // Don't preserve empty link at the end of the left heading element nor the
   // start of the right one.
-  const EditorDOMPoint pointToSplit =
-      GetBetterPointToSplitParagraph(aHeadingElement, aPointToSplit);
+  const EditorDOMPoint pointToSplit = GetBetterPointToSplitParagraph(
+      aHeadingElement, aPointToSplit, mEditingHost);
   MOZ_ASSERT(pointToSplit.IsInContentNodeAndValidInComposedDoc());
 
   // If the split point is end of the heading element, we should not touch the
@@ -1146,7 +1149,7 @@ HTMLEditor::AutoInsertParagraphHandler::HandleInHeadingElement(
   MOZ_ASSERT(rightHeadingElement,
              "SplitNodeResult::GetNextContent() should return something if "
              "DidSplit() returns true");
-  return InsertParagraphResult(rightHeadingElement,
+  return InsertParagraphResult(*rightHeadingElement,
                                splitHeadingResult.UnwrapCaretPoint());
 }
 
@@ -1196,7 +1199,10 @@ HTMLEditor::AutoInsertParagraphHandler::HandleAtEndOfHeadingElement(
 bool HTMLEditor::AutoInsertParagraphHandler::
     IsNullOrInvisibleBRElementOrPaddingOneForEmptyLastLine(
         const dom::HTMLBRElement* aBRElement) {
-  return !aBRElement || HTMLEditUtils::IsInvisibleBRElement(*aBRElement) ||
+  return !aBRElement ||
+         HTMLEditUtils::IsBRElementFollowedByBlockBoundary(*aBRElement) ||
+         // XXX It's odd to check the <br> element's flag. It may be wrong if
+         // the web app moved the <br> or changed the preceding conent.
          EditorUtils::IsPaddingBRElementForEmptyLastLine(*aBRElement);
 }
 
@@ -1221,7 +1227,8 @@ bool HTMLEditor::AutoInsertParagraphHandler::ShouldCreateNewParagraph(
       const auto* const precedingBRElement =
           HTMLBRElement::FromNodeOrNull(HTMLEditUtils::GetPreviousSibling(
               *aPointToSplit.ContainerAs<Text>(),
-              {WalkTreeOption::IgnoreNonEditableNode}));
+              {LeafNodeOption::IgnoreNonEditableNode},
+              BlockInlineCheck::UseComputedDisplayOutsideStyle));
       return !IsNullOrInvisibleBRElementOrPaddingOneForEmptyLastLine(
           precedingBRElement);
     }
@@ -1233,7 +1240,8 @@ bool HTMLEditor::AutoInsertParagraphHandler::ShouldCreateNewParagraph(
       const auto* const followingBRElement =
           HTMLBRElement::FromNodeOrNull(HTMLEditUtils::GetNextSibling(
               *aPointToSplit.ContainerAs<Text>(),
-              {WalkTreeOption::IgnoreNonEditableNode}));
+              {LeafNodeOption::IgnoreNonEditableNode},
+              BlockInlineCheck::UseComputedDisplayOutsideStyle));
       return !IsNullOrInvisibleBRElementOrPaddingOneForEmptyLastLine(
           followingBRElement);
     }
@@ -1251,9 +1259,9 @@ bool HTMLEditor::AutoInsertParagraphHandler::ShouldCreateNewParagraph(
   //     moving to the caret, but I think that this could be handled in fewer
   //     cases than this.
   const auto* const precedingBRElement =
-      HTMLBRElement::FromNodeOrNull(HTMLEditUtils::GetPreviousContent(
-          aPointToSplit, {WalkTreeOption::IgnoreNonEditableNode},
-          BlockInlineCheck::Unused, &mEditingHost));
+      HTMLBRElement::FromNodeOrNull(HTMLEditUtils::GetPreviousLeafContent(
+          aPointToSplit, {LeafNodeOption::IgnoreNonEditableNode},
+          BlockInlineCheck::Auto, &mEditingHost));
   if (!IsNullOrInvisibleBRElementOrPaddingOneForEmptyLastLine(
           precedingBRElement)) {
     return true;
@@ -1262,9 +1270,9 @@ bool HTMLEditor::AutoInsertParagraphHandler::ShouldCreateNewParagraph(
   // followed by a <br> or followed by an invisible <br>, we should not create a
   // new paragraph.
   const auto* followingBRElement =
-      HTMLBRElement::FromNodeOrNull(HTMLEditUtils::GetNextContent(
-          aPointToSplit, {WalkTreeOption::IgnoreNonEditableNode},
-          BlockInlineCheck::Unused, &mEditingHost));
+      HTMLBRElement::FromNodeOrNull(HTMLEditUtils::GetNextLeafContent(
+          aPointToSplit, {LeafNodeOption::IgnoreNonEditableNode},
+          BlockInlineCheck::Auto, &mEditingHost));
   return !IsNullOrInvisibleBRElementOrPaddingOneForEmptyLastLine(
       followingBRElement);
 }
@@ -1273,7 +1281,7 @@ bool HTMLEditor::AutoInsertParagraphHandler::ShouldCreateNewParagraph(
 EditorDOMPoint
 HTMLEditor::AutoInsertParagraphHandler::GetBetterPointToSplitParagraph(
     const Element& aBlockElementToSplit,
-    const EditorDOMPoint& aCandidatePointToSplit) {
+    const EditorDOMPoint& aCandidatePointToSplit, const Element& aEditingHost) {
   EditorDOMPoint pointToSplit = [&]() MOZ_NEVER_INLINE_DEBUG {
     // We shouldn't create new anchor element which has non-empty href unless
     // splitting middle of it because we assume that users don't want to create
@@ -1282,9 +1290,7 @@ HTMLEditor::AutoInsertParagraphHandler::GetBetterPointToSplitParagraph(
     {
       const WSScanResult prevVisibleThing =
           WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary(
-              WSRunScanner::Scan::All, aCandidatePointToSplit,
-              BlockInlineCheck::UseComputedDisplayOutsideStyle,
-              &aBlockElementToSplit);
+              {}, aCandidatePointToSplit, &aBlockElementToSplit);
       if (prevVisibleThing.GetContent() &&
           // Only if the previous thing is not in the same container.
           prevVisibleThing.GetContent() !=
@@ -1304,7 +1310,7 @@ HTMLEditor::AutoInsertParagraphHandler::GetBetterPointToSplitParagraph(
                  candidatePointToSplit.GetContainerOrContainerParentElement();
              container && container != commonAncestor;
              container = container->GetParentElement()) {
-          if (!HTMLEditUtils::IsLink(container)) {
+          if (!HTMLEditUtils::IsHyperlinkElement(*container)) {
             continue;
           }
           // Found link should be only in right node.  So, we shouldn't split
@@ -1316,20 +1322,12 @@ HTMLEditor::AutoInsertParagraphHandler::GetBetterPointToSplitParagraph(
         return candidatePointToSplit.To<EditorDOMPoint>();
       }
     }
-    WSScanResult nextVisibleThing =
-        WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-            WSRunScanner::Scan::All, aCandidatePointToSplit,
-            BlockInlineCheck::UseComputedDisplayOutsideStyle,
-            &aBlockElementToSplit);
-    if (nextVisibleThing.ReachedInvisibleBRElement()) {
-      nextVisibleThing =
-          WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-              WSRunScanner::Scan::All,
-              nextVisibleThing.PointAfterReachedContent<EditorRawDOMPoint>(),
-              BlockInlineCheck::UseComputedDisplayOutsideStyle,
-              &aBlockElementToSplit);
-    }
+    const WSScanResult nextVisibleThing =
+        HTMLEditUtils::ScanInclusiveNextThingWithIgnoringUnnecessaryLineBreak(
+            aCandidatePointToSplit, PaddingForEmptyBlock::Unnecessary,
+            aEditingHost, &aBlockElementToSplit);
     if (nextVisibleThing.GetContent() &&
+        !nextVisibleThing.ReachedOutsideEditingHost() &&
         // Only if the next thing is not in the same container.
         nextVisibleThing.GetContent() !=
             aCandidatePointToSplit.GetContainer() &&
@@ -1348,7 +1346,7 @@ HTMLEditor::AutoInsertParagraphHandler::GetBetterPointToSplitParagraph(
                candidatePointToSplit.GetContainerOrContainerParentElement();
            container && container != commonAncestor;
            container = container->GetParentElement()) {
-        if (!HTMLEditUtils::IsLink(container)) {
+        if (!HTMLEditUtils::IsHyperlinkElement(*container)) {
           continue;
         }
         // Found link should be only in left node.  So, we shouldn't split it.
@@ -1380,55 +1378,67 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::AutoInsertParagraphHandler::
         const EditorDOMPoint& aPointToSplit) {
   const WSScanResult nextVisibleThing =
       WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-          WSRunScanner::Scan::All, aPointToSplit,
-          BlockInlineCheck::UseComputedDisplayOutsideStyle,
-          &aBlockElementToSplit);
+          {}, aPointToSplit, &aBlockElementToSplit);
   if (!nextVisibleThing.ReachedBlockBoundary()) {
     return aPointToSplit;
   }
   const WSScanResult prevVisibleThing =
       WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary(
-          WSRunScanner::Scan::All, aPointToSplit,
-          BlockInlineCheck::UseComputedDisplayOutsideStyle,
-          &aBlockElementToSplit);
-  Maybe<EditorLineBreak> precedingInvisibleLineBreak;
-  if (prevVisibleThing.ReachedBRElement()) {
-    precedingInvisibleLineBreak.emplace(*prevVisibleThing.BRElementPtr());
-  } else if (prevVisibleThing.ReachedPreformattedLineBreak()) {
-    precedingInvisibleLineBreak.emplace(*prevVisibleThing.TextPtr(),
-                                        prevVisibleThing.Offset_Deprecated());
-  } else {
+          {WSRunScanner::Option::StopAtVisibleEmptyInlineContainers},
+          aPointToSplit, &aBlockElementToSplit);
+  if (!prevVisibleThing.ReachedLineBreak()) {
     return aPointToSplit;
   }
   EditorDOMPoint pointToSplit = aPointToSplit;
+  EditorLineBreak precedingLineBreak =
+      prevVisibleThing.CreateEditorLineBreak<EditorLineBreak>();
   {
     // FIXME: Once bug 1951041 is fixed in the layout level, we don't need to
     // treat collapsible white-spaces before invisible <br> elements here.
     AutoTrackDOMPoint trackPointToSplit(mHTMLEditor.RangeUpdaterRef(),
                                         &pointToSplit);
+    Maybe<AutoTrackLineBreak> trackPrecedingLineBreak;
+    if (precedingLineBreak.IsPreformattedLineBreak()) {
+      trackPrecedingLineBreak.emplace(mHTMLEditor.RangeUpdaterRef(),
+                                      &precedingLineBreak);
+    }
     Result<EditorDOMPoint, nsresult>
         normalizePrecedingWhiteSpacesResultOrError =
+            [&]() MOZ_CAN_RUN_SCRIPT -> Result<EditorDOMPoint, nsresult> {
+      if (precedingLineBreak.IsHTMLBRElement() ||
+          precedingLineBreak.IsPreformattedLineBreakAtStartOfText()) {
+        Result<EditorDOMPoint, nsresult> ret =
             WhiteSpaceVisibilityKeeper::NormalizeWhiteSpacesBefore(
-                mHTMLEditor, precedingInvisibleLineBreak->To<EditorDOMPoint>(),
-                {});
-    if (MOZ_UNLIKELY(normalizePrecedingWhiteSpacesResultOrError.isErr())) {
-      NS_WARNING(
-          "WhiteSpaceVisibilityKeeper::NormalizeWhiteSpacesBefore() failed");
+                mHTMLEditor, precedingLineBreak.To<EditorDOMPoint>(), {});
+        NS_WARNING_ASSERTION(
+            ret.isOk(),
+            "WhiteSpaceVisibilityKeeper::NormalizeWhiteSpacesBefore() failed");
+        return ret;
+      }
+      Result<EditorDOMPoint, nsresult> ret =
+          WhiteSpaceVisibilityKeeper::NormalizeWhiteSpacesToSplitAt(
+              mHTMLEditor, precedingLineBreak.To<EditorDOMPoint>(), {});
+      NS_WARNING_ASSERTION(
+          ret.isOk(),
+          "WhiteSpaceVisibilityKeeper::NormalizeWhiteSpacesToSplitAt() failed");
+      return ret;
+    }();
+    if (NS_WARN_IF(normalizePrecedingWhiteSpacesResultOrError.isErr())) {
       return normalizePrecedingWhiteSpacesResultOrError.propagateErr();
     }
   }
   if (NS_WARN_IF(!pointToSplit.IsInContentNodeAndValidInComposedDoc()) ||
       NS_WARN_IF(!pointToSplit.GetContainer()->IsInclusiveDescendantOf(
-          &aBlockElementToSplit))) {
+          &aBlockElementToSplit)) ||
+      NS_WARN_IF(!precedingLineBreak.IsDeletableFromComposedDoc())) {
     return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
   }
   {
     AutoTrackDOMPoint trackPointToSplit(mHTMLEditor.RangeUpdaterRef(),
                                         &pointToSplit);
     Result<EditorDOMPoint, nsresult> deleteInvisibleLineBreakResult =
-        mHTMLEditor.DeleteLineBreakWithTransaction(*precedingInvisibleLineBreak,
-                                                   nsIEditor::eNoStrip,
-                                                   aBlockElementToSplit);
+        mHTMLEditor.DeleteLineBreakWithTransaction(
+            precedingLineBreak, nsIEditor::eNoStrip, aBlockElementToSplit);
     if (MOZ_UNLIKELY(deleteInvisibleLineBreakResult.isErr())) {
       NS_WARNING("HTMLEditor::DeleteLineBreakWithTransaction() failed");
       return deleteInvisibleLineBreakResult.propagateErr();
@@ -1453,8 +1463,7 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::AutoInsertParagraphHandler::
   const Element* const closestContainerElement =
       HTMLEditUtils::GetInclusiveAncestorElement(
           *aPointToSplit.ContainerAs<nsIContent>(),
-          {HTMLEditUtils::AncestorType::ClosestContainerElement,
-           HTMLEditUtils::AncestorType::AllowRootOrAncestorLimiterElement},
+          HTMLEditUtils::ClosestContainerElementOrVoidAncestorLimiter,
           BlockInlineCheck::UseComputedDisplayOutsideStyle,
           &aBlockElementToSplit);
   MOZ_ASSERT(closestContainerElement);
@@ -1468,34 +1477,30 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::AutoInsertParagraphHandler::
       [&]() MOZ_NEVER_INLINE_DEBUG {
         const WSScanResult nextVisibleThing =
             WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-                WSRunScanner::Scan::All, aPointToSplit,
-                BlockInlineCheck::UseComputedDisplayOutsideStyle,
-                &aBlockElementToSplit);
-        if (nextVisibleThing.ReachedBRElement() ||
-            nextVisibleThing.ReachedPreformattedLineBreak()) {
-          // If it's followed by a line break in the closest ancestor container
-          // element, we can use it.
-          if ((nextVisibleThing.ReachedBRElement() &&
-               nextVisibleThing.BRElementPtr()->GetParentNode() ==
-                   closestContainerElement) ||
-              (nextVisibleThing.ReachedPreformattedLineBreak() &&
-               nextVisibleThing.TextPtr()->GetParentNode() ==
-                   closestContainerElement)) {
+                {}, aPointToSplit, &aBlockElementToSplit);
+        if (nextVisibleThing.ReachedLineBreak()) {
+          EditorLineBreak lineBreak =
+              nextVisibleThing.CreateEditorLineBreak<EditorLineBreak>();
+          // If there is a <br> in the closest ancestor container element, we
+          // can use it. Note that we don't want to make an empty paragraph
+          // which contains only a preformatted linefeed.
+          if (lineBreak.IsHTMLBRElement() &&
+              lineBreak.BRElementRef().GetParentNode() ==
+                  closestContainerElement &&
+              // The serializer requires a normal <br> in the empty right
+              // paragraph so that we cannot reuse it if it's a padding <br>.
+              // See bug 1385905.
+              !lineBreak.BRElementRef().IsPaddingForEmptyLastLine() &&
+              !lineBreak.BRElementRef().IsPaddingForEmptyEditor()) {
             return EditorDOMPoint();
           }
-          const WSScanResult nextVisibleThingAfterLineBreak =
-              WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-                  WSRunScanner::Scan::All,
-                  nextVisibleThing
-                      .PointAfterReachedContent<EditorRawDOMPoint>(),
-                  BlockInlineCheck::UseComputedDisplayOutsideStyle,
-                  &aBlockElementToSplit);
-          // If the line break is visible, we don't need to insert a padding
-          // <br> element for the right paragraph because it'll have some
-          // visible content.
-          if (!nextVisibleThingAfterLineBreak.ReachedCurrentBlockBoundary()) {
+          // If the line break is not followed by current block boundary, we
+          // don't need to insert a padding <br> element for the right paragraph
+          // because it'll have some visible content.
+          if (!lineBreak.IsFollowedByCurrentBlockBoundary()) {
             return EditorDOMPoint();
           }
+          unnecessaryLineBreak.emplace(std::move(lineBreak));
         }
         // If it's not directly followed by current block boundary, we don't
         // need to insert a padding <br> element for the right paragraph because
@@ -1509,15 +1514,6 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::AutoInsertParagraphHandler::
         for (; candidatePoint.GetContainer() != closestContainerElement;
              candidatePoint = candidatePoint.AfterContainer()) {
           MOZ_ASSERT(candidatePoint.GetContainer() != &aBlockElementToSplit);
-        }
-        // If we reached invisible line break which is not in the closest
-        // container element, we don't want it anymore once we put invisible
-        // <br> element into the closest container element.
-        if (nextVisibleThing.ReachedBRElement()) {
-          unnecessaryLineBreak.emplace(*nextVisibleThing.BRElementPtr());
-        } else if (nextVisibleThing.ReachedPreformattedLineBreak()) {
-          unnecessaryLineBreak.emplace(*nextVisibleThing.TextPtr(),
-                                       nextVisibleThing.Offset_Deprecated());
         }
         return candidatePoint;
       }();
@@ -1551,7 +1547,7 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::AutoInsertParagraphHandler::
     Result<CreateElementResult, nsresult> insertPaddingBRElementResultOrError =
         mHTMLEditor.InsertBRElement(
             WithTransaction::Yes,
-            // XXX We don't want to expose the <br> for IME, but the plaintext
+            // We don't want to expose the <br> for IME, but the plaintext
             // serializer requires this. See bug 1385905.
             BRElementType::Normal, pointToInsertFollowingBRElement);
     if (MOZ_UNLIKELY(insertPaddingBRElementResultOrError.isErr())) {
@@ -1573,17 +1569,13 @@ Result<EditorDOMPoint, nsresult> HTMLEditor::AutoInsertParagraphHandler::
   // so, we want to keep it.)
   const WSScanResult nextVisibleThing =
       WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-          WSRunScanner::Scan::All, pointToSplit,
-          BlockInlineCheck::UseComputedDisplayOutsideStyle,
-          &aBlockElementToSplit);
+          {}, pointToSplit, &aBlockElementToSplit);
   if (!nextVisibleThing.ReachedBRElement()) {
     return pointToSplit;
   }
   const WSScanResult nextVisibleThingAfterFirstBRElement =
       WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-          WSRunScanner::Scan::All,
-          nextVisibleThing.PointAfterReachedContent<EditorRawDOMPoint>(),
-          BlockInlineCheck::UseComputedDisplayOutsideStyle,
+          {}, nextVisibleThing.PointAfterReachedContent<EditorRawDOMPoint>(),
           &aBlockElementToSplit);
   if (!nextVisibleThingAfterFirstBRElement.ReachedBRElement()) {
     return pointToSplit;
@@ -1629,7 +1621,7 @@ HTMLEditor::AutoInsertParagraphHandler::SplitParagraphWithTransaction(
   // white-spaces at the split point.
   Result<EditorDOMPoint, nsresult> preparationResult =
       WhiteSpaceVisibilityKeeper::PrepareToSplitBlockElement(
-          mHTMLEditor, aPointToSplit, aBlockElementToSplit);
+          mHTMLEditor, pointToSplit, aBlockElementToSplit);
   if (MOZ_UNLIKELY(preparationResult.isErr())) {
     NS_WARNING(
         "WhiteSpaceVisibilityKeeper::PrepareToSplitBlockElement() failed");
@@ -1666,8 +1658,7 @@ HTMLEditor::AutoInsertParagraphHandler::SplitParagraphWithTransaction(
   const RefPtr<Element> deepestContainerElementToSplit =
       HTMLEditUtils::GetInclusiveAncestorElement(
           *pointToSplit.ContainerAs<nsIContent>(),
-          {HTMLEditUtils::AncestorType::ClosestContainerElement,
-           HTMLEditUtils::AncestorType::AllowRootOrAncestorLimiterElement},
+          HTMLEditUtils::ClosestContainerElementOrVoidAncestorLimiter,
           BlockInlineCheck::UseComputedDisplayOutsideStyle,
           &aBlockElementToSplit);
   if (NS_WARN_IF(!deepestContainerElementToSplit)) {
@@ -1728,9 +1719,7 @@ HTMLEditor::AutoInsertParagraphHandler::SplitParagraphWithTransaction(
     // break, we need to put a padding <br> to make an empty line.
     const WSScanResult prevVisibleThing =
         WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary(
-            WSRunScanner::Scan::All,
-            EditorRawDOMPoint::AtEndOf(*deepestContainerElementToSplit),
-            BlockInlineCheck::UseComputedDisplayOutsideStyle,
+            {}, EditorRawDOMPoint::AtEndOf(*deepestContainerElementToSplit),
             leftDivOrParagraphElement);
     if (prevVisibleThing.ReachedLineBoundary()) {
       return EditorDOMPoint::AtEndOf(*deepestContainerElementToSplit);
@@ -1742,9 +1731,7 @@ HTMLEditor::AutoInsertParagraphHandler::SplitParagraphWithTransaction(
     }
     const WSScanResult nextVisibleThing =
         WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-            WSRunScanner::Scan::All,
-            EditorRawDOMPoint(deepestContainerElementToSplit, 0),
-            BlockInlineCheck::UseComputedDisplayOutsideStyle,
+            {}, EditorRawDOMPoint(deepestContainerElementToSplit, 0),
             leftDivOrParagraphElement);
     return nextVisibleThing.ReachedCurrentBlockBoundary()
                ? EditorDOMPoint::AtEndOf(*deepestContainerElementToSplit)
@@ -1776,7 +1763,7 @@ HTMLEditor::AutoInsertParagraphHandler::SplitParagraphWithTransaction(
 
   // Let's put caret at start of the first leaf container.
   nsIContent* child = HTMLEditUtils::GetFirstLeafContent(
-      *rightDivOrParagraphElement, {LeafNodeType::LeafNodeOrChildBlock},
+      *rightDivOrParagraphElement, {LeafNodeOption::TreatChildBlockAsLeafNode},
       BlockInlineCheck::UseComputedDisplayStyle);
   if (MOZ_UNLIKELY(!child)) {
     return SplitNodeResult(std::move(splitDivOrPResult),
@@ -1845,7 +1832,7 @@ Element* HTMLEditor::AutoInsertParagraphHandler::
 Result<InsertParagraphResult, nsresult>
 HTMLEditor::AutoInsertParagraphHandler::HandleInListItemElement(
     Element& aListItemElement, const EditorDOMPoint& aPointToSplit) {
-  MOZ_ASSERT(HTMLEditUtils::IsListItem(&aListItemElement));
+  MOZ_ASSERT(HTMLEditUtils::IsListItemElement(aListItemElement));
 
   // If aListItemElement is empty, then we want to outdent its content.
   if (&mEditingHost != aListItemElement.GetParentElement() &&
@@ -1857,8 +1844,9 @@ HTMLEditor::AutoInsertParagraphHandler::HandleInListItemElement(
     // If the given list item element is not the last list item element of
     // its parent nor not followed by sub list elements, split the parent
     // before it.
-    if (!HTMLEditUtils::IsLastChild(aListItemElement,
-                                    {WalkTreeOption::IgnoreNonEditableNode})) {
+    if (!HTMLEditUtils::IsLastChild(
+            aListItemElement, {LeafNodeOption::IgnoreNonEditableNode},
+            BlockInlineCheck::UseComputedDisplayOutsideStyle)) {
       Result<SplitNodeResult, nsresult> splitListItemParentResult =
           mHTMLEditor.SplitNodeWithTransaction(
               EditorDOMPoint(&aListItemElement));
@@ -1883,13 +1871,14 @@ HTMLEditor::AutoInsertParagraphHandler::HandleInListItemElement(
     }
 
     auto afterLeftListElement = EditorDOMPoint::After(leftListElement);
-    if (MOZ_UNLIKELY(!afterLeftListElement.IsSet())) {
+    if (MOZ_UNLIKELY(!afterLeftListElement.IsInContentNode())) {
       return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
     }
 
     // If aListItemElement is in an invalid sub-list element, move it into
     // the grand parent list element in order to outdent.
-    if (HTMLEditUtils::IsAnyListElement(afterLeftListElement.GetContainer())) {
+    if (HTMLEditUtils::IsListElement(
+            *afterLeftListElement.ContainerAs<nsIContent>())) {
       Result<MoveNodeResult, nsresult> moveListItemElementResult =
           mHTMLEditor.MoveNodeWithTransaction(aListItemElement,
                                               afterLeftListElement);
@@ -1898,7 +1887,7 @@ HTMLEditor::AutoInsertParagraphHandler::HandleInListItemElement(
         return moveListItemElementResult.propagateErr();
       }
       moveListItemElementResult.inspect().IgnoreCaretPointSuggestion();
-      return InsertParagraphResult(&aListItemElement,
+      return InsertParagraphResult(aListItemElement,
                                    EditorDOMPoint(&aListItemElement, 0u));
     }
 
@@ -1927,12 +1916,12 @@ HTMLEditor::AutoInsertParagraphHandler::HandleInListItemElement(
     EditorDOMPoint pointToPutCaret(
         createNewParagraphElementResult.inspect().GetNewNode(), 0u);
     return InsertParagraphResult(
-        createNewParagraphElementResult.inspect().GetNewNode(),
+        *createNewParagraphElementResult.inspect().GetNewNode(),
         std::move(pointToPutCaret));
   }
 
-  const EditorDOMPoint pointToSplit =
-      GetBetterPointToSplitParagraph(aListItemElement, aPointToSplit);
+  const EditorDOMPoint pointToSplit = GetBetterPointToSplitParagraph(
+      aListItemElement, aPointToSplit, mEditingHost);
   MOZ_ASSERT(pointToSplit.IsInContentNodeAndValidInComposedDoc());
 
   // If insertParagraph at end of <dt> or <dd>, we should put opposite type list
@@ -2000,7 +1989,7 @@ HTMLEditor::AutoInsertParagraphHandler::HandleInListItemElement(
   }
   auto* const rightListItemElement =
       splitListItemElement.GetNextContentAs<Element>();
-  return InsertParagraphResult(rightListItemElement,
+  return InsertParagraphResult(*rightListItemElement,
                                std::move(pointToPutCaret));
 }
 
@@ -2011,9 +2000,7 @@ bool HTMLEditor::AutoInsertParagraphHandler::SplitPointIsStartOfSplittingBlock(
   EditorRawDOMPoint pointToSplit = aPointToSplit.To<EditorRawDOMPoint>();
   while (true) {
     const WSScanResult prevVisibleThing =
-        WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary(
-            WSRunScanner::Scan::All, pointToSplit,
-            BlockInlineCheck::UseComputedDisplayOutsideStyle);
+        WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary({}, pointToSplit);
     if (!prevVisibleThing.ReachedCurrentBlockBoundary()) {
       return false;
     }
@@ -2036,17 +2023,14 @@ bool HTMLEditor::AutoInsertParagraphHandler::SplitPointIsEndOfSplittingBlock(
   while (true) {
     WSScanResult nextVisibleThing =
         WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-            WSRunScanner::Scan::All, pointToSplit,
-            BlockInlineCheck::UseComputedDisplayOutsideStyle,
-            &aBlockElementToSplit);
+            {}, pointToSplit, &aBlockElementToSplit);
     if (maybeFollowedByInvisibleBRElement &&
         (nextVisibleThing.ReachedBRElement() ||
          nextVisibleThing.ReachedPreformattedLineBreak())) {
       nextVisibleThing =
           WSRunScanner::ScanInclusiveNextVisibleNodeOrBlockBoundary(
-              WSRunScanner::Scan::All,
+              {},
               nextVisibleThing.PointAfterReachedContent<EditorRawDOMPoint>(),
-              BlockInlineCheck::UseComputedDisplayOutsideStyle,
               &aBlockElementToSplit);
     }
     if (!nextVisibleThing.ReachedCurrentBlockBoundary()) {

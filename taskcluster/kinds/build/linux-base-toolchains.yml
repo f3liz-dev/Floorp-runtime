@@ -7,8 +7,9 @@
 # linux.yml would make using task-defaults there significantly less useful.
 ---
 task-defaults:
-    worker-type: b-linux-amd
+    worker-type: b-linux-docker-amd
     run:
+        clone-with: hg
         extra-config:
             extra_mozconfig_content:
                 # Builds on automation don't normally build geckodriver,
@@ -53,7 +54,7 @@ linux64-base-toolchains/opt:
             - linux64-node-12
             - linux64-pkgconf
             - sysroot-x86_64-linux-gnu
-            - sysroot-wasm32-wasi-clang-8.0
+            - sysroot-wasm32-wasi-clang-base
 
 linux64-base-toolchains/debug:
     description: "Linux64 base toolchains Debug"
@@ -95,7 +96,7 @@ linux64-base-toolchains/debug:
             - linux64-node-12
             - linux64-pkgconf
             - sysroot-x86_64-linux-gnu
-            - sysroot-wasm32-wasi-clang-8.0
+            - sysroot-wasm32-wasi-clang-base
 
 linux64-base-toolchains-clang/opt:
     description: "Linux64 base toolchains clang Opt"
@@ -133,7 +134,7 @@ linux64-base-toolchains-clang/opt:
             - linux64-pkgconf
             - linux64-sccache
             - sysroot-x86_64-linux-gnu
-            - sysroot-wasm32-wasi-clang-8.0
+            - sysroot-wasm32-wasi-clang-base
 
 linux64-base-toolchains-clang/debug:
     description: "Linux64 base toolchains clang Debug"
@@ -174,4 +175,4 @@ linux64-base-toolchains-clang/debug:
             - linux64-pkgconf
             - linux64-sccache
             - sysroot-x86_64-linux-gnu
-            - sysroot-wasm32-wasi-clang-8.0
+            - sysroot-wasm32-wasi-clang-base

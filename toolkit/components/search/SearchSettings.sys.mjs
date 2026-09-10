@@ -6,6 +6,10 @@ import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
 const lazy = XPCOMUtils.declareLazy({
   AddonManager: "resource://gre/modules/AddonManager.sys.mjs",
+  AppProvidedConfigEngine:
+    "moz-src:///toolkit/components/search/ConfigSearchEngine.sys.mjs",
+  ConfigSearchEngine:
+    "moz-src:///toolkit/components/search/ConfigSearchEngine.sys.mjs",
   DeferredTask: "resource://gre/modules/DeferredTask.sys.mjs",
   ObjectUtils: "resource://gre/modules/ObjectUtils.sys.mjs",
   SearchUtils: "moz-src:///toolkit/components/search/SearchUtils.sys.mjs",
@@ -15,6 +19,10 @@ const lazy = XPCOMUtils.declareLazy({
       maxLogLevel: lazy.SearchUtils.loggingEnabled ? "Debug" : "Warn",
     }),
 });
+
+/**
+ * @import {SearchEngine} from "./SearchEngine.sys.mjs"
+ */
 
 const SETTINGS_FILENAME = "search.json.mozlz4";
 
@@ -75,7 +83,7 @@ export class SearchSettings {
    */
   #searchService = null;
 
-  /*
+  /**
    * The user's settings file read from disk so we can persist metadata for
    * engines that are default or hidden, the user's locale and region, hashes
    * for the loadPath, and hashes for default and private default engines.
@@ -83,37 +91,44 @@ export class SearchSettings {
    * to the settings.
    *
    * Structure of settings:
-   * Object { version: <number>,
-   *          engines: [...],
-   *          metaData: {...},
-   *        }
+   *
+   * ```
+   * Object {
+   *   version: <number>,
+   *   engines: [...],
+   *   metaData: {...},
+   * }
+   * ```
    *
    * Settings metaData is the active metadata for setting and getting attributes.
    * When a new metadata attribute is set, we save it to #settings.metaData and
    * write #settings to disk.
    *
    * #settings.metaData attributes:
-   * @property {string} current
-   *    The current user-set default engine. The associated hash is called
-   *    'hash'.
-   * @property {string} private
-   *    The current user-set private engine. The associated hash is called
-   *    'privateHash'.
-   *    The current and prviate objects have associated hash fields to validate
-   *    the value is set by the application.
-   * @property {string} appDefaultEngine
-   * @property {string} channel
-   *    Configuration is restricted to the specified channel. ESR is an example
-   *    of a channel.
-   * @property {string} distroID
-   *    Specifies which distribution the default engine is included in.
-   * @property {string} experiment
-   *    Specifies if the application is running on an experiment.
-   * @property {string} locale
-   * @property {string} region
-   * @property {boolean} useSavedOrder
-   *    True if the user's order information stored in settings is used.
    *
+   * @property {string} current
+   *   The current user-set default engine. The associated hash is called
+   *   'hash'.
+   * @property {string} private
+   *   The current user-set private engine. The associated hash is called
+   *   'privateHash'.
+   *   The current and prviate objects have associated hash fields to validate
+   *   the value is set by the application.
+   * @property {string} appDefaultEngine
+   *   The identifier of the current application default engine.
+   * @property {string} channel
+   *   Configuration is restricted to the specified channel. ESR is an example
+   *   of a channel.
+   * @property {string} distroID
+   *   Specifies which distribution the default engine is included in.
+   * @property {string} experiment
+   *   Specifies if the application is running on an experiment.
+   * @property {string} locale
+   *   The current locale.
+   * @property {string} region
+   *   The current region.
+   * @property {boolean} useSavedOrder
+   *   True if the user's order information stored in settings is used.
    */
   #settings = null;
 
@@ -234,6 +249,13 @@ export class SearchSettings {
   }
 
   /**
+   * Test-only function to reset the settings.
+   */
+  _testResetSettings() {
+    this.#resetSettings(false);
+  }
+
+  /**
    * Queues writing the settings until after SETTINGS_INVALIDATION_DELAY. If there
    * is a currently queued task then it will be restarted.
    */
@@ -309,13 +331,24 @@ export class SearchSettings {
     // will be restored. This can happen if a user switches between regions.
     if (this.#settings?.engines) {
       for (let engine of this.#settings.engines) {
-        // TODO: The line below should compare names instead of ids (bug 1973899).
-        let included = settings.engines.some(e => e._name == engine._name);
-        // If a config engine is user-installed and not included, it was
-        // explicitly removed by the user and we should not persist its metadata.
-        let userInstalled = engine._metaData["user-installed"];
-        if (engine._isConfigEngine && !userInstalled && !included) {
-          settings.engines.push(engine);
+        if (
+          engine._isConfigEngine &&
+          // If a config engine is user-installed and not included, it was
+          // explicitly removed by the user and we should not persist its metadata.
+          !engine._metaData["user-installed"]
+        ) {
+          // If the saved settings is already included in the settings, don't re-add it.
+          // TODO (Bug 2046142): Refactor settings updates for overridden engines.
+          // Checking the engine name as a fallback alongside the canonical ID is a temporary
+          // workaround to handle third-party overrides. We should remove this name check to
+          // rely strictly on IDs and prevent potential duplicates, which may require changing
+          // how we handle search engines with duplicate names first.
+          let included = settings.engines.some(
+            e => e.id == engine.id || e._name == engine._name
+          );
+          if (!included) {
+            settings.engines.push(engine);
+          }
         }
       }
     }
@@ -534,7 +567,7 @@ export class SearchSettings {
   }
 
   // nsIObserver
-  observe(engine, topic, verb) {
+  observe(subject, topic, verb) {
     switch (topic) {
       case lazy.SearchUtils.TOPIC_ENGINE_MODIFIED:
         switch (verb) {
@@ -546,7 +579,7 @@ export class SearchSettings {
           case lazy.SearchUtils.MODIFIED_TYPE.ICON_CHANGED:
             // Config Search Engines have their icons stored in Remote
             // Settings, so we don't need to update the saved settings.
-            if (!engine?.isConfigEngine) {
+            if (!(subject.wrappedJSObject instanceof lazy.ConfigSearchEngine)) {
               this._delayedWrite();
             }
             break;
@@ -609,7 +642,7 @@ export class SearchSettings {
       // users who backup/sync their profile in custom ways.
       if (
         currentDefaultEngine &&
-        (currentDefaultEngine.isAppProvided ||
+        (currentDefaultEngine instanceof lazy.AppProvidedConfigEngine ||
           lazy.SearchUtils.getVerificationHash(
             clonedSettings.metaData.current
           ) == clonedSettings.metaData[this.getHashName("current")])
@@ -625,7 +658,7 @@ export class SearchSettings {
 
       if (
         privateDefaultEngine &&
-        (privateDefaultEngine.isAppProvided ||
+        (privateDefaultEngine instanceof lazy.AppProvidedConfigEngine ||
           lazy.SearchUtils.getVerificationHash(
             clonedSettings.metaData.private
           ) == clonedSettings.metaData[this.getHashName("private")])
@@ -681,7 +714,7 @@ export class SearchSettings {
    *
    * @param {string} engineName
    *   The name of the engine.
-   * @returns {?nsISearchEngine}
+   * @returns {?SearchEngine}
    *   The associated engine if found, null otherwise.
    */
   #getEngineByName(engineName) {
@@ -707,6 +740,7 @@ export class SearchSettings {
     this.#migrateTo11();
     await this.#migrateTo12();
     this.#migrateTo13();
+    this.#migrateTo14();
   }
 
   #migrateTo6() {
@@ -927,5 +961,19 @@ export class SearchSettings {
         }
       }
     }
+  }
+
+  #migrateTo14() {
+    // Bug 2046554 - Force the remove search engine enterprise policy to be
+    // re-applied, to ensure previously hidden engines are fully disabled. This
+    // is in case a user re-enabled them in version 152 when they were visible
+    // for a while.
+    //
+    // Note: This is here rather than in ProfileDataUpgrader.sys.mjs, as it
+    // means we can uplift without having to worry about 153 and 154 having
+    // different UI migration versions.
+    Services.prefs.clearUserPref(
+      "browser.policies.runOncePerModification.removeSearchEngines"
+    );
   }
 }

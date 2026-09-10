@@ -1,12 +1,9 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #ifndef nsJSEnvironment_h
 #define nsJSEnvironment_h
 
-#include "mozilla/Attributes.h"
 #include "mozilla/TimeStamp.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
@@ -106,7 +103,7 @@ class nsJSContext : public nsIScriptContext {
   // The GC should run soon, in the zone of aObj if given. If aObj is
   // nullptr, collect all Zones.
   static void PokeGC(JS::GCReason aReason, JSObject* aObj,
-                     mozilla::TimeDuration aDelay = 0);
+                     mozilla::TimeDuration aDelay = {});
 
   // If usage is nearing a threshold, request idle-only GC work. (This is called
   // when a collection would be relatively convenient.)

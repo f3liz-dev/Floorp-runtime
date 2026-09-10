@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,7 +10,6 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/ProfilerMarkers.h"
 #include "mozilla/StaticPrefs_dom.h"
-#include "mozilla/Unused.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "nsIPropertyBag2.h"
@@ -44,23 +41,24 @@ class PreallocatedProcessManagerImpl final : public nsIObserver {
   UniqueContentParentKeepAlive Take(const nsACString& aRemoteType);
   void Erase(ContentParent* aParent);
 
- private:
-  static const char* const kObserverTopics[];
-
-  static StaticRefPtr<PreallocatedProcessManagerImpl> sSingleton;
-
-  PreallocatedProcessManagerImpl();
-  ~PreallocatedProcessManagerImpl();
   PreallocatedProcessManagerImpl(const PreallocatedProcessManagerImpl&) =
       delete;
 
   const PreallocatedProcessManagerImpl& operator=(
       const PreallocatedProcessManagerImpl&) = delete;
 
+ private:
+  static const char* const kObserverTopics[];
+
+  static StaticRefPtr<PreallocatedProcessManagerImpl> sSingleton;
+
+  PreallocatedProcessManagerImpl();
+  ~PreallocatedProcessManagerImpl() = default;
+
   void Init();
 
   bool CanAllocate();
-  void AllocateAfterDelay(bool aStartup = false);
+  void AllocateAfterDelay();
   void AllocateOnIdle();
   void AllocateNow();
 
@@ -114,11 +112,9 @@ NS_IMPL_ISUPPORTS(PreallocatedProcessManagerImpl, nsIObserver)
 PreallocatedProcessManagerImpl::PreallocatedProcessManagerImpl()
     : mEnabled(false), mNumberPreallocs(1) {}
 
-PreallocatedProcessManagerImpl::~PreallocatedProcessManagerImpl() {
-  // Note: mPreallocatedProcesses may not be null, but all processes should
-  // be dead (IsDead==true).  We block Erase() when our observer sees
-  // shutdown starting.
-}
+// Note: mPreallocatedProcesses may not be null, but all processes should
+// be dead (IsDead==true).  We block Erase() when our observer sees
+// shutdown starting.
 
 void PreallocatedProcessManagerImpl::Init() {
   Preferences::AddStrongObserver(this, "dom.ipc.processPrelaunch.enabled");
@@ -239,7 +235,7 @@ void PreallocatedProcessManagerImpl::Enable(uint32_t aProcesses) {
   }
 
   mEnabled = true;
-  AllocateAfterDelay(/* aStartup */ true);
+  AllocateAfterDelay();
 }
 
 void PreallocatedProcessManagerImpl::AddBlocker(ContentParent* aParent) {
@@ -277,12 +273,11 @@ bool PreallocatedProcessManagerImpl::CanAllocate() {
           !ContentParent::IsMaxProcessCountReached(DEFAULT_REMOTE_TYPE));
 }
 
-void PreallocatedProcessManagerImpl::AllocateAfterDelay(bool aStartup) {
+void PreallocatedProcessManagerImpl::AllocateAfterDelay() {
   if (!IsEnabled()) {
     return;
   }
-  long delay = aStartup ? StaticPrefs::dom_ipc_processPrelaunch_startupDelayMs()
-                        : StaticPrefs::dom_ipc_processPrelaunch_delayMs();
+  long delay = StaticPrefs::dom_ipc_processPrelaunch_delayMs();
   MOZ_LOG(ContentParent::GetLog(), LogLevel::Debug,
           ("Starting delayed process start, delay=%ld", delay));
   NS_DelayedDispatchToCurrentThread(

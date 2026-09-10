@@ -11,6 +11,11 @@ support-files = [
   "embeddedPage.html",
   "trackingAPI.js",
   "trackingPage.html",
+  "trackingPageWithMetaRefresh.html",
+]
+
+prefs = [
+  "browser.urlbar.trustPanel.featureGate=false"
 ]
 
 ["browser_protectionsUI.js"]
@@ -25,8 +30,6 @@ https_first_disabled = true
 
 ["browser_protectionsUI_categories.js"]
 https_first_disabled = true
-
-["browser_protectionsUI_cookie_banner.js"]
 
 ["browser_protectionsUI_cookies_subview.js"]
 https_first_disabled = true
@@ -46,7 +49,9 @@ support-files = [
 
 ["browser_protectionsUI_fingerprinters.js"]
 https_first_disabled = true
-skip-if = ["a11y_checks"] # Bugs 1858041 and 1849179 for causing intermittent crashes
+skip-if = [
+  "a11y_checks", # Bugs 1858041 and 1849179 for causing intermittent crashes
+]
 
 ["browser_protectionsUI_icon_state.js"]
 https_first_disabled = true

@@ -19,6 +19,8 @@ task-defaults:
     fetches:
         toolchain:
             - android-sdk-linux
+            - linux64-embedded-uniffi-bindgen
+            - linux64-nimbus-fml
             - android-gradle-dependencies
             - linux64-jdk-repack
         build-fat-aar:
@@ -27,7 +29,7 @@ task-defaults:
     treeherder:
         kind: test
         tier: 1
-    worker-type: b-linux-gcp
+    worker-type: b-linux
     when:
         files-changed:
             - "mobile/android/android-components/**"
@@ -50,6 +52,7 @@ focus:
     when:
         files-changed:
             - "mobile/android/focus-android/**"
+            - "mobile/android/shared-lint.xml"
     run:
         pre-gradlew:
             - ["cd", "mobile/android/focus-android"]
@@ -65,6 +68,7 @@ fenix:
     when:
         files-changed:
             - "mobile/android/fenix/**"
+            - "mobile/android/shared-lint.xml"
     run:
         pre-gradlew:
             - ["cd", "mobile/android/fenix"]

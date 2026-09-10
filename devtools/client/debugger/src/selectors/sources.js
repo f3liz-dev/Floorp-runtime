@@ -4,7 +4,7 @@
 
 import { createSelector } from "devtools/client/shared/vendor/reselect";
 
-import { getPrettySourceURL, isJavaScript } from "../utils/source";
+import { getPrettySourceURL, isNotPrettyPrintable } from "../utils/source";
 
 import { findPosition } from "../utils/breakpoint/breakpointPositions";
 import { isFulfilled } from "../utils/async-value";
@@ -18,7 +18,10 @@ import {
   getBreakableLinesForSourceActors,
   isSourceActorWithSourceMap,
 } from "./source-actors";
-import { getSourceTextContent } from "./sources-content";
+import {
+  getSourceTextContentForLocation,
+  getSourceTextContentForSource,
+} from "./sources-content";
 
 export function hasSource(state, id) {
   return state.sources.mutableSources.has(id);
@@ -42,7 +45,7 @@ export function getSourceByActorId(state, actorId) {
     return null;
   }
 
-  return getSource(state, getSourceActor(state, actorId).source);
+  return getSourceActor(state, actorId).sourceObject;
 }
 
 function getSourcesByURL(state, url) {
@@ -194,13 +197,12 @@ export function getShouldScrollToSelectedLocation(state) {
  * Gets the first source actor for the source and/or thread
  * provided.
  *
- * @param {Object} state
- * @param {String} sourceId
+ * @param {object} state
+ * @param {string} sourceId
  *         The source used
- * @param {String} [threadId]
+ * @param {string} [threadId]
  *         The thread to check, this is optional.
- * @param {Object} sourceActor
- *
+ * @param {object} sourceActor
  */
 export function getFirstSourceActorForGeneratedSource(
   state,
@@ -225,10 +227,10 @@ export function getFirstSourceActorForGeneratedSource(
 /**
  * Get the source actor of the source
  *
- * @param {Object} state
- * @param {String} id
+ * @param {object} state
+ * @param {string} id
  *        The source id
- * @return {Array<Object>}
+ * @return {Array<object>}
  *         List of source actors
  */
 export function getSourceActorsForSource(state, id) {
@@ -240,25 +242,20 @@ export function isSourceWithMap(state, id) {
   return actors.some(actor => isSourceActorWithSourceMap(state, actor.id));
 }
 
-export function canPrettyPrintSource(state, location) {
-  const sourceId = location.source.id;
-  const source = getSource(state, sourceId);
+export function canPrettyPrintSource(state, source, sourceActor) {
   if (
     !source ||
     source.isPrettyPrinted ||
     source.isOriginal ||
-    (prefs.clientSourceMapsEnabled && isSourceWithMap(state, sourceId))
+    (prefs.clientSourceMapsEnabled && isSourceWithMap(state, source.id))
   ) {
     return false;
   }
 
-  const content = getSourceTextContent(state, location);
+  const content = getSourceTextContentForSource(state, source, sourceActor);
   const sourceContent = content && isFulfilled(content) ? content.value : null;
 
-  if (
-    !sourceContent ||
-    (!isJavaScript(source, sourceContent) && !source.isHTML)
-  ) {
+  if (!sourceContent || isNotPrettyPrintable(source, sourceContent)) {
     return false;
   }
 
@@ -283,15 +280,17 @@ export function getPrettyPrintMessage(state, location) {
     return L10N.getStr("sourceFooter.prettyPrint.hasSourceMapMessage");
   }
 
-  const content = getSourceTextContent(state, location);
+  const content = getSourceTextContentForLocation(state, location);
 
   const sourceContent = content && isFulfilled(content) ? content.value : null;
   if (!sourceContent) {
     return L10N.getStr("sourceFooter.prettyPrint.noContentMessage");
   }
 
-  if (!isJavaScript(source, sourceContent) && !source.isHTML) {
-    return L10N.getStr("sourceFooter.prettyPrint.isNotJavascriptMessage");
+  if (isNotPrettyPrintable(source, sourceContent)) {
+    return L10N.getStr(
+      "sourceFooter.prettyPrint.isNotPrettyPrintableSourceMessage"
+    );
   }
 
   return L10N.getStr("sourceTabs.prettyPrint");
@@ -367,9 +366,9 @@ export function isSourceOverridden(toolboxState, source) {
  * Compute the list of source actors and source objects to be removed
  * when removing a given target/thread.
  *
- * @param {String} threadActorID
+ * @param {string} threadActorID
  *        The thread to be removed.
- * @return {Object}
+ * @return {object}
  *         An object with two arrays:
  *         - actors: list of source actor objects to remove
  *         - sources: list of source objects to remove
@@ -417,4 +416,12 @@ export function getSourcesToRemoveForThread(state, threadActorID) {
     actors: actorsToRemove,
     sources: sourcesToRemove,
   };
+}
+
+export function isStyleSheetDisabled(state, source) {
+  // Pretty printed source are disabling their unique related minimized source.
+  if (source.isPrettyPrinted) {
+    source = source.generatedSource;
+  }
+  return state.sources.mutableDisabledStylesheetsIDs.has(source.id);
 }

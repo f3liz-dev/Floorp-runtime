@@ -10,9 +10,8 @@
 
 #include "modules/video_coding/utility/ivf_file_writer.h"
 
-#include <string.h>
-
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -26,9 +25,9 @@
 namespace webrtc {
 
 namespace {
-static const int kHeaderSize = 32;
-static const int kFrameHeaderSize = 12;
-static uint8_t dummy_payload[4] = {0, 1, 2, 3};
+constexpr int kHeaderSize = 32;
+constexpr int kFrameHeaderSize = 12;
+uint8_t dummy_payload[4] = {0, 1, 2, 3};
 // As the default parameter when the width and height of encodedImage are 0,
 // the values are copied from ivf_file_writer.cc
 constexpr int kDefaultWidth = 1280;
@@ -38,10 +37,9 @@ constexpr int kDefaultHeight = 720;
 class IvfFileWriterTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    file_name_ =
-        webrtc::test::TempFilename(webrtc::test::OutputPath(), "test_file");
+    file_name_ = test::TempFilename(test::OutputPath(), "test_file");
   }
-  void TearDown() override { webrtc::test::RemoveFile(file_name_); }
+  void TearDown() override { test::RemoveFile(file_name_); }
 
   bool WriteDummyTestFrames(VideoCodecType codec_type,
                             int width,
@@ -113,8 +111,7 @@ class IvfFileWriterTest : public ::testing::Test {
   void RunBasicFileStructureTest(VideoCodecType codec_type,
                                  const uint8_t fourcc[4],
                                  bool use_capture_tims_ms) {
-    file_writer_ =
-        IvfFileWriter::Wrap(FileWrapper::OpenWriteOnly(file_name_), 0);
+    file_writer_ = IvfFileWriter::Wrap(file_name_, 0);
     ASSERT_TRUE(file_writer_.get());
     const int kWidth = 320;
     const int kHeight = 240;
@@ -188,9 +185,8 @@ TEST_F(IvfFileWriterTest, ClosesWhenReachesLimit) {
   const int kNumFramesToFit = 1;
 
   file_writer_ = IvfFileWriter::Wrap(
-      FileWrapper::OpenWriteOnly(file_name_),
-      kHeaderSize +
-          kNumFramesToFit * (kFrameHeaderSize + sizeof(dummy_payload)));
+      file_name_, kHeaderSize + kNumFramesToFit *
+                                    (kFrameHeaderSize + sizeof(dummy_payload)));
   ASSERT_TRUE(file_writer_.get());
 
   ASSERT_FALSE(WriteDummyTestFrames(kVideoCodecVP8, kWidth, kHeight,
@@ -212,9 +208,8 @@ TEST_F(IvfFileWriterTest, UseDefaultValueWhenWidthAndHeightAreZero) {
   const int kNumFramesToFit = 1;
 
   file_writer_ = IvfFileWriter::Wrap(
-      FileWrapper::OpenWriteOnly(file_name_),
-      kHeaderSize +
-          kNumFramesToFit * (kFrameHeaderSize + sizeof(dummy_payload)));
+      file_name_, kHeaderSize + kNumFramesToFit *
+                                    (kFrameHeaderSize + sizeof(dummy_payload)));
   ASSERT_TRUE(file_writer_.get());
 
   ASSERT_FALSE(WriteDummyTestFrames(kVideoCodecVP8, kWidth, kHeight,
@@ -240,9 +235,8 @@ TEST_F(IvfFileWriterTest, UseDefaultValueWhenOnlyWidthIsZero) {
   const int kNumFramesToFit = 1;
 
   file_writer_ = IvfFileWriter::Wrap(
-      FileWrapper::OpenWriteOnly(file_name_),
-      kHeaderSize +
-          kNumFramesToFit * (kFrameHeaderSize + sizeof(dummy_payload)));
+      file_name_, kHeaderSize + kNumFramesToFit *
+                                    (kFrameHeaderSize + sizeof(dummy_payload)));
   ASSERT_TRUE(file_writer_.get());
 
   ASSERT_FALSE(WriteDummyTestFrames(kVideoCodecVP8, kWidth, kHeight,
@@ -268,9 +262,8 @@ TEST_F(IvfFileWriterTest, UseDefaultValueWhenOnlyHeightIsZero) {
   const int kNumFramesToFit = 1;
 
   file_writer_ = IvfFileWriter::Wrap(
-      FileWrapper::OpenWriteOnly(file_name_),
-      kHeaderSize +
-          kNumFramesToFit * (kFrameHeaderSize + sizeof(dummy_payload)));
+      file_name_, kHeaderSize + kNumFramesToFit *
+                                    (kFrameHeaderSize + sizeof(dummy_payload)));
   ASSERT_TRUE(file_writer_.get());
 
   ASSERT_FALSE(WriteDummyTestFrames(kVideoCodecVP8, kWidth, kHeight,
@@ -296,9 +289,8 @@ TEST_F(IvfFileWriterTest, UseDefaultValueWhenHeightAndWidthAreNotZero) {
   const int kNumFramesToFit = 1;
 
   file_writer_ = IvfFileWriter::Wrap(
-      FileWrapper::OpenWriteOnly(file_name_),
-      kHeaderSize +
-          kNumFramesToFit * (kFrameHeaderSize + sizeof(dummy_payload)));
+      file_name_, kHeaderSize + kNumFramesToFit *
+                                    (kFrameHeaderSize + sizeof(dummy_payload)));
   ASSERT_TRUE(file_writer_.get());
 
   ASSERT_FALSE(WriteDummyTestFrames(kVideoCodecVP8, kWidth, kHeight,

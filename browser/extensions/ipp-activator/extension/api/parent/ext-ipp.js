@@ -2,23 +2,38 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* global ExtensionAPI, ExtensionCommon, Cr */
+/* global ExtensionAPI, ExtensionCommon, Cr, XPCOMUtils */
 
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   ExtensionParent: "resource://gre/modules/ExtensionParent.sys.mjs",
-  IPProtectionService:
-    "resource:///modules/ipprotection/IPProtectionService.sys.mjs",
+  IPPExceptionsManager:
+    "moz-src:///toolkit/components/ipprotection/IPPExceptionsManager.sys.mjs",
+  IPPProxyManager:
+    "moz-src:///toolkit/components/ipprotection/IPPProxyManager.sys.mjs",
+  IPPProxyStates:
+    "moz-src:///toolkit/components/ipprotection/IPPProxyManager.sys.mjs",
+  Region: "resource://gre/modules/Region.sys.mjs",
 });
 
 ChromeUtils.defineLazyGetter(lazy, "tabTracker", () => {
   return lazy.ExtensionParent.apiManager.global.tabTracker;
 });
 
+XPCOMUtils.defineLazyPreferenceGetter(
+  lazy,
+  "siteExceptionsEnabled",
+  "browser.ipProtection.features.siteExceptions",
+  false
+);
+
 const PREF_DYNAMIC_TAB_BREAKAGES =
   "extensions.ippactivator.dynamicTabBreakages";
 const PREF_DYNAMIC_WEBREQUEST_BREAKAGES =
   "extensions.ippactivator.dynamicWebRequestBreakages";
+const PREF_TAB_BREAKAGES_URL = "extensions.ippactivator.tabBreakagesUrl";
+const PREF_WEBREQUEST_BREAKAGES_URL =
+  "extensions.ippactivator.webrequestBreakagesUrl";
 const PREF_NOTIFIED_DOMAINS = "extensions.ippactivator.notifiedDomains";
 
 this.ippActivator = class extends ExtensionAPI {
@@ -33,39 +48,31 @@ this.ippActivator = class extends ExtensionAPI {
           context,
           name: "ippActivator.onIPPActivated",
           register: fire => {
-            const topics = [
-              "IPProtectionService:Started",
-              "IPProtectionService:Stopped",
-              "IPProtectionService:SignedOut",
-            ];
+            const topics = ["IPPProxyManager:StateChanged"];
             const observer = _event => {
-              fire.async();
+              fire.async(
+                lazy.IPPProxyManager.state === lazy.IPPProxyStates.ACTIVE
+              );
             };
 
             topics.forEach(topic =>
-              lazy.IPProtectionService.addEventListener(topic, observer)
+              lazy.IPPProxyManager.addEventListener(topic, observer)
             );
 
             return () => {
               topics.forEach(topic =>
-                lazy.IPProtectionService.removeEventListener(topic, observer)
+                lazy.IPPProxyManager.removeEventListener(topic, observer)
               );
             };
           },
         }).api(),
-        isTesting() {
-          return Services.prefs.getBoolPref(
-            "extensions.ippactivator.testMode",
-            false
-          );
-        },
         hideMessage(tabId) {
           try {
             const tab = tabId
               ? lazy.tabTracker.getTab(tabId)
               : lazy.tabTracker.activeTab;
             const browser = tab?.linkedBrowser;
-            const win = browser?.ownerGlobal;
+            const win = browser?.documentGlobal;
             if (!browser || !win || !win.gBrowser) {
               return;
             }
@@ -81,7 +88,10 @@ this.ippActivator = class extends ExtensionAPI {
           }
         },
         isIPPActive() {
-          return lazy.IPProtectionService.isActive;
+          return lazy.IPPProxyManager.state === lazy.IPPProxyStates.ACTIVE;
+        },
+        getRegion() {
+          return lazy.Region.home;
         },
         getDynamicTabBreakages() {
           try {
@@ -106,6 +116,15 @@ this.ippActivator = class extends ExtensionAPI {
           } catch (_) {
             return [];
           }
+        },
+        getTabBreakagesUrl() {
+          return Services.prefs.getStringPref(PREF_TAB_BREAKAGES_URL, "");
+        },
+        getWebRequestBreakagesUrl() {
+          return Services.prefs.getStringPref(
+            PREF_WEBREQUEST_BREAKAGES_URL,
+            ""
+          );
         },
         getNotifiedDomains() {
           try {
@@ -166,6 +185,20 @@ this.ippActivator = class extends ExtensionAPI {
             return { baseDomain: "", host: "" };
           }
         },
+        hasExclusion(url) {
+          if (!lazy.siteExceptionsEnabled) {
+            return false;
+          }
+
+          try {
+            const uri = Services.io.newURI(url);
+            const principal =
+              Services.scriptSecurityManager.createContentPrincipal(uri, {});
+            return lazy.IPPExceptionsManager.hasExclusion(principal);
+          } catch (e) {
+            return false;
+          }
+        },
         async showMessage(message, tabId) {
           try {
             // Choose the target tab (by id if provided, else active tab)
@@ -173,9 +206,9 @@ this.ippActivator = class extends ExtensionAPI {
               ? lazy.tabTracker.getTab(tabId)
               : lazy.tabTracker.activeTab;
             const browser = tab?.linkedBrowser;
-            const win = browser?.ownerGlobal;
+            const win = browser?.documentGlobal;
             if (!browser || !win || !win.gBrowser) {
-              return;
+              return Promise.resolve(false);
             }
 
             const nbox = win.gBrowser.getNotificationBox(browser);
@@ -186,46 +219,39 @@ this.ippActivator = class extends ExtensionAPI {
               nbox.removeNotification(existing);
             }
 
-            const buildLabel = msg => {
-              // Accept either string or array of parts {text, modifier}
-              if (Array.isArray(msg)) {
-                const frag = win.document.createDocumentFragment();
-                for (const part of msg) {
-                  const text = String(part?.text ?? "");
-                  const mods = Array.isArray(part?.modifier)
-                    ? part.modifier
-                    : [];
-                  if (mods.includes("strong")) {
-                    const strong = win.document.createElement("strong");
-                    strong.textContent = text;
-                    frag.append(strong);
-                  } else {
-                    frag.append(win.document.createTextNode(text));
-                  }
-                }
-                return frag;
-              }
-              return String(msg ?? "");
-            };
+            // Promise that resolves when the notification is dismissed
+            let resolveDismiss;
+            const dismissedPromise = new Promise(resolve => {
+              resolveDismiss = resolve;
+            });
 
-            const label = buildLabel(message);
+            // Create the notification; set persistence when available
+            nbox
+              .appendNotification(
+                id,
+                {
+                  label: { "l10n-id": message.l10nId },
+                  priority: nbox.PRIORITY_WARNING_HIGH,
+                  eventCallback: param => {
+                    if (param === "dismissed") {
+                      Glean.ipprotection.breakageMessageDismissed.record();
+                    }
+                    resolveDismiss(param === "dismissed");
+                  },
+                },
+                []
+              )
+              .then(notification => {
+                // Persist the notification until the user removes so it
+                // doesn't get removed on redirects.
+                notification.persistence = -1;
+                Glean.ipprotection.breakageMessageShown.record();
+              });
 
-            const notification = await nbox.appendNotification(
-              id,
-              {
-                // If label is a string, pass it through; if it's a Node, the
-                // notification box will handle it as rich content.
-                label,
-                priority: nbox.PRIORITY_WARNING_HIGH,
-              },
-              []
-            );
-
-            // Persist the notification until the user removes so it
-            // doesn't get removed on redirects.
-            notification.persistence = -1;
+            return dismissedPromise;
           } catch (e) {
             console.warn("Unable to show the message", e);
+            return Promise.resolve(false);
           }
         },
         onDynamicTabBreakagesUpdated: new ExtensionCommon.EventManager({
@@ -238,7 +264,7 @@ this.ippActivator = class extends ExtensionAPI {
                   topic === "nsPref:changed" &&
                   data === PREF_DYNAMIC_TAB_BREAKAGES
                 ) {
-                  fire.async({});
+                  fire.async();
                 }
               },
             };
@@ -260,7 +286,7 @@ this.ippActivator = class extends ExtensionAPI {
                   topic === "nsPref:changed" &&
                   data === PREF_DYNAMIC_WEBREQUEST_BREAKAGES
                 ) {
-                  fire.async({});
+                  fire.async();
                 }
               },
             };
@@ -273,6 +299,56 @@ this.ippActivator = class extends ExtensionAPI {
                 PREF_DYNAMIC_WEBREQUEST_BREAKAGES,
                 observer
               );
+          },
+        }).api(),
+        onIPPExceptionsChanged: new ExtensionCommon.EventManager({
+          context,
+          name: "ippActivator.onIPPExceptionsChanged",
+          register: fire => {
+            const observer = {
+              observe(subject, topic, data) {
+                if (topic !== "perm-changed") {
+                  return;
+                }
+
+                if (data === "cleared") {
+                  fire.async();
+                  return;
+                }
+
+                let permission;
+                try {
+                  permission = subject.QueryInterface(Ci.nsIPermission);
+                } catch (e) {
+                  return;
+                }
+
+                if (permission.type !== "ipp-vpn") {
+                  return;
+                }
+
+                fire.async();
+              },
+            };
+
+            Services.obs.addObserver(observer, "perm-changed");
+            return () => Services.obs.removeObserver(observer, "perm-changed");
+          },
+        }).api(),
+        onRegionChanged: new ExtensionCommon.EventManager({
+          context,
+          name: "ippActivator.onRegionChanged",
+          register: fire => {
+            const observer = {
+              observe(_subject, topic) {
+                if (topic === "browser-region-updated") {
+                  fire.async(lazy.Region.home);
+                }
+              },
+            };
+            Services.obs.addObserver(observer, "browser-region-updated");
+            return () =>
+              Services.obs.removeObserver(observer, "browser-region-updated");
           },
         }).api(),
       },

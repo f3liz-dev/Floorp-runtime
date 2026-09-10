@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,6 +12,7 @@
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/ComputedStyle.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ReflowInput.h"
 #include "mozilla/ScrollContainerFrame.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_layout.h"
@@ -111,9 +110,13 @@ void nsCanvasFrame::Destroy(DestroyContext& aContext) {
 
 void nsCanvasFrame::SetInitialChildList(ChildListID aListID,
                                         nsFrameList&& aChildList) {
+  // In printing, canvas frame's continuations may have multiple children in the
+  // principal child list when nsCSSFrameConstructor::ReplicateFixedFrames
+  // creates placeholders for fixed-pos elements.
   NS_ASSERTION(aListID != FrameChildListID::Principal || aChildList.IsEmpty() ||
-                   aChildList.OnlyChild(),
-               "Primary child list can have at most one frame in it");
+                   aChildList.OnlyChild() || GetPrevInFlow(),
+               "Principal child list of first-in-flow canvas frame can have at "
+               "most one frame in it!");
   nsContainerFrame::SetInitialChildList(aListID, std::move(aChildList));
 }
 
@@ -347,9 +350,11 @@ void nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
         }
       }
       if (bgItem) {
+        const ActiveScrolledRoot* scrollTargetASR =
+            asr ? asr->GetNearestScrollASR() : nullptr;
         thisItemList.AppendToTop(
             nsDisplayFixedPosition::CreateForFixedBackground(
-                aBuilder, this, nullptr, bgItem, i, asr));
+                aBuilder, this, nullptr, bgItem, i, scrollTargetASR));
       }
 
     } else {
@@ -366,7 +371,7 @@ void nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
       DisplayListClipState::AutoSaveRestore blendClip(aBuilder);
       thisItemList.AppendNewToTopWithIndex<nsDisplayBlendMode>(
           aBuilder, this, i + 1, &thisItemList, layers.mLayers[i].mBlendMode,
-          thisItemASR, true);
+          thisItemASR, nsDisplayItem::ContainerASRType::Constant, true);
       needBlendContainerForBackgroundBlendMode = true;
     }
     list.AppendToTop(&thisItemList);
@@ -376,7 +381,8 @@ void nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     const ActiveScrolledRoot* containerASR = contASRTracker.GetContainerASR();
     DisplayListClipState::AutoSaveRestore blendContainerClip(aBuilder);
     list.AppendToTop(nsDisplayBlendContainer::CreateForBackgroundBlendMode(
-        aBuilder, this, nullptr, &list, containerASR));
+        aBuilder, this, nullptr, &list, containerASR,
+        nsDisplayItem::ContainerASRType::AncestorOfContained));
   }
 
   aLists.BorderBackground()->AppendToTop(&list);
@@ -384,6 +390,10 @@ void nsCanvasFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   for (nsIFrame* kid : PrincipalChildList()) {
     // Put our child into its own pseudo-stack.
     BuildDisplayListForChild(aBuilder, kid, aLists);
+  }
+
+  if (GetPrevInFlow() || GetNextInFlow()) {
+    DisplayAbsoluteFramesNotBuiltByPlaceholder(aBuilder, aLists);
   }
 
   if (!canvasBg.mCSSSpecified && backgroundColorItem &&
@@ -419,7 +429,6 @@ void nsCanvasFrame::Reflow(nsPresContext* aPresContext,
     if (overflow) {
       NS_ASSERTION(overflow->OnlyChild(),
                    "must have doc root as canvas frame's only child");
-      nsContainerFrame::ReparentFrameViewList(*overflow, prevCanvasFrame, this);
       // Prepend overflow to the our child list. There may already be
       // children placeholders for fixed-pos elements, which don't get
       // reflowed but must not be lost until the canvas frame is destroyed.
@@ -590,12 +599,13 @@ void nsCanvasFrame::Reflow(nsPresContext* aPresContext,
   NS_FRAME_TRACE_REFLOW_OUT("nsCanvasFrame::Reflow", aStatus);
 }
 
-nsIContent* nsCanvasFrame::GetContentForEvent(const WidgetEvent* aEvent) const {
-  if (nsIContent* content = nsIFrame::GetContentForEvent(aEvent)) {
+nsIContent* nsCanvasFrame::GetExplicitEventTargetContent(
+    const WidgetEvent* aEvent /* = nullptr */) const {
+  if (nsIContent* content = nsIFrame::GetExplicitEventTargetContent(aEvent)) {
     return content;
   }
   if (const nsIFrame* kid = mFrames.FirstChild()) {
-    return kid->GetContentForEvent(aEvent);
+    return kid->GetExplicitEventTargetContent(aEvent);
   }
   return nullptr;
 }

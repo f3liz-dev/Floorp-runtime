@@ -7,40 +7,60 @@ package org.mozilla.fenix.home.topsites.ui
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.tooling.preview.PreviewParameter
+import androidx.compose.ui.tooling.preview.PreviewParameterProvider
 import androidx.compose.ui.unit.dp
 import mozilla.components.compose.base.annotation.FlexibleWindowLightDarkPreview
+import mozilla.components.compose.base.button.IconButton
 import mozilla.components.compose.base.utils.BackInvokedHandler
+import mozilla.components.ui.icons.R as iconsR
 import org.mozilla.fenix.R
 import org.mozilla.fenix.home.fake.FakeHomepagePreview
+import org.mozilla.fenix.home.topsites.AddShortcutSource
 import org.mozilla.fenix.home.topsites.interactor.TopSiteInteractor
+import org.mozilla.fenix.home.topsites.store.DialogState
+import org.mozilla.fenix.home.topsites.store.PopularSite
+import org.mozilla.fenix.home.topsites.store.ShortcutsAction
 import org.mozilla.fenix.home.topsites.store.ShortcutsState
+import org.mozilla.fenix.home.topsites.store.ShortcutsStore
 import org.mozilla.fenix.theme.FirefoxTheme
 
 /**
  * The shortcuts screen.
+ *
+ * @param store The [ShortcutsStore] used to observe the screen state and dispatch actions.
+ * @param interactor The [TopSiteInteractor] used to handle user interactions with shortcuts.
+ * @param onNavigationIconClick Callback invoked when the navigation icon is clicked.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShortcutsScreen(
-    state: ShortcutsState,
+    store: ShortcutsStore,
     interactor: TopSiteInteractor,
     onNavigationIconClick: () -> Unit,
 ) {
+    val state by remember { store.stateFlow }.collectAsState(initial = store.state)
+
+    LaunchedEffect(Unit) {
+        interactor.onShortcutsLibraryViewed()
+    }
+
     BackInvokedHandler {
         onNavigationIconClick()
     }
@@ -51,35 +71,60 @@ fun ShortcutsScreen(
                 title = {
                     Text(
                         text = stringResource(R.string.homepage_shortcuts_title),
-                        color = FirefoxTheme.colors.textPrimary,
-                        style = FirefoxTheme.typography.headline6,
+                        style = FirefoxTheme.typography.headline5,
                     )
                 },
-                modifier = Modifier.fillMaxWidth(),
                 navigationIcon = {
-                    IconButton(onClick = onNavigationIconClick) {
+                    IconButton(
+                        onClick = onNavigationIconClick,
+                        contentDescription = "",
+                    ) {
                         Icon(
-                            painter = painterResource(R.drawable.mozac_ic_back_24),
-                            contentDescription = "",
-                            tint = FirefoxTheme.colors.iconPrimary,
+                            painter = painterResource(iconsR.drawable.mozac_ic_back_24),
+                            contentDescription = null,
                         )
                     }
                 },
-                windowInsets = WindowInsets(
-                    top = 0.dp,
-                    bottom = 0.dp,
-                ),
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = FirefoxTheme.colors.layer1),
+                windowInsets =
+                    WindowInsets(
+                        top = 0.dp,
+                        bottom = 0.dp,
+                    ),
             )
-        },
-        containerColor = FirefoxTheme.colors.layer1,
+        }
     ) { paddingValues ->
         ShortcutsScreenContent(
             state = state,
             paddingValues = paddingValues,
             interactor = interactor,
+            onAddShortcutClicked = { store.dispatch(ShortcutsAction.ShowAddShortcutBottomSheet) },
         )
     }
+
+    ShortcutsDialog(
+        dialogState = state.dialogState,
+        popularSites = state.popularSites,
+        onDismiss = { store.dispatch(ShortcutsAction.CloseDialog) },
+        onAddWebsiteClicked = { store.dispatch(ShortcutsAction.ShowAddShortcutDialog) },
+        onSaveShortcut = { title, url ->
+            store.dispatch(
+                ShortcutsAction.SaveShortcut(
+                    title = title,
+                    url = url,
+                    source = AddShortcutSource.MANUAL,
+                )
+            )
+        },
+        onAddPopularSiteClick = { site ->
+            store.dispatch(
+                ShortcutsAction.SaveShortcut(
+                    title = site.title,
+                    url = site.url,
+                    source = AddShortcutSource.POPULAR,
+                )
+            )
+        },
+    )
 }
 
 @Composable
@@ -87,30 +132,73 @@ private fun ShortcutsScreenContent(
     state: ShortcutsState,
     paddingValues: PaddingValues,
     interactor: TopSiteInteractor,
+    onAddShortcutClicked: () -> Unit,
 ) {
     Column(
-        modifier = Modifier
-            .padding(paddingValues)
-            .imePadding(),
+        modifier = Modifier.padding(paddingValues).imePadding(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Shortcuts(
             topSites = state.topSites,
             interactor = interactor,
+            showAddShortcut = state.showAddShortcut,
+            onAddShortcutClicked = onAddShortcutClicked,
         )
     }
 }
 
 @Composable
+private fun ShortcutsDialog(
+    dialogState: DialogState,
+    popularSites: List<PopularSite>,
+    onDismiss: () -> Unit,
+    onAddWebsiteClicked: () -> Unit,
+    onSaveShortcut: (title: String, url: String) -> Unit,
+    onAddPopularSiteClick: (PopularSite) -> Unit,
+) {
+    when (dialogState) {
+        DialogState.AddShortcutBottomSheet -> {
+            AddShortcutBottomSheet(
+                popularSites = popularSites,
+                onDismiss = onDismiss,
+                onAddWebsiteClicked = onAddWebsiteClicked,
+                onAddPopularSiteClick = onAddPopularSiteClick,
+            )
+        }
+
+        DialogState.AddShortcut -> {
+            AddShortcutDialog(
+                onDismiss = onDismiss,
+                onConfirm = onSaveShortcut,
+            )
+        }
+
+        DialogState.Closed -> Unit
+    }
+}
+
+@Composable
 @FlexibleWindowLightDarkPreview
-private fun ShortcutsScreenPreviews() {
+private fun ShortcutsScreenPreviews(@PreviewParameter(ShortcutsScreenParameterProvider::class) state: ShortcutsState) {
     FirefoxTheme {
         ShortcutsScreen(
-            state = ShortcutsState(
-                topSites = FakeHomepagePreview.topSites(),
-            ),
+            store = ShortcutsStore(initialState = state),
             interactor = FakeHomepagePreview.topSitesInteractor,
             onNavigationIconClick = {},
         )
     }
+}
+
+private class ShortcutsScreenParameterProvider : PreviewParameterProvider<ShortcutsState> {
+    override val values: Sequence<ShortcutsState> =
+        sequenceOf(
+            ShortcutsState(
+                topSites = FakeHomepagePreview.topSites(),
+                showAddShortcut = false,
+            ),
+            ShortcutsState(
+                topSites = FakeHomepagePreview.topSites(),
+                showAddShortcut = true,
+            ),
+        )
 }

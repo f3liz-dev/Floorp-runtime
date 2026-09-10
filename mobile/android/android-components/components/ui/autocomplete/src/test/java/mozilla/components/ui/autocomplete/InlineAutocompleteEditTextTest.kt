@@ -358,6 +358,34 @@ class InlineAutocompleteEditTextTest {
     }
 
     @Test
+    @Config(sdk = [Build.VERSION_CODES.VANILLA_ICE_CREAM])
+    fun `on android 17, accessibility event reported when text change type is from ime`() {
+        val et = spy(InlineAutocompleteEditText(testContext, null))
+        val icw = et.onCreateInputConnection(mock(EditorInfo::class.java))
+        doReturn(true).`when`(et).isAtLeastCinnamonBun()
+        val pendingTypes = mutableListOf<Int>()
+        et.onPendingTextChangeTypesSet = { pendingTypes += it }
+
+        icw?.commitText("text", 1, null)
+
+        assertEquals(listOf(AccessibilityEvent.TEXT_CHANGE_TYPE_COMMITTED_BY_IME), pendingTypes)
+    }
+
+    @Test
+    @Config(sdk = [Build.VERSION_CODES.VANILLA_ICE_CREAM])
+    fun `on android 17, accessibility event reported when text change type is from text composition`() {
+        val et = spy(InlineAutocompleteEditText(testContext, null))
+        val icw = et.onCreateInputConnection(mock(EditorInfo::class.java))
+        doReturn(true).`when`(et).isAtLeastCinnamonBun()
+        val pendingTypes = mutableListOf<Int>()
+        et.onPendingTextChangeTypesSet = { pendingTypes += it }
+
+        icw?.setComposingText("text", 1, null)
+
+        assertEquals(listOf(AccessibilityEvent.TEXT_CHANGE_TYPE_IN_COMPOSITION), pendingTypes)
+    }
+
+    @Test
     fun removeAutocompleteOnComposing() {
         val et = InlineAutocompleteEditText(testContext, null)
         val ic = et.onCreateInputConnection(mock(EditorInfo::class.java))
@@ -403,11 +431,12 @@ class InlineAutocompleteEditTextTest {
         et.setText("")
         et.onAttachedToWindow()
 
-        et.autocompleteResult = AutocompleteResult(
-            text = "google.com",
-            source = "test-source",
-            totalItems = 100,
-        )
+        et.autocompleteResult =
+            AutocompleteResult(
+                text = "google.com",
+                source = "test-source",
+                totalItems = 100,
+            )
 
         et.setText("g")
         assertEquals("google.com", "${et.text}")
@@ -419,11 +448,12 @@ class InlineAutocompleteEditTextTest {
         et.setText("")
         et.onAttachedToWindow()
 
-        et.autocompleteResult = AutocompleteResult(
-            text = "google.com",
-            source = "test-source",
-            totalItems = 100,
-        )
+        et.autocompleteResult =
+            AutocompleteResult(
+                text = "google.com",
+                source = "test-source",
+                totalItems = 100,
+            )
 
         et.setText("g ")
         assertEquals("g ", "${et.text}")
@@ -435,11 +465,12 @@ class InlineAutocompleteEditTextTest {
         et.setText("google")
         et.onAttachedToWindow()
 
-        et.autocompleteResult = AutocompleteResult(
-            text = "google.com",
-            source = "test-source",
-            totalItems = 100,
-        )
+        et.autocompleteResult =
+            AutocompleteResult(
+                text = "google.com",
+                source = "test-source",
+                totalItems = 100,
+            )
 
         et.setText("googl")
         assertEquals("googl", "${et.text}")
@@ -451,11 +482,12 @@ class InlineAutocompleteEditTextTest {
         et.setText("testestest")
         et.selectAll()
         et.onAttachedToWindow()
-        et.autocompleteResult = AutocompleteResult(
-            text = "google.com",
-            source = "test-source",
-            totalItems = 100,
-        )
+        et.autocompleteResult =
+            AutocompleteResult(
+                text = "google.com",
+                source = "test-source",
+                totalItems = 100,
+            )
 
         et.setText("g")
         assertEquals("google.com", "${et.text}")
@@ -467,11 +499,12 @@ class InlineAutocompleteEditTextTest {
         et.setText("https://www.google.com/")
         et.selectAll()
         et.onAttachedToWindow()
-        et.autocompleteResult = AutocompleteResult(
-            text = "google.com",
-            source = "test-source",
-            totalItems = 100,
-        )
+        et.autocompleteResult =
+            AutocompleteResult(
+                text = "google.com",
+                source = "test-source",
+                totalItems = 100,
+            )
 
         et.setText("g")
         assertEquals("google.com", "${et.text}")
@@ -519,26 +552,6 @@ class InlineAutocompleteEditTextTest {
     }
 
     @Test
-    @Config(sdk = [Build.VERSION_CODES.LOLLIPOP, Build.VERSION_CODES.LOLLIPOP_MR1])
-    fun `GIVEN an Android L device, WHEN onTextContextMenuItem is called for paste THEN we should paste() with formatting`() {
-        val editText = spy(InlineAutocompleteEditText(testContext, null))
-
-        editText.onTextContextMenuItem(android.R.id.paste)
-
-        verify(editText).paste(anyInt(), anyInt(), eq(true))
-    }
-
-    @Test
-    @Config(sdk = [Build.VERSION_CODES.M, Build.VERSION_CODES.N, Build.VERSION_CODES.O, Build.VERSION_CODES.P])
-    fun `GIVEN an Android M device, WHEN onTextContextMenuItem is called for paste THEN we should paste() without formatting`() {
-        val editText = spy(InlineAutocompleteEditText(testContext, null))
-
-        editText.onTextContextMenuItem(android.R.id.paste)
-
-        verify(editText).paste(anyInt(), anyInt(), eq(false))
-    }
-
-    @Test
     fun `GIVEN no previous text WHEN paste is selected THEN paste() should be called with 0,0`() {
         val editText = spy(InlineAutocompleteEditText(testContext, null))
 
@@ -572,16 +585,18 @@ class InlineAutocompleteEditTextTest {
         assertEquals("test", editText.text.toString())
     }
 
+    @Test
     fun `WHEN committing autocomplete THEN textChangedListener is invoked`() {
         val et = InlineAutocompleteEditText(testContext, null)
         et.setText("")
 
         et.onAttachedToWindow()
-        et.autocompleteResult = AutocompleteResult(
-            text = "google.com",
-            source = "test-source",
-            totalItems = 100,
-        )
+        et.autocompleteResult =
+            AutocompleteResult(
+                text = "google.com",
+                source = "test-source",
+                totalItems = 100,
+            )
         et.setText("g")
         var callbackInvoked = false
         et.setOnTextChangeListener { _, _ ->

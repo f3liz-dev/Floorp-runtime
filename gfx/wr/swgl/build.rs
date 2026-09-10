@@ -57,6 +57,10 @@ fn process_imports(
             }
         } else if line.starts_with("#version ") || line.starts_with("#extension ") {
             // ignore
+        } else if line.trim_ascii_start().find('#').is_some() {
+            let processed = line.replace("__VERSION__", "__SWGL_GLSL_VERSION__");
+            output.push_str(&processed);
+            output.push('\n');
         } else {
             output.push_str(line);
             output.push('\n');
@@ -69,7 +73,7 @@ fn translate_shader(
     shader_dir: &str,
     suppressed_env_vars: &mut Option<Vec<EnvVarGuard>>,
 ) {
-    let mut imported = String::from("#define SWGL 1\n#define __VERSION__ 150\n");
+    let mut imported = String::from("#define SWGL 1\n#define __SWGL_GLSL_VERSION__ 150\n");
     let _ = writeln!(
         imported,
         "#define WR_MAX_VERTEX_TEXTURE_WIDTH {}U",
@@ -202,17 +206,15 @@ fn main() {
     if let Ok(tool) = build.try_get_compiler() {
         if tool.is_like_msvc() {
             build
-                .flag("/std:c++17")
+                .flag("/std:c++20")
                 .flag("/EHs-")
-                .flag("/GR-")
-                .flag("/UMOZILLA_CONFIG_H");
+                .flag("/GR-");
         } else {
             build
-                .flag("-std=c++17")
+                .flag("-std=c++20")
                 .flag("-fno-exceptions")
                 .flag("-fno-rtti")
-                .flag("-fno-math-errno")
-                .flag("-UMOZILLA_CONFIG_H");
+                .flag("-fno-math-errno");
         }
         // SWGL relies heavily on inlining for performance so override -Oz with -O2
         if tool.args().contains(&"-Oz".into()) {

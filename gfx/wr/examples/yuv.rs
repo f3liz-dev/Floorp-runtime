@@ -68,7 +68,7 @@ impl ExternalImageHandler for YuvImageProvider {
         key: ExternalImageId,
         _channel_index: u8,
         _is_composited: bool,
-    ) -> ExternalImage {
+    ) -> ExternalImage<'_> {
         let id = self.texture_ids[key.0 as usize];
         ExternalImage {
             uv: TexelRect::new(0.0, 0.0, 1.0, 1.0),
@@ -98,7 +98,6 @@ impl Example for App {
         let space_and_clip = SpaceAndClipInfo::root_scroll(pipeline_id);
 
         builder.push_simple_stacking_context(
-            bounds.min,
             space_and_clip.spatial_id,
             PrimitiveFlags::IS_BACKFACE_VISIBLE,
         );

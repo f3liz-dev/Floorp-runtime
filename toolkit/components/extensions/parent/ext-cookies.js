@@ -4,19 +4,6 @@
 
 "use strict";
 
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
-  "gCookiesRejectWhenInvalid",
-  "extensions.cookie.rejectWhenInvalid",
-  false
-);
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
-  "gCanUsePortInPartitionKey",
-  "privacy.dynamic_firstparty.use_site.include_port",
-  false
-);
-
 var { ExtensionError } = ExtensionUtils;
 
 const SAME_SITE_STATUSES = new Map([
@@ -74,9 +61,6 @@ function fromExtPartitionKey(extPartitionKey, cookieUrl) {
       if (cookieUrl == null) {
         let topLevelSiteURI = Services.io.newURI(topLevelSite);
         let topLevelSiteFilter = Services.eTLD.getSite(topLevelSiteURI);
-        if (gCanUsePortInPartitionKey && topLevelSiteURI.port != -1) {
-          topLevelSiteFilter += `:${topLevelSiteURI.port}`;
-        }
         return topLevelSiteFilter;
       }
       return ChromeUtils.getPartitionKeyFromURL(
@@ -599,7 +583,7 @@ this.cookies = class extends ExtensionAPIPersistent {
             notify(true, cookie, "overwrite");
             notify(false, cookie, "explicit");
             break;
-          case COOKIES_BATCH_DELETED:
+          case COOKIES_BATCH_DELETED: {
             let cookieArray = notification.batchDeletedCookies.QueryInterface(
               Ci.nsIArray
             );
@@ -612,6 +596,7 @@ this.cookies = class extends ExtensionAPIPersistent {
               }
             }
             break;
+          }
         }
       };
 
@@ -734,15 +719,9 @@ this.cookies = class extends ExtensionAPIPersistent {
 
           let isPartitioned = originAttributes.partitionKey?.length > 0;
 
-          // The permission check may have modified the domain, so use
-          // the new value instead.
-          let fn = gCookiesRejectWhenInvalid
-            ? Services.cookies.add
-            : Services.cookies.addForAddOn;
-
           let cv;
           try {
-            cv = fn(
+            cv = Services.cookies.add(
               cookieAttrs.host,
               path,
               name,
@@ -767,13 +746,7 @@ this.cookies = class extends ExtensionAPIPersistent {
           }
 
           if (cv.result !== Ci.nsICookieValidation.eOK) {
-            if (gCookiesRejectWhenInvalid) {
-              return Promise.reject({ message: cv.errorString });
-            }
-
-            Services.console.logStringMessage(
-              `Extension ${extension.id} tried to create an invalid cookie: ${cv.errorString}`
-            );
+            return Promise.reject({ message: cv.errorString });
           }
 
           return self.cookies.get(details);

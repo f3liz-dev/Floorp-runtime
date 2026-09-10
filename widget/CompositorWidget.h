@@ -2,22 +2,17 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_widget_CompositorWidget_h__
-#define mozilla_widget_CompositorWidget_h__
+#ifndef mozilla_widget_CompositorWidget_h_
+#define mozilla_widget_CompositorWidget_h_
 
-#include "nsISupports.h"
-#include "mozilla/RefPtr.h"
 #include "Units.h"
+#include "mozilla/RefPtr.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/layers/LayersTypes.h"
-
-#ifdef MOZ_IS_GCC
-#  include "mozilla/layers/NativeLayer.h"
-#endif
+#include "nsISupports.h"
 
 class nsIWidget;
-class nsBaseWidget;
 
 namespace mozilla {
 class VsyncObserver;
@@ -122,9 +117,7 @@ class CompositorWidget {
    * When native layers are used, StartRemoteDrawing(InRegion) and
    * EndRemoteDrawing(InRegion) will not be called.
    */
-  virtual RefPtr<layers::NativeLayerRoot> GetNativeLayerRoot() {
-    return nullptr;
-  }
+  virtual layers::NativeLayerRoot* GetNativeLayerRoot() { return nullptr; }
 
   /**
    * Return a DrawTarget for the window which can be composited into.

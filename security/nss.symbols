@@ -205,6 +205,7 @@ NSS_CMSSignedData_Destroy
 NSS_CMSSignedData_GetSignerInfo
 NSS_CMSSignedData_SignerInfoCount
 NSS_CMSSignerInfo_GetSigningCertificate
+NSS_CMSSignerInfo_GetSigningTime
 NSS_CMSSignerInfo_Verify
 NSS_FindCertKEAType
 NSS_GetAlgorithmPolicy
@@ -298,6 +299,7 @@ PK11_CreateDigestContext
 PK11_CreateGenericObject
 PK11_CreateMergeLog
 PK11_CreatePBEV2AlgorithmID
+PK11_CreatePrivateKeyFromTemplate
 PK11_Decrypt
 PK11_DeleteTokenCertAndKey
 PK11_DeleteTokenPrivateKey
@@ -359,6 +361,7 @@ PK11_GetKeyGen
 PK11_GetLowLevelKeyIDForPrivateKey
 PK11_GetMechanism
 PK11_GetModInfo
+PK11_GetModuleID
 PK11_GetModuleURI
 PK11_GetNextSafe
 PK11_GetNextSymKey
@@ -396,6 +399,7 @@ PK11_ImportDERPrivateKeyInfoAndReturnKey
 PK11_ImportEncryptedPrivateKeyInfoAndReturnKey
 PK11_ImportPublicKey
 PK11_ImportSymKey
+PK11_ImportSymKeyWithFlags
 PK11_InitPin
 PK11_IsDisabled
 PK11_IsFIPS
@@ -447,6 +451,7 @@ PK11_SetSymKeyNickname
 PK11_Sign
 PK11_SignatureLen
 PK11_SignWithMechanism
+PK11_SignWithSymKey
 PK11_TokenKeyGenWithFlags
 PK11_UnwrapPrivKey
 PK11_UnwrapSymKey
@@ -581,6 +586,7 @@ SECMOD_LoadModule
 SECMOD_LoadUserModule
 SECMOD_LoadUserModuleWithFunction
 SECMOD_LockedModuleHasRemovableSlots
+SECMOD_LookupSlot
 SECMOD_OpenUserDB
 SECMOD_PubCipherFlagstoInternal
 SECMOD_PubMechFlagstoInternal
@@ -667,6 +673,7 @@ SGN_DestroyDigestInfo_Util
 SGN_End
 SGN_NewContext
 SGN_Update
+SSL_AlertReceivedCallback
 SSL_AlertSentCallback
 SSL_AuthCertificateComplete
 SSL_AuthCertificateHook
@@ -744,6 +751,11 @@ CERT_FindCertByNicknameOrEmailAddrCX
 SECKEY_GetPrivateKeyType
 SEC_DerSignDataWithAlgorithmID
 SEC_CreateSignatureAlgorithmParameters
+SECITEM_MakeItem
+SECOID_FindOIDTagFromDescripton
+SEC_CreateSignatureAlgorithmID
+SECKEY_GetKeyTypeString
+SEC_GetSignatureAlgorithmOidTagByKey
 # These symbols are not used by Firefox itself, but are used by Java's security
 # libraries, which in turn are used by Java applets/plugins/etc.  Provide them
 # to make Java code happy.

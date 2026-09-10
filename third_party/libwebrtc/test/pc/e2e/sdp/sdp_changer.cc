@@ -10,19 +10,19 @@
 
 #include "test/pc/e2e/sdp/sdp_changer.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "api/array_view.h"
+#include "absl/strings/string_view.h"
 #include "api/jsep.h"
-#include "api/jsep_session_description.h"
 #include "api/media_types.h"
+#include "api/rtp_header_extension_id.h"
 #include "api/rtp_parameters.h"
 #include "api/rtp_transceiver_direction.h"
 #include "api/test/pclf/media_configuration.h"
@@ -32,7 +32,6 @@
 #include "p2p/base/p2p_constants.h"
 #include "p2p/base/transport_description.h"
 #include "p2p/base/transport_info.h"
-#include "pc/sdp_utils.h"
 #include "pc/session_description.h"
 #include "pc/simulcast_description.h"
 #include "rtc_base/checks.h"
@@ -53,7 +52,7 @@ std::string CodecRequiredParamsToString(
 }
 
 std::string SupportedCodecsToString(
-    ArrayView<const RtpCodecCapability> supported_codecs) {
+    std::span<const RtpCodecCapability> supported_codecs) {
   StringBuilder out;
   for (const auto& codec : supported_codecs) {
     out << codec.name;
@@ -72,11 +71,11 @@ std::string SupportedCodecsToString(
 }  // namespace
 
 std::vector<RtpCodecCapability> FilterVideoCodecCapabilities(
-    ArrayView<const VideoCodecConfig> video_codecs,
+    std::span<const VideoCodecConfig> video_codecs,
     bool use_rtx,
     bool use_ulpfec,
     bool use_flexfec,
-    ArrayView<const RtpCodecCapability> supported_codecs) {
+    std::span<const RtpCodecCapability> supported_codecs) {
   std::vector<RtpCodecCapability> output_codecs;
   // Find requested codecs among supported and add them to output in the order
   // they were requested.
@@ -133,7 +132,7 @@ void SignalingInterceptor::FillSimulcastContext(
     SessionDescriptionInterface* offer) {
   for (auto& content : offer->description()->contents()) {
     MediaContentDescription* media_desc = content.media_description();
-    if (media_desc->type() != webrtc::MediaType::VIDEO) {
+    if (media_desc->type() != MediaType::VIDEO) {
       continue;
     }
     if (media_desc->HasSimulcast()) {
@@ -166,8 +165,8 @@ void SignalingInterceptor::FillSimulcastContext(
           info.rrid_extension = extension;
         }
       }
-      RTC_CHECK_NE(info.rid_extension.id, 0);
-      RTC_CHECK_NE(info.mid_extension.id, 0);
+      RTC_CHECK(info.rid_extension.id.IsSet());
+      RTC_CHECK(info.mid_extension.id.IsSet());
       bool transport_description_found = false;
       for (auto& transport_info : offer->description()->transport_infos()) {
         if (transport_info.content_name == info.mid) {
@@ -187,9 +186,9 @@ LocalAndRemoteSdp SignalingInterceptor::PatchOffer(
     std::unique_ptr<SessionDescriptionInterface> offer,
     const VideoCodecConfig& first_codec) {
   for (auto& content : offer->description()->contents()) {
-    context_.mids_order.push_back(content.mid());
+    context_.mids_order.push_back(std::string(content.mid()));
     MediaContentDescription* media_desc = content.media_description();
-    if (media_desc->type() != webrtc::MediaType::VIDEO) {
+    if (media_desc->type() != MediaType::VIDEO) {
       continue;
     }
     if (content.media_description()->streams().empty()) {
@@ -213,7 +212,7 @@ LocalAndRemoteSdp SignalingInterceptor::PatchOffer(
     }
   }
 
-  auto offer_for_remote = CloneSessionDescription(offer.get());
+  auto offer_for_remote = offer->Clone();
   return LocalAndRemoteSdp(std::move(offer), std::move(offer_for_remote));
 }
 
@@ -221,7 +220,7 @@ LocalAndRemoteSdp SignalingInterceptor::PatchVp8Offer(
     std::unique_ptr<SessionDescriptionInterface> offer) {
   FillSimulcastContext(offer.get());
   if (!context_.HasSimulcast()) {
-    auto offer_for_remote = CloneSessionDescription(offer.get());
+    auto offer_for_remote = offer->Clone();
     return LocalAndRemoteSdp(std::move(offer), std::move(offer_for_remote));
   }
 
@@ -249,7 +248,7 @@ LocalAndRemoteSdp SignalingInterceptor::PatchVp8Offer(
 
     // Swap mid and rid extensions, so remote peer will understand rid as mid.
     // Also remove rid extension.
-    std::vector<webrtc::RtpExtension> extensions =
+    std::vector<RtpExtension> extensions =
         prototype_media_desc->rtp_header_extensions();
     for (auto ext_it = extensions.begin(); ext_it != extensions.end();) {
       if (ext_it->uri == RtpExtension::kRidUri) {
@@ -268,7 +267,6 @@ LocalAndRemoteSdp SignalingInterceptor::PatchVp8Offer(
       ++ext_it;
     }
 
-    prototype_media_desc->ClearRtpHeaderExtensions();
     prototype_media_desc->set_rtp_header_extensions(extensions);
 
     // We support only single stream inside video section with simulcast
@@ -299,13 +297,10 @@ LocalAndRemoteSdp SignalingInterceptor::PatchVp8Offer(
 
   // Update transport_infos to add TransportInfo for each new media section.
   std::vector<TransportInfo> transport_infos = desc->transport_infos();
-  transport_infos.erase(std::remove_if(
-      transport_infos.begin(), transport_infos.end(),
-      [this](const TransportInfo& ti) {
-        // Remove transport infos that correspond to simulcast video sections.
-        return context_.simulcast_infos_by_mid.find(ti.content_name) !=
-               context_.simulcast_infos_by_mid.end();
-      }));
+  std::erase_if(transport_infos, [this](const TransportInfo& ti) {
+    // Remove transport infos that correspond to simulcast video sections.
+    return context_.simulcast_infos_by_mid.contains(ti.content_name);
+  });
   for (auto& info : context_.simulcast_infos) {
     for (auto& rid : info.rids) {
       transport_infos.emplace_back(rid, info.transport_description);
@@ -314,10 +309,10 @@ LocalAndRemoteSdp SignalingInterceptor::PatchVp8Offer(
   desc->set_transport_infos(transport_infos);
 
   // Create patched offer.
-  auto patched_offer =
-      std::make_unique<JsepSessionDescription>(SdpType::kOffer);
-  patched_offer->Initialize(std::move(desc), offer->session_id(),
-                            offer->session_version());
+  std::unique_ptr<SessionDescriptionInterface> patched_offer =
+      CreateSessionDescription(SdpType::kOffer, offer->session_id(),
+                               offer->session_version(), std::move(desc));
+
   return LocalAndRemoteSdp(std::move(offer), std::move(patched_offer));
 }
 
@@ -333,7 +328,7 @@ LocalAndRemoteSdp SignalingInterceptor::PatchVp9Offer(
   }
 
   for (auto& content : offer->description()->contents()) {
-    if (content.media_description()->type() != webrtc::MediaType::VIDEO) {
+    if (content.media_description()->type() != MediaType::VIDEO) {
       // We are interested in only video tracks
       continue;
     }
@@ -372,7 +367,7 @@ LocalAndRemoteSdp SignalingInterceptor::PatchVp9Offer(
     stream.ssrc_groups.push_back(
         SsrcGroup(kSimSsrcGroupSemantics, primary_ssrcs));
   }
-  auto offer_for_remote = CloneSessionDescription(offer.get());
+  auto offer_for_remote = offer->Clone();
   return LocalAndRemoteSdp(std::move(offer), std::move(offer_for_remote));
 }
 
@@ -381,7 +376,7 @@ LocalAndRemoteSdp SignalingInterceptor::PatchAnswer(
     const VideoCodecConfig& first_codec) {
   for (auto& content : answer->description()->contents()) {
     MediaContentDescription* media_desc = content.media_description();
-    if (media_desc->type() != webrtc::MediaType::VIDEO) {
+    if (media_desc->type() != MediaType::VIDEO) {
       continue;
     }
     if (content.media_description()->direction() !=
@@ -402,14 +397,14 @@ LocalAndRemoteSdp SignalingInterceptor::PatchAnswer(
     }
   }
 
-  auto answer_for_remote = CloneSessionDescription(answer.get());
+  auto answer_for_remote = answer->Clone();
   return LocalAndRemoteSdp(std::move(answer), std::move(answer_for_remote));
 }
 
 LocalAndRemoteSdp SignalingInterceptor::PatchVp8Answer(
     std::unique_ptr<SessionDescriptionInterface> answer) {
   if (!context_.HasSimulcast()) {
-    auto answer_for_remote = CloneSessionDescription(answer.get());
+    auto answer_for_remote = answer->Clone();
     return LocalAndRemoteSdp(std::move(answer), std::move(answer_for_remote));
   }
 
@@ -433,22 +428,17 @@ LocalAndRemoteSdp SignalingInterceptor::PatchVp8Answer(
 
     // Patch `media_desc` to make it simulcast answer description.
     // Restore mid/rid rtp header extensions
-    std::vector<webrtc::RtpExtension> extensions =
-        media_desc->rtp_header_extensions();
+    std::vector<RtpExtension> extensions = media_desc->rtp_header_extensions();
     // First remove existing rid/mid header extensions.
-    extensions.erase(std::remove_if(extensions.begin(), extensions.end(),
-                                    [](const webrtc::RtpExtension& e) {
-                                      return e.uri == RtpExtension::kMidUri ||
-                                             e.uri == RtpExtension::kRidUri ||
-                                             e.uri ==
-                                                 RtpExtension::kRepairedRidUri;
-                                    }));
+    std::erase_if(extensions, [](const webrtc::RtpExtension& e) {
+      return e.uri == RtpExtension::kMidUri || e.uri == RtpExtension::kRidUri ||
+             e.uri == RtpExtension::kRepairedRidUri;
+    });
 
     // Then add right ones.
     extensions.push_back(info.mid_extension);
     extensions.push_back(info.rid_extension);
     // extensions.push_back(info.rrid_extension);
-    media_desc->ClearRtpHeaderExtensions();
     media_desc->set_rtp_header_extensions(extensions);
 
     // Add StreamParams with rids for receive.
@@ -507,10 +497,10 @@ LocalAndRemoteSdp SignalingInterceptor::PatchVp8Answer(
   }
   desc->set_transport_infos(transport_infos);
 
-  auto patched_answer =
-      std::make_unique<JsepSessionDescription>(SdpType::kAnswer);
-  patched_answer->Initialize(std::move(desc), answer->session_id(),
-                             answer->session_version());
+  std::unique_ptr<SessionDescriptionInterface> patched_answer =
+      CreateSessionDescription(SdpType::kAnswer, answer->session_id(),
+                               answer->session_version(), std::move(desc));
+
   return LocalAndRemoteSdp(std::move(answer), std::move(patched_answer));
 }
 
@@ -532,14 +522,14 @@ SignalingInterceptor::RestoreMediaSectionsOrder(
 
 LocalAndRemoteSdp SignalingInterceptor::PatchVp9Answer(
     std::unique_ptr<SessionDescriptionInterface> answer) {
-  auto answer_for_remote = CloneSessionDescription(answer.get());
+  auto answer_for_remote = answer->Clone();
   return LocalAndRemoteSdp(std::move(answer), std::move(answer_for_remote));
 }
 
-std::vector<std::unique_ptr<IceCandidateInterface>>
+std::vector<std::unique_ptr<IceCandidate>>
 SignalingInterceptor::PatchOffererIceCandidates(
-    ArrayView<const IceCandidateInterface* const> candidates) {
-  std::vector<std::unique_ptr<IceCandidateInterface>> out;
+    std::span<const IceCandidate* const> candidates) {
+  std::vector<std::unique_ptr<IceCandidate>> out;
   for (auto* candidate : candidates) {
     auto simulcast_info_it =
         context_.simulcast_infos_by_mid.find(candidate->sdp_mid());
@@ -560,10 +550,10 @@ SignalingInterceptor::PatchOffererIceCandidates(
   return out;
 }
 
-std::vector<std::unique_ptr<IceCandidateInterface>>
+std::vector<std::unique_ptr<IceCandidate>>
 SignalingInterceptor::PatchAnswererIceCandidates(
-    ArrayView<const IceCandidateInterface* const> candidates) {
-  std::vector<std::unique_ptr<IceCandidateInterface>> out;
+    std::span<const IceCandidate* const> candidates) {
+  std::vector<std::unique_ptr<IceCandidate>> out;
   for (auto* candidate : candidates) {
     auto simulcast_info_it =
         context_.simulcast_infos_by_rid.find(candidate->sdp_mid());
@@ -587,7 +577,7 @@ SignalingInterceptor::PatchAnswererIceCandidates(
 }
 
 SignalingInterceptor::SimulcastSectionInfo::SimulcastSectionInfo(
-    const std::string& mid,
+    absl::string_view mid,
     MediaProtocolType media_protocol_type,
     const std::vector<RidDescription>& rids_desc)
     : mid(mid), media_protocol_type(media_protocol_type) {

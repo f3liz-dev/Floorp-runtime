@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,13 +5,10 @@
 #if !defined(PDMFactory_h_)
 #  define PDMFactory_h_
 
-#  include <utility>
-
 #  include "DecoderDoctorDiagnostics.h"
 #  include "MediaCodecsSupport.h"
 #  include "PlatformDecoderModule.h"
 #  include "mozilla/AlreadyAddRefed.h"
-#  include "mozilla/EnumSet.h"
 #  include "mozilla/MozPromise.h"
 #  include "mozilla/RefPtr.h"
 #  include "mozilla/ipc/UtilityProcessSandboxing.h"

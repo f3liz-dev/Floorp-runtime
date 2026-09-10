@@ -9,14 +9,14 @@ origin:
   description: nss
   url: https://hg-edge.mozilla.org/projects/nss
 
-  release: a0717524039b719729ab8072402650ef33326f9a (2025-08-22T02:40:23Z).
-  revision: a0717524039b719729ab8072402650ef33326f9a
+  release: 02a2746db5e758e2722a1c679fe2662cf8df16a7 (2026-08-26T12:26:58Z).
+  revision: 02a2746db5e758e2722a1c679fe2662cf8df16a7
 
   license: MPL-2.0
   license-file: COPYING
 
 vendoring:
-  url: https://github.com/nss-dev/nss
+  url: https://github.com/mozilla/nss
   source-hosting: github
   vendor-directory: security/nss/
   skip-vendoring-steps:
@@ -28,14 +28,18 @@ vendoring:
     - TAG-INFO
   update-actions:
     - action: run-script
-      cwd: '{yaml_dir}/../../'
+      cwd: '{topsrcdir}'
       script: '{cwd}/security/manager/tools/regen_root_ca_metadata.py'
 
 updatebot:
   maintainer-phab: "#nss-reviewers"
   maintainer-bz: jschanck@mozilla.com
+  fuzzy-paths:
+    - netwerk/base
+    - security/certverifier
+    - security/manager/ssl
   tasks:
     - type: vendoring
       enabled: true
       frequency: 1 week
-      blocking: 1978341
+      blocking: 2066767

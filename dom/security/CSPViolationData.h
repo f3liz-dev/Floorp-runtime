@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -56,16 +54,16 @@ struct CSPViolationData {
       const nsAString& aSample);
   BlockedContentSource BlockedContentSourceOrUnknown() const;
 
-  const uint32_t mViolatedPolicyIndex;
-  const Resource mResource;
-  const CSPDirective mEffectiveDirective;
+  uint32_t mViolatedPolicyIndex;
+  Resource mResource;
+  CSPDirective mEffectiveDirective;
   // String representation of the URL. The empty string represents a null-URL.
-  const nsCString mSourceFile;
-  const uint32_t mLineNumber;
-  const uint32_t mColumnNumber;
+  nsCString mSourceFile;
+  uint32_t mLineNumber;
+  uint32_t mColumnNumber;
   RefPtr<Element> mElement;
-  const nsString mSample;
-  const nsCString mHashSHA256;
+  nsString mSample;
+  nsCString mHashSHA256;
 };
 }  // namespace mozilla::dom
 

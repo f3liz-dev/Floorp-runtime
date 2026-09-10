@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -28,12 +26,15 @@ class Sequence;
 
 class StylePropertyMap final : public StylePropertyMapReadOnly {
  public:
-  explicit StylePropertyMap(nsCOMPtr<nsISupports> aParent);
+  explicit StylePropertyMap(nsStyledElement* aElement);
+
+  explicit StylePropertyMap(CSSStyleRule* aRule);
 
   JSObject* WrapObject(JSContext*, JS::Handle<JSObject*> aGivenProto) override;
 
   // start of StylePropertyMap Web IDL declarations
 
+  // https://drafts.css-houdini.org/css-typed-om/#dom-stylepropertymap-set
   void Set(const nsACString& aProperty,
            const Sequence<OwningCSSStyleValueOrUTF8String>& aValues,
            ErrorResult& aRv);

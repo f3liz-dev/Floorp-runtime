@@ -36,7 +36,7 @@ add_task(async function test_toolbar_field_focus() {
   info("Checking toolbar field's focus color");
 
   let urlBar = gURLBar.querySelector(".urlbar-background");
-  gURLBar.textbox.setAttribute("focused", "");
+  gURLBar.setAttribute("focused", "");
   let style = window.getComputedStyle(urlBar);
 
   Assert.equal(
@@ -50,12 +50,14 @@ add_task(async function test_toolbar_field_focus() {
     "Text Color is changed"
   );
   Assert.equal(
-    style.outlineColor,
+    Services.prefs.getBoolPref("browser.nova.enabled", false)
+      ? style.borderColor
+      : style.outlineColor,
     `rgb(${hexToRGB(TOOLBAR_FOCUS_BORDER).join(", ")})`,
     "Focus ring color"
   );
 
-  gURLBar.textbox.removeAttribute("focused");
+  gURLBar.removeAttribute("focused");
 
   Assert.equal(
     style.backgroundColor,
@@ -88,7 +90,7 @@ add_task(async function test_toolbar_field_focus_low_alpha() {
   });
 
   await extension.startup();
-  gURLBar.textbox.setAttribute("focused", "");
+  gURLBar.setAttribute("focused", "");
 
   let urlBar = gURLBar.querySelector(".urlbar-background");
   Assert.equal(
@@ -102,6 +104,6 @@ add_task(async function test_toolbar_field_focus_low_alpha() {
     "Text color has been overridden to match background"
   );
 
-  gURLBar.textbox.removeAttribute("focused");
+  gURLBar.removeAttribute("focused");
   await extension.unload();
 });

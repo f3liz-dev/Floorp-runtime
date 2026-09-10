@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* eslint-env mozilla/browser-window */
-
 ChromeUtils.defineESModuleGetters(this, {
   ContentBlockingAllowList:
     "resource://gre/modules/ContentBlockingAllowList.sys.mjs",
@@ -17,7 +15,7 @@ XPCOMUtils.defineLazyServiceGetter(
   this,
   "TrackingDBService",
   "@mozilla.org/tracking-db-service;1",
-  "nsITrackingDBService"
+  Ci.nsITrackingDBService
 );
 
 /**
@@ -28,21 +26,22 @@ XPCOMUtils.defineLazyServiceGetter(
 class ProtectionCategory {
   /**
    * Creates a protection category.
+   *
    * @param {string} id - Identifier of the category. Used to query the category
    * UI elements in the DOM.
-   * @param {Object} options - Category options.
+   * @param {object} options - Category options.
    * @param {string} options.prefEnabled - ID of pref which controls the
    * category enabled state.
-   * @param {Object} flags - Flags for this category to look for in the content
+   * @param {object} flags - Flags for this category to look for in the content
    * blocking event and content blocking log.
-   * @param {Number} [flags.load] - Load flag for this protection category. If
+   * @param {number} [flags.load] - Load flag for this protection category. If
    * omitted, we will never match a isAllowing check for this category.
-   * @param {Number} [flags.block] - Block flag for this protection category. If
+   * @param {number} [flags.block] - Block flag for this protection category. If
    * omitted, we will never match a isBlocking check for this category.
-   * @param {Number} [flags.shim] - Shim flag for this protection category. This
+   * @param {number} [flags.shim] - Shim flag for this protection category. This
    * flag is set if we replaced tracking content with a non-tracking shim
    * script.
-   * @param {Number} [flags.allow] - Allow flag for this protection category.
+   * @param {number} [flags.allow] - Allow flag for this protection category.
    * This flag is set if we explicitly allow normally blocked tracking content.
    * The webcompat extension can do this if it needs to unblock content on user
    * opt-in.
@@ -112,6 +111,7 @@ class ProtectionCategory {
   /**
    * Get the category item associated with this protection from the main
    * protections panel.
+   *
    * @returns {xul:toolbarbutton|undefined} - Item or undefined if the panel is
    * not yet initialized.
    */
@@ -128,6 +128,7 @@ class ProtectionCategory {
 
   /**
    * Defaults to enabled state. May be overridden by child classes.
+   *
    * @returns {boolean} - Whether the protection is set to block trackers.
    */
   get blockingEnabled() {
@@ -137,6 +138,7 @@ class ProtectionCategory {
   /**
    * Update the category item state in the main view of the protections panel.
    * Determines whether the category is set to block trackers.
+   *
    * @returns {boolean} - true if the state has been updated, false if the
    * protections popup has not been initialized yet.
    */
@@ -190,7 +192,8 @@ class ProtectionCategory {
 
   /**
    * Create a list of items, each representing a tracker.
-   * @returns {Object} result - An object containing the results.
+   *
+   * @returns {object} result - An object containing the results.
    * @returns {HTMLDivElement[]} result.items - Generated tracker items. May be
    * empty.
    * @returns {boolean} result.anyShimAllowed - Flag indicating if any of the
@@ -217,8 +220,9 @@ class ProtectionCategory {
     };
   }
 
-  /*
+  /**
    * Return the number items blocked by this blocker.
+   *
    * @returns {Integer} count - The number of items blocked.
    */
   async getBlockerCount() {
@@ -228,10 +232,11 @@ class ProtectionCategory {
 
   /**
    * Create a DOM item representing a tracker.
+   *
    * @param {string} origin - Origin of the tracker.
    * @param {Array} actions - Array of actions from the content blocking log
    * associated with the tracking origin.
-   * @returns {Object} result - An object containing the results.
+   * @returns {object} result - An object containing the results.
    * @returns {HTMLDListElement} [options.item] - Generated item or null if we
    * don't have an item for this origin based on the actions log.
    * @returns {boolean} options.shimAllowed - Flag indicating whether the
@@ -279,6 +284,7 @@ class ProtectionCategory {
   /**
    * Create an indicator icon for marking origins that have been allowed by a
    * shim script.
+   *
    * @returns {HTMLImageElement} - Created element.
    */
   _getShimAllowIndicator() {
@@ -294,7 +300,7 @@ class ProtectionCategory {
   }
 
   /**
-   * @param {Number} state - Content blocking event flags.
+   * @param {number} state - Content blocking event flags.
    * @returns {boolean} - Whether the protection has blocked a tracker.
    */
   isBlocking(state) {
@@ -302,7 +308,7 @@ class ProtectionCategory {
   }
 
   /**
-   * @param {Number} state - Content blocking event flags.
+   * @param {number} state - Content blocking event flags.
    * @returns {boolean} - Whether the protection has allowed a tracker.
    */
   isAllowing(state) {
@@ -310,7 +316,7 @@ class ProtectionCategory {
   }
 
   /**
-   * @param {Number} state - Content blocking event flags.
+   * @param {number} state - Content blocking event flags.
    * @returns {boolean} - Whether the protection has detected (blocked or
    * allowed) a tracker.
    */
@@ -319,7 +325,7 @@ class ProtectionCategory {
   }
 
   /**
-   * @param {Number} state - Content blocking event flags.
+   * @param {number} state - Content blocking event flags.
    * @returns {boolean} - Whether the protections has allowed a tracker that
    * would have normally been blocked.
    */
@@ -744,7 +750,7 @@ let ThirdPartyCookies =
         // of the Preferences UI.
         Ci.nsICookieService.BEHAVIOR_REJECT_FOREIGN, // Block all third-party cookies
         Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER, // Block third-party cookies from trackers
-        Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN, // Block trackers and patition third-party trackers
+        Ci.nsICookieService.BEHAVIOR_PARTITION_FOREIGN, // Partition all third-party cookies
         Ci.nsICookieService.BEHAVIOR_REJECT, // Block all cookies
       ];
 
@@ -782,7 +788,7 @@ let ThirdPartyCookies =
 
       if (
         [
-          Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN,
+          Ci.nsICookieService.BEHAVIOR_PARTITION_FOREIGN,
           Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER,
           Ci.nsICookieService.BEHAVIOR_ACCEPT,
         ].includes(this.behaviorPref)
@@ -822,8 +828,7 @@ let ThirdPartyCookies =
             l10nId = "content-blocking-cookies-blocking-unvisited-label";
             break;
           case Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER:
-          case Ci.nsICookieService
-            .BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN:
+          case Ci.nsICookieService.BEHAVIOR_PARTITION_FOREIGN:
             l10nId = "content-blocking-cookies-blocking-trackers-label";
             break;
           default:
@@ -960,7 +965,7 @@ let ThirdPartyCookies =
           }
           break;
         case Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER:
-        case Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN:
+        case Ci.nsICookieService.BEHAVIOR_PARTITION_FOREIGN:
           l10nId = siteException
             ? "protections-not-blocking-cross-site-tracking-cookies"
             : "protections-blocking-cookies-trackers";
@@ -1203,7 +1208,7 @@ let SocialTracking =
         val =>
           [
             Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER,
-            Ci.nsICookieService.BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN,
+            Ci.nsICookieService.BEHAVIOR_PARTITION_FOREIGN,
           ].includes(val)
       );
     }
@@ -1257,227 +1262,6 @@ let SocialTracking =
   })();
 
 /**
- * Singleton to manage the cookie banner feature section in the protections
- * panel and the cookie banner handling subview.
- */
-let cookieBannerHandling = new (class {
-  // Check if this is a private window. We don't expect PBM state to change
-  // during the lifetime of this window.
-  #isPrivateBrowsing = PrivateBrowsingUtils.isWindowPrivate(window);
-
-  constructor() {
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "_serviceModePref",
-      "cookiebanners.service.mode",
-      Ci.nsICookieBannerService.MODE_DISABLED
-    );
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "_serviceModePrefPrivateBrowsing",
-      "cookiebanners.service.mode.privateBrowsing",
-      Ci.nsICookieBannerService.MODE_DISABLED
-    );
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "_serviceDetectOnly",
-      "cookiebanners.service.detectOnly",
-      false
-    );
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "_uiEnabled",
-      "cookiebanners.ui.desktop.enabled",
-      false
-    );
-    ChromeUtils.defineLazyGetter(this, "_cookieBannerSection", () =>
-      document.getElementById("protections-popup-cookie-banner-section")
-    );
-    ChromeUtils.defineLazyGetter(this, "_cookieBannerSectionSeparator", () =>
-      document.getElementById(
-        "protections-popup-cookie-banner-section-separator"
-      )
-    );
-    ChromeUtils.defineLazyGetter(this, "_cookieBannerSwitch", () =>
-      document.getElementById("protections-popup-cookie-banner-switch")
-    );
-    ChromeUtils.defineLazyGetter(this, "_cookieBannerSubview", () =>
-      document.getElementById("protections-popup-cookieBannerView")
-    );
-    ChromeUtils.defineLazyGetter(this, "_cookieBannerEnableSite", () =>
-      document.getElementById("cookieBannerView-enable-site")
-    );
-    ChromeUtils.defineLazyGetter(this, "_cookieBannerDisableSite", () =>
-      document.getElementById("cookieBannerView-disable-site")
-    );
-  }
-
-  /**
-   * Tests if the current site has a user-created exception from the default
-   * cookie banner handling mode. Currently that means the feature is disabled
-   * for the current site.
-   *
-   * Note: bug 1790688 will move this mode handling logic into the
-   * nsCookieBannerService.
-   *
-   * @returns {boolean} - true if the user has manually created an exception.
-   */
-  get #hasException() {
-    // If the CBH feature is preffed off, we can't have an exception.
-    if (!Services.cookieBanners.isEnabled) {
-      return false;
-    }
-
-    // URLs containing IP addresses are not supported by the CBH service, and
-    // will throw. In this case, users can't create an exception, so initialize
-    // `pref` to the default value returned by `getDomainPref`.
-    let pref = Ci.nsICookieBannerService.MODE_UNSET;
-    try {
-      pref = Services.cookieBanners.getDomainPref(
-        gBrowser.currentURI,
-        this.#isPrivateBrowsing
-      );
-    } catch (ex) {
-      console.error(
-        "Cookie Banner Handling error checking for per-site exceptions: ",
-        ex
-      );
-    }
-    return pref == Ci.nsICookieBannerService.MODE_DISABLED;
-  }
-
-  /**
-   * Tests if the cookie banner handling code supports the current site.
-   *
-   * See nsICookieBannerService.hasRuleForBrowsingContextTree for details.
-   *
-   * @returns {boolean} - true if the base domain is in the list of rules.
-   */
-  get isSiteSupported() {
-    return (
-      Services.cookieBanners.isEnabled &&
-      Services.cookieBanners.hasRuleForBrowsingContextTree(
-        gBrowser.selectedBrowser.browsingContext
-      )
-    );
-  }
-
-  /*
-   * @returns {string} - Base domain (eTLD + 1) used for clearing site data.
-   */
-  get #currentBaseDomain() {
-    return gBrowser.contentPrincipal.baseDomain;
-  }
-
-  /**
-   * Helper method used by both updateSection and updateSubView to map internal
-   * state to UI attribute state. We have to separately set the subview's state
-   * because the subview is not a descendant of the menu item in the DOM, and
-   * we rely on CSS to toggle UI visibility based on attribute state.
-   *
-   * @returns A string value to be set as a UI attribute value.
-   */
-  get #uiState() {
-    if (this.#hasException) {
-      return "site-disabled";
-    } else if (this.isSiteSupported) {
-      return "detected";
-    }
-    return "undetected";
-  }
-
-  updateSection() {
-    let showSection = this.#shouldShowSection();
-    let state = this.#uiState;
-
-    for (let el of [
-      this._cookieBannerSection,
-      this._cookieBannerSectionSeparator,
-    ]) {
-      el.hidden = !showSection;
-    }
-
-    this._cookieBannerSection.dataset.state = state;
-
-    // On unsupported sites, disable button styling and click behavior.
-    // Note: to be replaced with a "please support site" subview in bug 1801971.
-    if (state == "undetected") {
-      this._cookieBannerSection.setAttribute("disabled", true);
-      this._cookieBannerSwitch.classList.remove("subviewbutton-nav");
-      this._cookieBannerSwitch.setAttribute("disabled", true);
-    } else {
-      this._cookieBannerSection.removeAttribute("disabled");
-      this._cookieBannerSwitch.classList.add("subviewbutton-nav");
-      this._cookieBannerSwitch.removeAttribute("disabled");
-    }
-  }
-
-  #shouldShowSection() {
-    // Don't show UI if globally disabled by pref, or if the cookie service
-    // is in detect-only mode.
-    if (!this._uiEnabled || this._serviceDetectOnly) {
-      return false;
-    }
-
-    // Show the section if the feature is not in disabled mode, being sure to
-    // check the different prefs for regular and private windows.
-    if (this.#isPrivateBrowsing) {
-      return (
-        this._serviceModePrefPrivateBrowsing !=
-        Ci.nsICookieBannerService.MODE_DISABLED
-      );
-    }
-    return this._serviceModePref != Ci.nsICookieBannerService.MODE_DISABLED;
-  }
-
-  /*
-   * Updates the cookie banner handling subview just before it's shown.
-   */
-  updateSubView() {
-    this._cookieBannerSubview.dataset.state = this.#uiState;
-
-    let baseDomain = JSON.stringify({ host: this.#currentBaseDomain });
-    this._cookieBannerEnableSite.setAttribute("data-l10n-args", baseDomain);
-    this._cookieBannerDisableSite.setAttribute("data-l10n-args", baseDomain);
-  }
-
-  async #disableCookieBannerHandling() {
-    // We can't clear data during a private browsing session until bug 1818783
-    // is fixed. In the meantime, don't allow the cookie banner controls in a
-    // private window to clear data for regular browsing mode.
-    if (!this.#isPrivateBrowsing) {
-      await SiteDataManager.remove(this.#currentBaseDomain);
-    }
-    Services.cookieBanners.setDomainPref(
-      gBrowser.currentURI,
-      Ci.nsICookieBannerService.MODE_DISABLED,
-      this.#isPrivateBrowsing
-    );
-  }
-
-  #enableCookieBannerHandling() {
-    Services.cookieBanners.removeDomainPref(
-      gBrowser.currentURI,
-      this.#isPrivateBrowsing
-    );
-  }
-
-  async onCookieBannerToggleCommand() {
-    let hasException =
-      this._cookieBannerSection.toggleAttribute("hasException");
-    if (hasException) {
-      await this.#disableCookieBannerHandling();
-      Glean.securityUiProtectionspopup.clickCookiebToggleOff.record();
-    } else {
-      this.#enableCookieBannerHandling();
-      Glean.securityUiProtectionspopup.clickCookiebToggleOn.record();
-    }
-    gProtectionsHandler._hidePopup();
-    gBrowser.reloadTab(gBrowser.selectedTab);
-  }
-})();
-
-/**
  * Utility object to handle manipulations of the protections indicators in the UI
  */
 var gProtectionsHandler = {
@@ -1505,8 +1289,8 @@ var gProtectionsHandler = {
     },
     {
       matchPatterns: ["https://www.tiktok.com/*"],
-      shimId: "TiktokEmbed",
-      displayName: "Tiktok",
+      shimId: "TikTokEmbed",
+      displayName: "TikTok",
     },
     {
       matchPatterns: ["https://platform.twitter.com/*"],
@@ -1571,11 +1355,6 @@ var gProtectionsHandler = {
         )
         .addEventListener("click", () =>
           gProtectionsHandler.openProtections(true)
-        );
-      document
-        .getElementById("protections-popup-cookie-banner-switch")
-        .addEventListener("click", () =>
-          gProtectionsHandler.onCookieBannerClick()
         );
     }
   },
@@ -1805,6 +1584,13 @@ var gProtectionsHandler = {
       false
     );
 
+    XPCOMUtils.defineLazyPreferenceGetter(
+      this,
+      "trustPanelEnabledPref",
+      "browser.urlbar.trustPanel.featureGate",
+      false
+    );
+
     for (let blocker of Object.values(this.blockers)) {
       if (blocker.init) {
         blocker.init();
@@ -1897,16 +1683,6 @@ var gProtectionsHandler = {
     await Cryptomining.updateSubView();
     this._protectionsPopupMultiView.showSubView(
       "protections-popup-cryptominersView"
-    );
-  },
-
-  async onCookieBannerClick() {
-    if (!cookieBannerHandling.isSiteSupported) {
-      return;
-    }
-    await cookieBannerHandling.updateSubView();
-    this._protectionsPopupMultiView.showSubView(
-      "protections-popup-cookieBannerView"
     );
   },
 
@@ -2326,13 +2102,6 @@ var gProtectionsHandler = {
           value: "cryptominers",
         });
         break;
-      case "protections-popup-cookieBannerView-cancel":
-        gProtectionsHandler._protectionsPopupMultiView.goBack();
-        break;
-      case "protections-popup-cookieBannerView-enable-button":
-      case "protections-popup-cookieBannerView-disable-button":
-        gProtectionsHandler.onCookieBannerToggleCommand();
-        break;
       case "protections-popup-toast-panel-tp-on-desc":
       case "protections-popup-toast-panel-tp-off-desc":
         // Hide the toast first.
@@ -2445,11 +2214,10 @@ var gProtectionsHandler = {
 
     if (this._milestoneTextSet && !expired) {
       this._protectionsPopup.setAttribute("milestone", this.milestonePref);
+      NimbusFeatures.privacySecurityMessaging.recordExposureEvent();
     } else {
       this._protectionsPopup.removeAttribute("milestone");
     }
-
-    cookieBannerHandling.updateSection();
 
     this._protectionsPopup.toggleAttribute("detected", this.anyDetected);
     this._protectionsPopup.toggleAttribute("blocking", this.anyBlocking);
@@ -2748,10 +2516,6 @@ var gProtectionsHandler = {
     delete this._TPSwitchCommanding;
   },
 
-  onCookieBannerToggleCommand() {
-    cookieBannerHandling.onCookieBannerToggleCommand();
-  },
-
   setTrackersBlockedCounter(trackerCount) {
     if (this._earliestRecordedDate) {
       document.l10n.setAttributes(
@@ -2843,7 +2607,7 @@ var gProtectionsHandler = {
   /**
    * Showing the protections popup.
    *
-   * @param {Object} options
+   * @param {object} options
    *                 The object could have two properties.
    *                 event:
    *                   The event triggers the protections popup to be opened.
@@ -2856,6 +2620,9 @@ var gProtectionsHandler = {
    *                   telemetry purposes.
    */
   showProtectionsPopup(options = {}) {
+    if (this.trustPanelEnabledPref) {
+      return;
+    }
     const { event, toast, openingReason } = options;
 
     this._initializePopup();
@@ -2939,7 +2706,7 @@ var gProtectionsHandler = {
   /**
    * Sends a message to webcompat extension to unblock content and remove placeholders
    *
-   * @param {String} shimId - the id of the shim blocking the content
+   * @param {string} shimId - the id of the shim blocking the content
    */
   _sendUnblockMessageToSmartblock(shimId) {
     Services.obs.notifyObservers(
@@ -2952,7 +2719,7 @@ var gProtectionsHandler = {
   /**
    * Sends a message to webcompat extension to reblock content
    *
-   * @param {String} shimId - the id of the shim blocking the content
+   * @param {string} shimId - the id of the shim blocking the content
    */
   _sendReblockMessageToSmartblock(shimId) {
     Services.obs.notifyObservers(
@@ -2982,7 +2749,7 @@ var gProtectionsHandler = {
           where: message.content.cta_where || "tabshifted",
         },
       },
-      window.browser
+      window.gBrowser.selectedBrowser
     );
 
     // Only send telemetry for non private browsing windows

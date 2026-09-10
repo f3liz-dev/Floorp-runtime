@@ -1,18 +1,14 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "jit/x86/CodeGenerator-x86.h"
 
-#include "mozilla/Casting.h"
 #include "mozilla/DebugOnly.h"
 
-#include <iterator>
+#include <bit>
 
-#include "jsnum.h"
-
+#include "builtin/Number.h"
 #include "jit/CodeGenerator.h"
 #include "jit/MIR-wasm.h"
 #include "jit/MIR.h"
@@ -31,7 +27,6 @@ using namespace js;
 using namespace js::jit;
 
 using JS::GenericNaN;
-using mozilla::BitwiseCast;
 using mozilla::DebugOnly;
 using mozilla::FloatingPoint;
 
@@ -58,7 +53,7 @@ void CodeGenerator::visitBoxFloatingPoint(LBoxFloatingPoint* box) {
   masm.moveValue(TypedOrValueRegister(box->type(), in), out);
 
   if (JitOptions.spectreValueMasking) {
-    Register scratch = ToRegister(box->temp1());
+    Register scratch = ToRegister(box->temp0());
     masm.move32(Imm32(JSVAL_TAG_CLEAR), scratch);
     masm.cmp32Move32(Assembler::Below, scratch, out.typeReg(), scratch,
                      out.typeReg());
@@ -424,9 +419,11 @@ void CodeGenerator::visitWasmCompareExchangeI64(LWasmCompareExchangeI64* ins) {
   MOZ_ASSERT(ToOutRegister64(ins).low == eax);
   MOZ_ASSERT(ToOutRegister64(ins).high == edx);
 
-  masm.append(ins->mir()->access(), wasm::TrapMachineInsn::Atomic,
-              FaultingCodeOffset(masm.currentOffset()));
+  auto before = masm.currentOffset();
   masm.lock_cmpxchg8b(edx, eax, ecx, ebx, srcAddr);
+  auto after = masm.currentOffset();
+  masm.appendAndVerify(ins->mir()->access(), wasm::TrapMachineInsn::Atomic,
+                       FaultingCodeRange(before, after));
 }
 
 template <typename T>
@@ -448,9 +445,12 @@ void CodeGeneratorX86::emitWasmStoreOrExchangeAtomicI64(
 
   Label again;
   masm.bind(&again);
-  masm.append(access, wasm::TrapMachineInsn::Atomic,
-              FaultingCodeOffset(masm.currentOffset()));
+  auto before = masm.currentOffset();
   masm.lock_cmpxchg8b(edx, eax, ecx, ebx, srcAddr);
+  auto after = masm.currentOffset();
+  masm.appendAndVerify(access, wasm::TrapMachineInsn::Atomic,
+                       FaultingCodeRange(before, after));
+
   masm.j(Assembler::Condition::NonZero, &again);
 }
 
@@ -522,10 +522,8 @@ class OutOfLineTruncate : public OutOfLineCodeBase<CodeGeneratorX86> {
   LDefinition* tempFloat() { return ins_->getTemp(0); }
 
   const wasm::TrapSiteDesc& trapSiteDesc() const {
-    if (ins_->isTruncateDToInt32()) {
-      return ins_->toTruncateDToInt32()->mir()->trapSiteDesc();
-    }
-
+    MOZ_ASSERT(ins_->isWasmBuiltinTruncateDToInt32(),
+               "Wasm only uses WasmBuiltinTruncateDToInt32");
     return ins_->toWasmBuiltinTruncateDToInt32()->mir()->trapSiteDesc();
   }
 };
@@ -548,10 +546,8 @@ class OutOfLineTruncateFloat32 : public OutOfLineCodeBase<CodeGeneratorX86> {
   LDefinition* tempFloat() { return ins_->getTemp(0); }
 
   const wasm::TrapSiteDesc& trapSiteDesc() const {
-    if (ins_->isTruncateFToInt32()) {
-      return ins_->toTruncateDToInt32()->mir()->trapSiteDesc();
-    }
-
+    MOZ_ASSERT(ins_->isWasmBuiltinTruncateFToInt32(),
+               "Wasm only uses WasmBuiltinTruncateFToInt32");
     return ins_->toWasmBuiltinTruncateFToInt32()->mir()->trapSiteDesc();
   }
 };
@@ -678,7 +674,7 @@ void CodeGeneratorX86::visitOutOfLineTruncate(OutOfLineTruncate* ool) {
     saveVolatile(output);
 
     if (gen->compilingWasm()) {
-      masm.setupWasmABICall();
+      masm.setupWasmABICall(wasm::SymbolicAddress::ToInt32);
       masm.passABIArg(input, ABIType::Float64);
 
       int32_t instanceOffset = masm.framePushed() - framePushedAfterInstance;
@@ -783,7 +779,7 @@ void CodeGeneratorX86::visitOutOfLineTruncateFloat32(
     masm.Push(input.asDouble());
 
     if (gen->compilingWasm()) {
-      masm.setupWasmABICall();
+      masm.setupWasmABICall(wasm::SymbolicAddress::ToInt32);
     } else {
       masm.setupUnalignedABICall(output);
     }
@@ -813,6 +809,45 @@ void CodeGeneratorX86::visitOutOfLineTruncateFloat32(
   }
 
   masm.jump(ool->rejoin());
+}
+
+void CodeGenerator::visitMulI64(LMulI64* lir) {
+  Register64 lhs = ToRegister64(lir->lhs());
+  LInt64Allocation rhs = lir->rhs();
+
+  MOZ_ASSERT(ToOutRegister64(lir) == lhs);
+
+  if (IsConstant(rhs)) {
+    int64_t constant = ToInt64(rhs);
+    switch (constant) {
+      case -1:
+        masm.neg64(lhs);
+        return;
+      case 0:
+        masm.xor64(lhs, lhs);
+        return;
+      case 1:
+        // nop
+        return;
+      case 2:
+        masm.add64(lhs, lhs);
+        return;
+      default:
+        if (constant > 0) {
+          // Use shift if constant is power of 2.
+          int32_t shift = mozilla::FloorLog2(uint64_t(constant));
+          if (int64_t(1) << shift == constant) {
+            masm.lshift64(Imm32(shift), lhs);
+            return;
+          }
+        }
+        Register temp = ToTempRegisterOrInvalid(lir->temp0());
+        masm.mul64(Imm64(constant), lhs, temp);
+    }
+  } else {
+    Register temp = ToTempRegisterOrInvalid(lir->temp0());
+    masm.mul64(ToOperandOrRegister64(rhs), lhs, temp);
+  }
 }
 
 void CodeGenerator::visitDivOrModI64(LDivOrModI64* lir) {
@@ -849,29 +884,25 @@ void CodeGenerator::visitDivOrModI64(LDivOrModI64* lir) {
     masm.branch64(Assembler::NotEqual, rhs, Imm64(-1), &notOverflow);
     if (mir->isWasmBuiltinModI64()) {
       masm.xor64(output, output);
+      masm.jump(&done);
     } else {
       masm.wasmTrap(wasm::Trap::IntegerOverflow, lir->trapSiteDesc());
     }
-    masm.jump(&done);
     masm.bind(&notOverflow);
   }
 
-  masm.setupWasmABICall();
+  wasm::SymbolicAddress callee = mir->isWasmBuiltinModI64()
+                                     ? wasm::SymbolicAddress::ModI64
+                                     : wasm::SymbolicAddress::DivI64;
+  masm.setupWasmABICall(callee);
   masm.passABIArg(lhs.high);
   masm.passABIArg(lhs.low);
   masm.passABIArg(rhs.high);
   masm.passABIArg(rhs.low);
 
   int32_t instanceOffset = masm.framePushed() - framePushedAfterInstance;
-  if (mir->isWasmBuiltinModI64()) {
-    masm.callWithABI(lir->trapSiteDesc().bytecodeOffset,
-                     wasm::SymbolicAddress::ModI64,
-                     mozilla::Some(instanceOffset));
-  } else {
-    masm.callWithABI(lir->trapSiteDesc().bytecodeOffset,
-                     wasm::SymbolicAddress::DivI64,
-                     mozilla::Some(instanceOffset));
-  }
+  masm.callWithABI(lir->trapSiteDesc().bytecodeOffset, callee,
+                   mozilla::Some(instanceOffset));
 
   // output in edx:eax, move to output register.
   masm.movl(edx, output.high);
@@ -904,23 +935,19 @@ void CodeGenerator::visitUDivOrModI64(LUDivOrModI64* lir) {
     masm.bind(&nonZero);
   }
 
-  masm.setupWasmABICall();
+  MDefinition* mir = lir->mir();
+  wasm::SymbolicAddress callee = mir->isWasmBuiltinModI64()
+                                     ? wasm::SymbolicAddress::UModI64
+                                     : wasm::SymbolicAddress::UDivI64;
+  masm.setupWasmABICall(callee);
   masm.passABIArg(lhs.high);
   masm.passABIArg(lhs.low);
   masm.passABIArg(rhs.high);
   masm.passABIArg(rhs.low);
 
-  MDefinition* mir = lir->mir();
   int32_t instanceOffset = masm.framePushed() - framePushedAfterInstance;
-  if (mir->isWasmBuiltinModI64()) {
-    masm.callWithABI(lir->trapSiteDesc().bytecodeOffset,
-                     wasm::SymbolicAddress::UModI64,
-                     mozilla::Some(instanceOffset));
-  } else {
-    masm.callWithABI(lir->trapSiteDesc().bytecodeOffset,
-                     wasm::SymbolicAddress::UDivI64,
-                     mozilla::Some(instanceOffset));
-  }
+  masm.callWithABI(lir->trapSiteDesc().bytecodeOffset, callee,
+                   mozilla::Some(instanceOffset));
 
   // output in edx:eax, move to output register.
   masm.movl(edx, output.high);
@@ -957,6 +984,113 @@ void CodeGeneratorX86::emitBigIntPtrMod(LBigIntPtrMod* ins, Register dividend,
   masm.cdq();
 
   masm.idiv(divisor);
+}
+
+void CodeGenerator::visitShiftIntPtr(LShiftIntPtr* ins) {
+  Register lhs = ToRegister(ins->lhs());
+  const LAllocation* rhs = ins->rhs();
+  Register out = ToRegister(ins->output());
+
+  if (rhs->isConstant()) {
+    MOZ_ASSERT(out == lhs);
+
+    int32_t shift = ToIntPtr(rhs) & 0x1F;
+    switch (ins->bitop()) {
+      case JSOp::Lsh:
+        if (shift) {
+          masm.lshiftPtr(Imm32(shift), lhs);
+        }
+        break;
+      case JSOp::Rsh:
+        if (shift) {
+          masm.rshiftPtrArithmetic(Imm32(shift), lhs);
+        }
+        break;
+      case JSOp::Ursh:
+        if (shift) {
+          masm.rshiftPtr(Imm32(shift), lhs);
+        }
+        break;
+      default:
+        MOZ_CRASH("Unexpected shift op");
+    }
+  } else {
+    Register shift = ToRegister(rhs);
+    MOZ_ASSERT_IF(out != lhs, Assembler::HasBMI2());
+
+    switch (ins->bitop()) {
+      case JSOp::Lsh:
+        if (out != lhs) {
+          masm.shlxl(lhs, shift, out);
+        } else {
+          masm.lshiftPtr(shift, lhs);
+        }
+        break;
+      case JSOp::Rsh:
+        if (out != lhs) {
+          masm.sarxl(lhs, shift, out);
+        } else {
+          masm.rshiftPtrArithmetic(shift, lhs);
+        }
+        break;
+      case JSOp::Ursh:
+        if (out != lhs) {
+          masm.shrxl(lhs, shift, out);
+        } else {
+          masm.rshiftPtr(shift, lhs);
+        }
+        break;
+      default:
+        MOZ_CRASH("Unexpected shift op");
+    }
+  }
+}
+
+void CodeGenerator::visitShiftI64(LShiftI64* lir) {
+  Register64 lhs = ToRegister64(lir->lhs());
+  const LAllocation* rhs = lir->rhs();
+
+  MOZ_ASSERT(ToOutRegister64(lir) == lhs);
+
+  if (rhs->isConstant()) {
+    int32_t shift = int32_t(rhs->toConstant()->toInt64() & 0x3F);
+    switch (lir->bitop()) {
+      case JSOp::Lsh:
+        if (shift) {
+          masm.lshift64(Imm32(shift), lhs);
+        }
+        break;
+      case JSOp::Rsh:
+        if (shift) {
+          masm.rshift64Arithmetic(Imm32(shift), lhs);
+        }
+        break;
+      case JSOp::Ursh:
+        if (shift) {
+          masm.rshift64(Imm32(shift), lhs);
+        }
+        break;
+      default:
+        MOZ_CRASH("Unexpected shift op");
+    }
+    return;
+  }
+
+  Register shift = ToRegister(rhs);
+  MOZ_ASSERT(shift == ecx);
+  switch (lir->bitop()) {
+    case JSOp::Lsh:
+      masm.lshift64(shift, lhs);
+      break;
+    case JSOp::Rsh:
+      masm.rshift64Arithmetic(shift, lhs);
+      break;
+    case JSOp::Ursh:
+      masm.rshift64(shift, lhs);
+      break;
+    default:
+      MOZ_CRASH("Unexpected shift op");
+  }
 }
 
 void CodeGenerator::visitWasmSelectI64(LWasmSelectI64* lir) {
@@ -1188,8 +1322,8 @@ void CodeGenerator::visitMulIntPtr(LMulIntPtr* ins) {
     }
 
     // Use shift if constant is a power of 2.
-    if (constant > 0 && mozilla::IsPowerOfTwo(uintptr_t(constant))) {
-      uint32_t shift = mozilla::FloorLog2(constant);
+    if (constant > 0 && std::has_single_bit(uintptr_t(constant))) {
+      uint32_t shift = mozilla::FloorLog2(uintptr_t(constant));
       masm.lshiftPtr(Imm32(shift), lhs);
       return;
     }

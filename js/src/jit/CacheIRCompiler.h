@@ -1,6 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -119,12 +117,8 @@ class BaselineFrameSlot {
   explicit BaselineFrameSlot(uint32_t slot) : slot_(slot) {}
   uint32_t slot() const { return slot_; }
 
-  bool operator==(const BaselineFrameSlot& other) const {
-    return slot_ == other.slot_;
-  }
-  bool operator!=(const BaselineFrameSlot& other) const {
-    return slot_ != other.slot_;
-  }
+  bool operator==(const BaselineFrameSlot& other) const = default;
+  bool operator!=(const BaselineFrameSlot& other) const = default;
 };
 
 // OperandLocation represents the location of an OperandId. The operand is
@@ -325,8 +319,6 @@ class MOZ_RAII CacheRegisterAllocator {
   // clobbering it for something else, while we're still holding on to it.
   LiveGeneralRegisterSet currentOpRegs_;
 
-  const AllocatableGeneralRegisterSet allocatableRegs_;
-
   // Registers that are currently unused and available.
   AllocatableGeneralRegisterSet availableRegs_;
 
@@ -354,9 +346,6 @@ class MOZ_RAII CacheRegisterAllocator {
 
   const CacheIRWriter& writer_;
 
-  CacheRegisterAllocator(const CacheRegisterAllocator&) = delete;
-  CacheRegisterAllocator& operator=(const CacheRegisterAllocator&) = delete;
-
   void freeDeadOperandLocations(MacroAssembler& masm);
 
   void spillOperandToStack(MacroAssembler& masm, OperandLocation* loc);
@@ -378,14 +367,16 @@ class MOZ_RAII CacheRegisterAllocator {
   friend class AutoScratchRegisterExcluding;
 
   explicit CacheRegisterAllocator(const CacheIRWriter& writer)
-      : allocatableRegs_(GeneralRegisterSet::All()),
-        stackPushed_(0),
+      : stackPushed_(0),
 #ifdef DEBUG
         addedFailurePath_(false),
 #endif
         currentInstruction_(0),
         writer_(writer) {
   }
+
+  CacheRegisterAllocator(const CacheRegisterAllocator&) = delete;
+  CacheRegisterAllocator& operator=(const CacheRegisterAllocator&) = delete;
 
   [[nodiscard]] bool init();
 
@@ -468,8 +459,6 @@ class MOZ_RAII CacheRegisterAllocator {
   uint32_t stackPushed() const { return stackPushed_; }
   void setStackPushed(uint32_t pushed) { stackPushed_ = pushed; }
 
-  bool isAllocatable(Register reg) const { return allocatableRegs_.has(reg); }
-
   // Allocates a new register.
   Register allocateRegister(MacroAssembler& masm);
   ValueOperand allocateValueRegister(MacroAssembler& masm);
@@ -549,9 +538,6 @@ class MOZ_RAII AutoScratchRegister {
   CacheRegisterAllocator& alloc_;
   Register reg_;
 
-  AutoScratchRegister(const AutoScratchRegister&) = delete;
-  void operator=(const AutoScratchRegister&) = delete;
-
  public:
   AutoScratchRegister(CacheRegisterAllocator& alloc, MacroAssembler& masm,
                       Register reg = InvalidReg)
@@ -565,6 +551,8 @@ class MOZ_RAII AutoScratchRegister {
     MOZ_ASSERT(alloc_.currentOpRegs_.has(reg_));
   }
   ~AutoScratchRegister() { alloc_.releaseRegister(reg_); }
+  AutoScratchRegister(const AutoScratchRegister&) = delete;
+  void operator=(const AutoScratchRegister&) = delete;
 
   Register get() const { return reg_; }
   operator Register() const { return reg_; }
@@ -576,10 +564,6 @@ class MOZ_RAII AutoSpectreBoundsScratchRegister {
   mozilla::Maybe<AutoScratchRegister> scratch_;
   Register reg_ = InvalidReg;
 
-  AutoSpectreBoundsScratchRegister(const AutoSpectreBoundsScratchRegister&) =
-      delete;
-  void operator=(const AutoSpectreBoundsScratchRegister&) = delete;
-
  public:
   AutoSpectreBoundsScratchRegister(CacheRegisterAllocator& alloc,
                                    MacroAssembler& masm) {
@@ -590,6 +574,9 @@ class MOZ_RAII AutoSpectreBoundsScratchRegister {
     }
 #endif
   }
+  AutoSpectreBoundsScratchRegister(const AutoSpectreBoundsScratchRegister&) =
+      delete;
+  void operator=(const AutoSpectreBoundsScratchRegister&) = delete;
 
   Register get() const { return reg_; }
   operator Register() const { return reg_; }
@@ -656,7 +643,7 @@ class FailurePath {
   Vector<OperandLocation, 4, SystemAllocPolicy> inputs_;
   SpilledRegisterVector spilledRegs_;
   NonAssertingLabel label_;
-  uint32_t stackPushed_;
+  uint32_t stackPushed_ = 0;
 #ifdef DEBUG
   // Flag to ensure FailurePath::label() isn't taken while there's a scratch
   // float register which still needs to be restored.
@@ -931,7 +918,10 @@ class MOZ_RAII CacheIRCompiler {
   }
   JSObject* weakObjectStubField(uint32_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
-    return (JSObject*)readStubWord(offset, StubField::Type::WeakObject);
+    JSObject* obj =
+        (JSObject*)readStubWord(offset, StubField::Type::WeakObject);
+    gc::ReadBarrier(obj);
+    return obj;
   }
   Value valueStubField(uint32_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
@@ -1000,12 +990,11 @@ class MOZ_RAII AutoOutputRegister {
   TypedOrValueRegister output_;
   CacheRegisterAllocator& alloc_;
 
-  AutoOutputRegister(const AutoOutputRegister&) = delete;
-  void operator=(const AutoOutputRegister&) = delete;
-
  public:
   explicit AutoOutputRegister(CacheIRCompiler& compiler);
   ~AutoOutputRegister();
+  AutoOutputRegister(const AutoOutputRegister&) = delete;
+  void operator=(const AutoOutputRegister&) = delete;
 
   Register maybeReg() const {
     if (output_.hasValue()) {
@@ -1039,14 +1028,14 @@ class MOZ_RAII AutoStubFrame {
   uint32_t framePushedAtEnterStubFrame_;
 #endif
 
+ public:
+  explicit AutoStubFrame(BaselineCacheIRCompiler& compiler);
   AutoStubFrame(const AutoStubFrame&) = delete;
   void operator=(const AutoStubFrame&) = delete;
 
- public:
-  explicit AutoStubFrame(BaselineCacheIRCompiler& compiler);
-
   void enter(MacroAssembler& masm, Register scratch);
   void leave(MacroAssembler& masm);
+  void pushInlinedICScript(MacroAssembler& masm, Address icScriptAddr);
   void storeTracedValue(MacroAssembler& masm, ValueOperand val);
   void loadTracedValue(MacroAssembler& masm, uint8_t slotIndex,
                        ValueOperand result);
@@ -1061,11 +1050,11 @@ class MOZ_RAII AutoStubFrame {
 class MOZ_RAII AutoSaveLiveRegisters {
   IonCacheIRCompiler& compiler_;
 
-  AutoSaveLiveRegisters(const AutoSaveLiveRegisters&) = delete;
-  void operator=(const AutoSaveLiveRegisters&) = delete;
-
  public:
   explicit AutoSaveLiveRegisters(IonCacheIRCompiler& compiler);
+
+  AutoSaveLiveRegisters(const AutoSaveLiveRegisters&) = delete;
+  void operator=(const AutoSaveLiveRegisters&) = delete;
 
   ~AutoSaveLiveRegisters();
 };
@@ -1073,10 +1062,6 @@ class MOZ_RAII AutoSaveLiveRegisters {
 class MOZ_RAII AutoScratchRegisterMaybeOutput {
   mozilla::Maybe<AutoScratchRegister> scratch_;
   Register scratchReg_;
-
-  AutoScratchRegisterMaybeOutput(const AutoScratchRegisterMaybeOutput&) =
-      delete;
-  void operator=(const AutoScratchRegisterMaybeOutput&) = delete;
 
  public:
   AutoScratchRegisterMaybeOutput(CacheRegisterAllocator& alloc,
@@ -1093,6 +1078,9 @@ class MOZ_RAII AutoScratchRegisterMaybeOutput {
     scratch_.emplace(alloc, masm);
     scratchReg_ = scratch_.ref();
   }
+  AutoScratchRegisterMaybeOutput(const AutoScratchRegisterMaybeOutput&) =
+      delete;
+  void operator=(const AutoScratchRegisterMaybeOutput&) = delete;
 
   Register get() const { return scratchReg_; }
   operator Register() const { return scratchReg_; }
@@ -1225,9 +1213,6 @@ class MOZ_RAII AutoScratchFloatRegister {
   CacheIRCompiler* compiler_;
   FailurePath* failure_;
 
-  AutoScratchFloatRegister(const AutoScratchFloatRegister&) = delete;
-  void operator=(const AutoScratchFloatRegister&) = delete;
-
  public:
   explicit AutoScratchFloatRegister(CacheIRCompiler* compiler)
       : AutoScratchFloatRegister(compiler, nullptr) {}
@@ -1235,6 +1220,9 @@ class MOZ_RAII AutoScratchFloatRegister {
   AutoScratchFloatRegister(CacheIRCompiler* compiler, FailurePath* failure);
 
   ~AutoScratchFloatRegister();
+
+  AutoScratchFloatRegister(const AutoScratchFloatRegister&) = delete;
+  void operator=(const AutoScratchFloatRegister&) = delete;
 
   Label* failure();
 
@@ -1248,9 +1236,6 @@ class MOZ_RAII AutoScratchFloatRegister {
 class MOZ_RAII AutoAvailableFloatRegister {
   FloatRegister reg_;
 
-  AutoAvailableFloatRegister(const AutoAvailableFloatRegister&) = delete;
-  void operator=(const AutoAvailableFloatRegister&) = delete;
-
  public:
   explicit AutoAvailableFloatRegister(CacheIRCompiler& compiler,
                                       FloatRegister reg)
@@ -1259,6 +1244,8 @@ class MOZ_RAII AutoAvailableFloatRegister {
     compiler.assertFloatRegisterAvailable(reg);
 #endif
   }
+  AutoAvailableFloatRegister(const AutoAvailableFloatRegister&) = delete;
+  void operator=(const AutoAvailableFloatRegister&) = delete;
 
   FloatRegister get() const { return reg_; }
   operator FloatRegister() const { return reg_; }
@@ -1356,13 +1343,13 @@ class CacheIRStubInfo {
                "stubDataOffset must fit in uint8_t");
   }
 
-  CacheIRStubInfo(const CacheIRStubInfo&) = delete;
-  CacheIRStubInfo& operator=(const CacheIRStubInfo&) = delete;
-
  public:
   CacheKind kind() const { return kind_; }
   ICStubEngine engine() const { return engine_; }
   bool makesGCCalls() const { return makesGCCalls_; }
+
+  CacheIRStubInfo(const CacheIRStubInfo&) = delete;
+  CacheIRStubInfo& operator=(const CacheIRStubInfo&) = delete;
 
   const uint8_t* code() const {
     return reinterpret_cast<const uint8_t*>(this) + sizeof(CacheIRStubInfo);

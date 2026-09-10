@@ -11,22 +11,23 @@
 #ifndef P2P_DTLS_DTLS_TRANSPORT_INTERNAL_H_
 #define P2P_DTLS_DTLS_TRANSPORT_INTERNAL_H_
 
-#include <stddef.h>
-#include <stdint.h>
-
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <utility>
 
-#include "absl/base/attributes.h"
+#include "absl/functional/any_invocable.h"
 #include "absl/strings/string_view.h"
 #include "api/dtls_transport_interface.h"
 #include "api/rtc_error.h"
 #include "api/scoped_refptr.h"
+#include "api/task_queue/task_queue_base.h"
 #include "p2p/base/ice_transport_internal.h"
 #include "p2p/base/packet_transport_internal.h"
 #include "rtc_base/buffer.h"
 #include "rtc_base/callback_list.h"
+#include "rtc_base/checks.h"
 #include "rtc_base/rtc_certificate.h"
 #include "rtc_base/ssl_certificate.h"
 #include "rtc_base/ssl_stream_adapter.h"
@@ -64,6 +65,9 @@ class DtlsTransportInternal : public PacketTransportInternal {
 
   // Finds out which TLS/DTLS version is running.
   virtual bool GetSslVersionBytes(int* version) const = 0;
+  // Return the the ID of the group used by the adapters most recently
+  // completed handshake, or 0 if not applicable (e.g. before the handshake).
+  virtual uint16_t GetSslGroupId() const = 0;
   // Finds out which DTLS-SRTP cipher was negotiated.
   // TODO(zhihuang): Remove this once all dependencies implement this.
   virtual bool GetSrtpCryptoSuite(int* cipher) const = 0;
@@ -79,9 +83,6 @@ class DtlsTransportInternal : public PacketTransportInternal {
   // If not applicable, it returns zero.
   virtual uint16_t GetSslPeerSignatureAlgorithm() const = 0;
 
-  // Gets the local RTCCertificate used for DTLS.
-  virtual scoped_refptr<RTCCertificate> GetLocalCertificate() const = 0;
-
   virtual bool SetLocalCertificate(
       const scoped_refptr<RTCCertificate>& certificate) = 0;
 
@@ -89,14 +90,15 @@ class DtlsTransportInternal : public PacketTransportInternal {
   virtual std::unique_ptr<SSLCertChain> GetRemoteSSLCertChain() const = 0;
 
   // Allows key material to be extracted for external encryption.
-  virtual bool ExportSrtpKeyingMaterial(
+  virtual bool AppendSrtpKeyingMaterial(
       ZeroOnFreeBuffer<uint8_t>& keying_material) = 0;
 
-  // Set DTLS remote fingerprint. Must be after local identity set.
-  ABSL_DEPRECATED("Use SetRemoteParameters instead.")
-  virtual bool SetRemoteFingerprint(absl::string_view digest_alg,
-                                    const uint8_t* digest,
-                                    size_t digest_len) = 0;
+  // Older API. If not overridden in subclasses, will fail.
+  [[deprecated]] virtual bool ExportSrtpKeyingMaterial(
+      ZeroOnFreeBuffer<uint8_t>& keying_material) {
+    RTC_DCHECK_NOTREACHED() << "Superseded by AppendSrtpKeyingMaterial";
+    return false;
+  }
 
   // Set DTLS remote fingerprint and role. Must be after local identity set.
   virtual RTCError SetRemoteParameters(absl::string_view digest_alg,
@@ -104,15 +106,10 @@ class DtlsTransportInternal : public PacketTransportInternal {
                                        size_t digest_len,
                                        std::optional<SSLRole> role) = 0;
 
-  ABSL_DEPRECATED("Set the max version via construction.")
-  bool SetSslMaxProtocolVersion(SSLProtocolVersion /* version */) {
-    return true;
-  }
-
   // Expose the underneath IceTransport.
   virtual IceTransportInternal* ice_transport() = 0;
 
-  // F: void(DtlsTransportInternal*, const webrtc::DtlsTransportState)
+  // F: void(DtlsTransportInternal*, const DtlsTransportState)
   template <typename F>
   void SubscribeDtlsTransportState(F&& callback) {
     dtls_transport_state_callback_list_.AddReceiver(std::forward<F>(callback));
@@ -133,11 +130,24 @@ class DtlsTransportInternal : public PacketTransportInternal {
     dtls_transport_state_callback_list_.Send(transport, state);
   }
 
+  void SubscribeDtlsRoleChange(
+      absl::AnyInvocable<void(DtlsTransportInternal*, SSLRole)> callback) {
+    RTC_CHECK(!dtls_role_change_callback_);
+    dtls_role_change_callback_ = std::move(callback);
+  }
+  void SendDtlsRoleChange(DtlsTransportInternal* transport, SSLRole role) {
+    if (dtls_role_change_callback_) {
+      dtls_role_change_callback_(transport, role);
+    }
+  }
+
   // Emitted whenever the Dtls handshake failed on some transport channel.
-  // F: void(webrtc::SSLHandshakeError)
+  // F: void(SSLHandshakeError)
+
   template <typename F>
-  void SubscribeDtlsHandshakeError(F&& callback) {
-    dtls_handshake_error_callback_list_.AddReceiver(std::forward<F>(callback));
+  void SubscribeDtlsHandshakeError(void* tag, F&& callback) {
+    dtls_handshake_error_callback_list_.AddReceiver(tag,
+                                                    std::forward<F>(callback));
   }
 
   void SendDtlsHandshakeError(SSLHandshakeError error) {
@@ -145,25 +155,17 @@ class DtlsTransportInternal : public PacketTransportInternal {
   }
 
  protected:
-  DtlsTransportInternal();
+  explicit DtlsTransportInternal(TaskQueueBase* attached_queue = nullptr);
 
  private:
   CallbackList<const SSLHandshakeError> dtls_handshake_error_callback_list_;
   CallbackList<DtlsTransportInternal*, const DtlsTransportState>
       dtls_transport_state_callback_list_;
+  absl::AnyInvocable<void(DtlsTransportInternal*, SSLRole)>
+      dtls_role_change_callback_;
 };
 
 }  //  namespace webrtc
 
-// Re-export symbols from the webrtc namespace for backwards compatibility.
-// TODO(bugs.webrtc.org/4222596): Remove once all references are updated.
-#ifdef WEBRTC_ALLOW_DEPRECATED_NAMESPACES
-namespace cricket {
-using ::webrtc::DtlsTransportInternal;
-using ::webrtc::PacketFlags;
-using ::webrtc::PF_NORMAL;
-using ::webrtc::PF_SRTP_BYPASS;
-}  // namespace cricket
-#endif  // WEBRTC_ALLOW_DEPRECATED_NAMESPACES
 
 #endif  // P2P_DTLS_DTLS_TRANSPORT_INTERNAL_H_

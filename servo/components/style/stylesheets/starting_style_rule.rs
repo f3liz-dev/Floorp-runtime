@@ -5,15 +5,16 @@
 //! before-change style: the `@starting-style` rules.
 //! https://drafts.csswg.org/css-transitions-2/#defining-before-change-style
 
+use crate::derives::*;
 use crate::shared_lock::{DeepCloneWithLock, Locked};
 use crate::shared_lock::{SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
-use crate::str::CssStringWriter;
 use crate::stylesheets::CssRules;
 use cssparser::SourceLocation;
 #[cfg(feature = "gecko")]
 use malloc_size_of::{MallocSizeOfOps, MallocUnconditionalShallowSizeOf};
 use servo_arc::Arc;
 use std::fmt::{self, Debug, Write};
+use style_traits::CssStringWriter;
 
 /// A [`@starting-style`][starting-style] rule.
 ///
@@ -30,8 +31,8 @@ impl StartingStyleRule {
     /// Measure heap usage.
     #[cfg(feature = "gecko")]
     pub fn size_of(&self, guard: &SharedRwLockReadGuard, ops: &mut MallocSizeOfOps) -> usize {
-        self.rules.unconditional_shallow_size_of(ops) +
-            self.rules.read_with(guard).size_of(guard, ops)
+        self.rules.unconditional_shallow_size_of(ops)
+            + self.rules.read_with(guard).size_of(guard, ops)
     }
 }
 

@@ -1,11 +1,10 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/layers/WebRenderBridgeChild.h"
 
+#include "PDMFactory.h"
 #include "gfxPlatform.h"
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/layers/CompositableClient.h"
@@ -13,11 +12,10 @@
 #include "mozilla/layers/CompositorManagerChild.h"
 #include "mozilla/layers/ImageDataSerializer.h"
 #include "mozilla/layers/IpcResourceUpdateQueue.h"
-#include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/PTextureChild.h"
+#include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/webrender/WebRenderAPI.h"
-#include "PDMFactory.h"
 
 namespace mozilla {
 namespace layers {
@@ -31,7 +29,6 @@ WebRenderBridgeChild::WebRenderBridgeChild(const wr::PipelineId& aPipelineId)
       mResourceId(0),
       mPipelineId(aPipelineId),
       mManager(nullptr),
-      mIPCOpen(false),
       mDestroyed(false),
       mSentDisplayList(false),
       mFontKeysDeleted(0),
@@ -76,6 +73,16 @@ void WebRenderBridgeChild::AddWebRenderParentCommand(
   mParentCommands.AppendElement(aCmd);
 }
 
+void WebRenderBridgeChild::AddWebRenderParentDestroyCommand(
+    const WebRenderParentCommand& aCmd) {
+  mParentDestroyCommands.AppendElement(aCmd);
+}
+
+void WebRenderBridgeChild::MergeWebRenderParentCommands() {
+  mParentCommands.AppendElements(std::move(mParentDestroyCommands));
+  mParentDestroyCommands.Clear();
+}
+
 void WebRenderBridgeChild::BeginTransaction() {
   MOZ_ASSERT(!mDestroyed);
 
@@ -114,6 +121,9 @@ bool WebRenderBridgeChild::EndTransaction(
 
   TimeStamp fwdTime = TimeStamp::Now();
 
+  if (!aRenderOffscreen) {
+    MergeWebRenderParentCommands();
+  }
   aDisplayListData.mCommands = std::move(mParentCommands);
   aDisplayListData.mIdNamespace = mIdNamespace;
 
@@ -151,6 +161,7 @@ void WebRenderBridgeChild::EndEmptyTransaction(
   TimeStamp fwdTime = TimeStamp::Now();
 
   if (aTransactionData) {
+    MergeWebRenderParentCommands();
     aTransactionData->mCommands = std::move(mParentCommands);
   }
 
@@ -175,7 +186,8 @@ void WebRenderBridgeChild::EndEmptyTransaction(
 void WebRenderBridgeChild::ProcessWebRenderParentCommands() {
   MOZ_ASSERT(!mDestroyed);
 
-  if (!mParentCommands.IsEmpty()) {
+  if (HasWebRenderParentCommands()) {
+    MergeWebRenderParentCommands();
     this->SendParentCommands(mIdNamespace, mParentCommands);
     mParentCommands.Clear();
   }
@@ -190,7 +202,8 @@ void WebRenderBridgeChild::AddPipelineIdForCompositable(
 
 void WebRenderBridgeChild::RemovePipelineIdForCompositable(
     const wr::PipelineId& aPipelineId) {
-  AddWebRenderParentCommand(OpRemovePipelineIdForCompositable(aPipelineId));
+  AddWebRenderParentDestroyCommand(
+      OpRemovePipelineIdForCompositable(aPipelineId));
 }
 
 wr::ExternalImageId WebRenderBridgeChild::GetNextExternalImageId() {
@@ -201,7 +214,7 @@ wr::ExternalImageId WebRenderBridgeChild::GetNextExternalImageId() {
 }
 
 void WebRenderBridgeChild::ReleaseTextureOfImage(const wr::ImageKey& aKey) {
-  AddWebRenderParentCommand(OpReleaseTextureOfImage(aKey));
+  AddWebRenderParentDestroyCommand(OpReleaseTextureOfImage(aKey));
 }
 
 struct FontFileDataSink {
@@ -338,10 +351,10 @@ CompositorBridgeChild* WebRenderBridgeChild::GetCompositorBridgeChild() {
   if (!IPCOpen()) {
     return nullptr;
   }
-  return static_cast<CompositorBridgeChild*>(Manager());
+  return mozilla::ipc::ActorCast<CompositorBridgeChild>(Manager());
 }
 
-TextureForwarder* WebRenderBridgeChild::GetTextureForwarder() {
+RefPtr<TextureForwarder> WebRenderBridgeChild::GetTextureForwarder() {
   return static_cast<TextureForwarder*>(GetCompositorBridgeChild());
 }
 
@@ -412,7 +425,7 @@ void WebRenderBridgeChild::RemoveTextureFromCompositable(
     return;
   }
 
-  AddWebRenderParentCommand(CompositableOperation(
+  AddWebRenderParentDestroyCommand(CompositableOperation(
       aCompositable->GetIPCHandle(),
       OpRemoveTexture(WrapNotNull(aTexture->GetIPDLActor()))));
 }
@@ -516,7 +529,7 @@ ipc::IShmemAllocator* WebRenderBridgeChild::GetShmemAllocator() {
   if (!IPCOpen()) {
     return nullptr;
   }
-  return static_cast<CompositorBridgeChild*>(Manager());
+  return mozilla::ipc::ActorCast<CompositorBridgeChild>(Manager());
 }
 
 RefPtr<KnowsCompositor> WebRenderBridgeChild::GetForMedia() {
@@ -575,9 +588,8 @@ void WebRenderBridgeChild::DeallocResourceShmem(RefCountedShmem& aShm) {
 
 void WebRenderBridgeChild::Capture() { this->SendCapture(); }
 
-void WebRenderBridgeChild::StartCaptureSequence(const nsCString& aPath,
-                                                uint32_t aFlags) {
-  this->SendStartCaptureSequence(aPath, aFlags);
+void WebRenderBridgeChild::StartCaptureSequence(uint32_t aFlags) {
+  this->SendStartCaptureSequence(aFlags);
 }
 
 void WebRenderBridgeChild::StopCaptureSequence() {

@@ -1,12 +1,8 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/VRServiceTest.h"
-
-#include <type_traits>
 
 #include "VRManagerChild.h"
 #include "VRPuppetCommandBuffer.h"
@@ -40,7 +36,7 @@ bool ReadFloat32Array(T* aDestination, const Float32Array& aSource,
 };  // anonymous namespace
 
 VRMockDisplay::VRMockDisplay(VRServiceTest* aVRServiceTest)
-    : DOMEventTargetHelper(aVRServiceTest->GetOwnerGlobal()),
+    : DOMEventTargetHelper(aVRServiceTest->GetRelevantGlobal()),
       mVRServiceTest(aVRServiceTest) {}
 
 JSObject* VRMockDisplay::WrapObject(JSContext* aCx,
@@ -273,8 +269,8 @@ void VRMockDisplay::SetStageSize(double aWidth, double aHeight) {
 
 void VRMockDisplay::SetSittingToStandingTransform(
     const Float32Array& aTransform, ErrorResult& aRv) {
-  Unused << ReadFloat32Array(&DisplayState().sittingToStandingTransform,
-                             aTransform, aRv);
+  (void)ReadFloat32Array(&DisplayState().sittingToStandingTransform, aTransform,
+                         aRv);
 }
 
 void VRMockDisplay::SetPose(const Nullable<Float32Array>& aPosition,
@@ -341,7 +337,7 @@ NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(VRMockController,
 
 VRMockController::VRMockController(VRServiceTest* aVRServiceTest,
                                    uint32_t aControllerIdx)
-    : DOMEventTargetHelper(aVRServiceTest->GetOwnerGlobal()),
+    : DOMEventTargetHelper(aVRServiceTest->GetRelevantGlobal()),
       mVRServiceTest(aVRServiceTest),
       mControllerIdx(aControllerIdx) {
   MOZ_ASSERT(aControllerIdx < kVRControllerMaxCount);

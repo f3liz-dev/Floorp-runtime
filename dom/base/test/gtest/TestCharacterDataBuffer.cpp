@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -33,8 +32,8 @@ static already_AddRefed<Document> CreateHTMLDoc() {
                                         u""_ns,   // aQualifiedName
                                         nullptr,  // aDoctype
                                         uri, uri, principal,
-                                        false,    // aLoadedAsData
-                                        nullptr,  // aEventObject
+                                        LoadedAsData::No,  // aLoadedAsData
+                                        nullptr,           // aEventObject
                                         DocumentFlavor::HTML));
   MOZ_RELEASE_ASSERT(doc);
   return doc.forget();
@@ -50,7 +49,8 @@ struct TestData {
 
   friend std::ostream& operator<<(std::ostream& aStream,
                                   const TestData& aData) {
-    return aStream << "Scan \"" << aData.mScanData << "\" in \"" << aData.mData
+    return aStream << "Scan \"" << NS_ConvertUTF16toUTF8(aData.mScanData).get()
+                   << "\" in \"" << NS_ConvertUTF16toUTF8(aData.mData).get()
                    << "\" starting from " << aData.mStartOffset;
   }
 
@@ -511,6 +511,29 @@ TEST(CharacterDataBufferTest, RFindNonWhitespaceIn2b)
         testData.mOptions, testData.mOffset);
     EXPECT_EQ(ret, testData.mExpectedOffset) << testData;
   }
+}
+
+TEST(CharacterDataBufferTest, SafeAPIsChar1b)
+{
+  const RefPtr<Document> doc = CreateHTMLDoc();
+  const RefPtr<nsTextNode> textNode = doc->CreateTextNode(EmptyString());
+  MOZ_RELEASE_ASSERT(textNode);
+  const CharacterDataBuffer& characterDataBuffer = textNode->DataBuffer();
+
+  // Test empty data buffer.
+  EXPECT_EQ(characterDataBuffer.SafeFirstChar(), u'\0');
+  EXPECT_EQ(characterDataBuffer.SafeLastChar(), u'\0');
+  EXPECT_EQ(characterDataBuffer.SafeCharAt(100), u'\0');
+
+  // Test non-empty data buffer.
+  const char16_t* testStr = u"abcdef";
+  textNode->SetData(nsDependentString(testStr), IgnoreErrors());
+  MOZ_ASSERT(!characterDataBuffer.Is2b());
+
+  EXPECT_EQ(characterDataBuffer.SafeFirstChar(), u'a');
+  EXPECT_EQ(characterDataBuffer.SafeLastChar(), u'f');
+  EXPECT_EQ(characterDataBuffer.SafeCharAt(2), u'c');
+  EXPECT_EQ(characterDataBuffer.SafeCharAt(100), u'\0');
 }
 
 };  // namespace mozilla::dom

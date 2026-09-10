@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -63,7 +61,7 @@ nsISerialEventTarget* WorkletGlobalScope::SerialEventTarget() const {
 }
 
 nsresult WorkletGlobalScope::Dispatch(
-    already_AddRefed<nsIRunnable>&& aRunnable) const {
+    already_AddRefed<nsIRunnable> aRunnable) const {
   WorkletThread::AssertIsOnWorkletThread();
   return SerialEventTarget()->Dispatch(std::move(aRunnable));
 }
@@ -132,13 +130,15 @@ void WorkletGlobalScope::Dump(const Optional<nsAString>& aString) const {
 JS::RealmOptions WorkletGlobalScope::CreateRealmOptions() const {
   JS::RealmOptions options;
 
-  options.creationOptions().setForceUTC(
-      ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC));
+  if (ShouldResistFingerprinting(RFPTarget::JSDateTimeUTC)) {
+    nsCString timeZone = nsRFPService::GetSpoofedJSTimeZone();
+    options.behaviors().setTimeZoneOverride(timeZone.get());
+  }
   options.creationOptions().setAlwaysUseFdlibm(
       ShouldResistFingerprinting(RFPTarget::JSMathFdlibm));
   if (ShouldResistFingerprinting(RFPTarget::JSLocale)) {
     nsCString locale = nsRFPService::GetSpoofedJSLocale();
-    options.creationOptions().setLocaleCopyZ(locale.get());
+    options.behaviors().setLocaleOverride(locale.get());
   }
 
   // The SharedArrayBuffer global constructor property should not be present in

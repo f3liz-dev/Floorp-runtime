@@ -17,13 +17,13 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "absl/flags/flag.h"
 #include "absl/strings/string_view.h"
-#include "api/array_view.h"
 #include "api/numerics/samples_stats_counter.h"
 #include "api/rtp_packet_info.h"
 #include "api/test/metrics/metric.h"
@@ -33,7 +33,6 @@
 #include "api/units/timestamp.h"
 #include "api/video/encoded_image.h"
 #include "api/video/video_frame.h"
-#include "api/video_codecs/video_encoder.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/strings/string_builder.h"
@@ -51,9 +50,9 @@
 namespace webrtc {
 namespace {
 
-using ::webrtc::test::ImprovementDirection;
-using ::webrtc::test::Unit;
-using ::webrtc::webrtc_pc_e2e::MetricMetadataKey;
+using test::ImprovementDirection;
+using test::Unit;
+using webrtc_pc_e2e::MetricMetadataKey;
 
 constexpr int kBitsInByte = 8;
 constexpr absl::string_view kSkipRenderedFrameReasonProcessed = "processed";
@@ -132,15 +131,10 @@ std::optional<T> MaybeGetValue(const std::map<size_t, T>& map, size_t key) {
   return it->second;
 }
 
-SamplesStatsCounter::StatsSample StatsSample(double value,
-                                             Timestamp sampling_time) {
-  return SamplesStatsCounter::StatsSample{value, sampling_time};
-}
-
 }  // namespace
 
 DefaultVideoQualityAnalyzer::DefaultVideoQualityAnalyzer(
-    webrtc::Clock* clock,
+    Clock* clock,
     test::MetricsLogger* metrics_logger,
     DefaultVideoQualityAnalyzerOptions options)
     : options_(options),
@@ -156,7 +150,7 @@ DefaultVideoQualityAnalyzer::~DefaultVideoQualityAnalyzer() {
 }
 
 void DefaultVideoQualityAnalyzer::Start(std::string test_case_name,
-                                        ArrayView<const std::string> peer_names,
+                                        std::span<const std::string> peer_names,
                                         int max_threads_count) {
   test_label_ = std::move(test_case_name);
   frames_comparator_.Start(max_threads_count);
@@ -175,7 +169,7 @@ void DefaultVideoQualityAnalyzer::Start(std::string test_case_name,
 uint16_t DefaultVideoQualityAnalyzer::OnFrameCaptured(
     absl::string_view peer_name,
     const std::string& stream_label,
-    const webrtc::VideoFrame& frame) {
+    const VideoFrame& frame) {
   // `next_frame_id` is atomic, so we needn't lock here.
   Timestamp captured_time = Now();
   Timestamp start_time = Timestamp::MinusInfinity();
@@ -252,7 +246,8 @@ uint16_t DefaultVideoQualityAnalyzer::OnFrameCaptured(
         stream_frame_counters_.at(key).dropped++;
 
         analyzer_stats_.frames_in_flight_left_count.AddSample(
-            StatsSample(captured_frames_in_flight_.size(), Now()));
+            {.value = static_cast<double>(captured_frames_in_flight_.size()),
+             .time = Now()});
         frames_comparator_.AddComparison(
             InternalStatsKey(stream_index, peer_index, i),
             /*captured=*/std::nullopt,
@@ -282,15 +277,14 @@ uint16_t DefaultVideoQualityAnalyzer::OnFrameCaptured(
 
     if (options_.report_infra_metrics) {
       analyzer_stats_.on_frame_captured_processing_time_ms.AddSample(
-          (Now() - captured_time).ms<double>());
+          {.value = (Now() - captured_time).ms<double>(), .time = Now()});
     }
   }
   return frame_id;
 }
 
-void DefaultVideoQualityAnalyzer::OnFramePreEncode(
-    absl::string_view peer_name,
-    const webrtc::VideoFrame& frame) {
+void DefaultVideoQualityAnalyzer::OnFramePreEncode(absl::string_view peer_name,
+                                                   const VideoFrame& frame) {
   Timestamp processing_started = Now();
   MutexLock lock(&mutex_);
   RTC_CHECK_EQ(state_, State::kActive)
@@ -316,14 +310,14 @@ void DefaultVideoQualityAnalyzer::OnFramePreEncode(
 
   if (options_.report_infra_metrics) {
     analyzer_stats_.on_frame_pre_encode_processing_time_ms.AddSample(
-        (Now() - processing_started).ms<double>());
+        {.value = (Now() - processing_started).ms<double>(), .time = Now()});
   }
 }
 
 void DefaultVideoQualityAnalyzer::OnFrameEncoded(
     absl::string_view peer_name,
     uint16_t frame_id,
-    const webrtc::EncodedImage& encoded_image,
+    const EncodedImage& encoded_image,
     const EncoderStats& stats,
     bool discarded) {
   if (discarded)
@@ -380,26 +374,24 @@ void DefaultVideoQualityAnalyzer::OnFrameEncoded(
   size_t stream_index = encoded_image.SpatialIndex().value_or(
       encoded_image.SimulcastIndex().value_or(0));
   frame_in_flight.OnFrameEncoded(
-      now, time_between_encoded_frames, encoded_image._frameType,
+      now, time_between_encoded_frames, encoded_image.frame_type(),
       DataSize::Bytes(encoded_image.size()), stats.target_encode_bitrate,
       stream_index, stats.qp, used_encoder);
 
   if (options_.report_infra_metrics) {
     analyzer_stats_.on_frame_encoded_processing_time_ms.AddSample(
-        (Now() - processing_started).ms<double>());
+        {.value = (Now() - processing_started).ms<double>(), .time = Now()});
   }
 }
 
-void DefaultVideoQualityAnalyzer::OnFrameDropped(
-    absl::string_view peer_name,
-    webrtc::EncodedImageCallback::DropReason reason) {
+void DefaultVideoQualityAnalyzer::OnFrameDropped(absl::string_view peer_name) {
   // Here we do nothing, because we will see this drop on renderer side.
 }
 
 void DefaultVideoQualityAnalyzer::OnFramePreDecode(
     absl::string_view peer_name,
     uint16_t frame_id,
-    const webrtc::EncodedImage& input_image) {
+    const EncodedImage& input_image) {
   Timestamp processing_started = Now();
   MutexLock lock(&mutex_);
   RTC_CHECK_EQ(state_, State::kActive)
@@ -440,19 +432,18 @@ void DefaultVideoQualityAnalyzer::OnFramePreDecode(
   it->second.OnFramePreDecode(peer_index,
                               /*received_time=*/last_receive_time,
                               /*decode_start_time=*/Now(),
-                              input_image._frameType,
+                              input_image.frame_type(),
                               DataSize::Bytes(input_image.size()));
 
   if (options_.report_infra_metrics) {
     analyzer_stats_.on_frame_pre_decode_processing_time_ms.AddSample(
-        (Now() - processing_started).ms<double>());
+        {.value = (Now() - processing_started).ms<double>(), .time = Now()});
   }
 }
 
-void DefaultVideoQualityAnalyzer::OnFrameDecoded(
-    absl::string_view peer_name,
-    const webrtc::VideoFrame& frame,
-    const DecoderStats& stats) {
+void DefaultVideoQualityAnalyzer::OnFrameDecoded(absl::string_view peer_name,
+                                                 const VideoFrame& frame,
+                                                 const DecoderStats& stats) {
   Timestamp processing_started = Now();
   MutexLock lock(&mutex_);
   RTC_CHECK_EQ(state_, State::kActive)
@@ -492,13 +483,12 @@ void DefaultVideoQualityAnalyzer::OnFrameDecoded(
 
   if (options_.report_infra_metrics) {
     analyzer_stats_.on_frame_decoded_processing_time_ms.AddSample(
-        (Now() - processing_started).ms<double>());
+        {.value = (Now() - processing_started).ms<double>(), .time = Now()});
   }
 }
 
-void DefaultVideoQualityAnalyzer::OnFrameRendered(
-    absl::string_view peer_name,
-    const webrtc::VideoFrame& frame) {
+void DefaultVideoQualityAnalyzer::OnFrameRendered(absl::string_view peer_name,
+                                                  const VideoFrame& frame) {
   Timestamp processing_started = Now();
   MutexLock lock(&mutex_);
   RTC_CHECK_EQ(state_, State::kActive)
@@ -582,7 +572,8 @@ void DefaultVideoQualityAnalyzer::OnFrameRendered(
   state->SetLastRenderedFrameTime(peer_index,
                                   frame_in_flight->rendered_time(peer_index));
   analyzer_stats_.frames_in_flight_left_count.AddSample(
-      StatsSample(captured_frames_in_flight_.size(), Now()));
+      {.value = static_cast<double>(captured_frames_in_flight_.size()),
+       .time = Now()});
   frames_comparator_.AddComparison(
       stats_key, dropped_count, captured_frame, /*rendered=*/frame,
       FrameComparisonType::kRegular,
@@ -595,14 +586,13 @@ void DefaultVideoQualityAnalyzer::OnFrameRendered(
 
   if (options_.report_infra_metrics) {
     analyzer_stats_.on_frame_rendered_processing_time_ms.AddSample(
-        (Now() - processing_started).ms<double>());
+        {.value = (Now() - processing_started).ms<double>(), .time = Now()});
   }
 }
 
-void DefaultVideoQualityAnalyzer::OnEncoderError(
-    absl::string_view peer_name,
-    const webrtc::VideoFrame& frame,
-    int32_t error_code) {
+void DefaultVideoQualityAnalyzer::OnEncoderError(absl::string_view peer_name,
+                                                 const VideoFrame& frame,
+                                                 int32_t error_code) {
   RTC_LOG(LS_ERROR) << "Encoder error for frame.id=" << frame.id()
                     << ", code=" << error_code;
 }
@@ -652,7 +642,7 @@ void DefaultVideoQualityAnalyzer::OnDecoderError(absl::string_view peer_name,
 
   if (options_.report_infra_metrics) {
     analyzer_stats_.on_decoder_error_processing_time_ms.AddSample(
-        (Now() - processing_started).ms<double>());
+        {.value = (Now() - processing_started).ms<double>(), .time = Now()});
   }
 }
 
@@ -799,7 +789,8 @@ void DefaultVideoQualityAnalyzer::Stop() {
     // Add the amount of frames in flight to the analyzer stats before all left
     // frames in flight will be sent to the `frames_compartor_`.
     analyzer_stats_.frames_in_flight_left_count.AddSample(
-        StatsSample(captured_frames_in_flight_.size(), Now()));
+        {.value = static_cast<double>(captured_frames_in_flight_.size()),
+         .time = Now()});
 
     for (auto& state_entry : stream_states_) {
       const size_t stream_index = state_entry.first;
@@ -1067,7 +1058,8 @@ int DefaultVideoQualityAnalyzer::ProcessNotSeenFramesBeforeRendered(
       next_frame.MarkDropped(peer_index);
 
       analyzer_stats_.frames_in_flight_left_count.AddSample(
-          StatsSample(captured_frames_in_flight_.size(), Now()));
+          {.value = static_cast<double>(captured_frames_in_flight_.size()),
+           .time = Now()});
       frames_comparator_.AddComparison(stats_key, /*captured=*/std::nullopt,
                                        /*rendered=*/std::nullopt,
                                        FrameComparisonType::kDroppedFrame,

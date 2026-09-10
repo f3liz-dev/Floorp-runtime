@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -35,7 +33,7 @@ struct HandlerStats {
   nsCString lastValue2;
 };
 
-MOZ_CONSTINIT mozilla::UniquePtr<HandlerStats> gHandlerStats;
+constinit mozilla::UniquePtr<HandlerStats> gHandlerStats;
 
 void MaybeCreateHandlerStats() {
   if (!gHandlerStats) {
@@ -251,6 +249,14 @@ TEST(ServiceWorkerRegistrar, TestReadData)
   buffer.AppendLiteral("true\n");
   buffer.AppendInt(0);
   buffer.AppendLiteral("\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
   buffer.Append(SERVICEWORKERREGISTRAR_TERMINATOR "\n");
 
   buffer.AppendLiteral("\n");
@@ -269,6 +275,14 @@ TEST(ServiceWorkerRegistrar, TestReadData)
   buffer.AppendInt(1);
   buffer.AppendLiteral("\n");
   buffer.AppendLiteral("false\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
   buffer.AppendInt(0);
   buffer.AppendLiteral("\n");
   buffer.Append(SERVICEWORKERREGISTRAR_TERMINATOR "\n");
@@ -1010,6 +1024,7 @@ TEST(ServiceWorkerRegistrar, TestDedupeWrite)
       ServiceWorkerRegistrationData reg;
 
       reg.scope() = "https://scope_write.dedupe"_ns;
+      reg.type() = WorkerType::Classic;
       reg.currentWorkerURL() = nsPrintfCString("currentWorkerURL write %d", i);
       reg.currentWorkerHandlesFetch() = true;
       reg.cacheName() =
@@ -1096,6 +1111,14 @@ TEST(ServiceWorkerRegistrar, TestLoadHandler)
   buffer.AppendLiteral("hello world!\n");
   buffer.AppendLiteral("handler_test2\n");
   buffer.AppendLiteral("hello\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
+  buffer.AppendInt(0);
+  buffer.AppendLiteral("\n");
   buffer.Append(SERVICEWORKERREGISTRAR_TERMINATOR "\n");
 
   ASSERT_TRUE(CreateFile(buffer))

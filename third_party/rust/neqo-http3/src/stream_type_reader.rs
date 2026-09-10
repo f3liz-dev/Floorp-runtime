@@ -4,16 +4,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::cmp::min;
+use std::{cmp::min, time::Instant};
 
-use neqo_common::{qtrace, Decoder, IncrementalDecoderUint, Role};
+use neqo_common::{Decoder, IncrementalDecoderUint, Role, qtrace};
 use neqo_qpack::{decoder::QPACK_UNI_STREAM_TYPE_DECODER, encoder::QPACK_UNI_STREAM_TYPE_ENCODER};
 use neqo_transport::{Connection, StreamId, StreamType};
 
 use crate::{
-    control_stream_local::HTTP3_UNI_STREAM_TYPE_CONTROL,
-    frames::{hframe::HFrameType, reader::FrameDecoder, HFrame, H3_FRAME_TYPE_HEADERS},
     CloseType, Error, Http3StreamType, PushId, ReceiveOutput, RecvStream, Res, Stream,
+    control_stream_local::HTTP3_UNI_STREAM_TYPE_CONTROL,
+    frames::{HFrame, hframe::HFrameType, reader::FrameDecoder},
 };
 
 pub const HTTP3_UNI_STREAM_TYPE_PUSH: u64 = 0x1;
@@ -56,8 +56,11 @@ impl NewStreamType {
                 // The "stream_type" for a bidirectional stream is a frame type. We accept
                 // WEBTRANSPORT_STREAM (above), and HEADERS, and we have to ignore unknown types,
                 // but any other frame type is bad if we know about it.
-                if <HFrame as FrameDecoder<HFrame>>::is_known_type(HFrameType(stream_type))
-                    && HFrameType(stream_type) != H3_FRAME_TYPE_HEADERS
+                let frame_type = HFrameType(stream_type);
+                // This checks for reserved frame types here, which are not allowed.
+                <HFrame as FrameDecoder<HFrame>>::frame_type_allowed(frame_type)?;
+                if <HFrame as FrameDecoder<HFrame>>::is_known_type(frame_type)
+                    && frame_type != HFrameType::HEADERS
                 {
                     Err(Error::HttpFrame)
                 } else {
@@ -125,9 +128,8 @@ impl NewStreamHeadReader {
                     }
                 }
             }
-        } else {
-            Ok((None, false))
         }
+        Ok((None, false))
     }
 
     pub fn get_type(&mut self, conn: &mut Connection) -> Res<Option<NewStreamType>> {
@@ -230,7 +232,7 @@ impl RecvStream for NewStreamHeadReader {
         Ok(())
     }
 
-    fn receive(&mut self, conn: &mut Connection) -> Res<(ReceiveOutput, bool)> {
+    fn receive(&mut self, conn: &mut Connection, _now: Instant) -> Res<(ReceiveOutput, bool)> {
         let t = self.get_type(conn)?;
         Ok((
             t.map_or(ReceiveOutput::NoOutput, ReceiveOutput::NewStream),
@@ -240,6 +242,7 @@ impl RecvStream for NewStreamHeadReader {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use neqo_common::{Encoder, Role};
     use neqo_qpack::{
@@ -249,13 +252,12 @@ mod tests {
     use test_fixture::{connect, now};
 
     use super::{
-        NewStreamHeadReader, HTTP3_UNI_STREAM_TYPE_PUSH, WEBTRANSPORT_STREAM,
+        HTTP3_UNI_STREAM_TYPE_PUSH, NewStreamHeadReader, WEBTRANSPORT_STREAM,
         WEBTRANSPORT_UNI_STREAM,
     };
     use crate::{
-        control_stream_local::HTTP3_UNI_STREAM_TYPE_CONTROL,
-        frames::{H3_FRAME_TYPE_HEADERS, H3_FRAME_TYPE_SETTINGS},
         CloseType, Error, NewStreamType, PushId, ReceiveOutput, RecvStream as _, Res,
+        control_stream_local::HTTP3_UNI_STREAM_TYPE_CONTROL, frames::HFrameType,
     };
 
     struct Test {
@@ -296,7 +298,7 @@ mod tests {
                 let out = self.conn_s.process_output(now());
                 drop(self.conn_c.process(out.dgram(), now()));
                 assert_eq!(
-                    self.decoder.receive(&mut self.conn_c).unwrap(),
+                    self.decoder.receive(&mut self.conn_c, now()).unwrap(),
                     (ReceiveOutput::NoOutput, false)
                 );
                 assert!(!self.decoder.done());
@@ -309,7 +311,7 @@ mod tests {
             }
             let out = self.conn_s.process_output(now());
             drop(self.conn_c.process(out.dgram(), now()));
-            assert_eq!(&self.decoder.receive(&mut self.conn_c), outcome);
+            assert_eq!(&self.decoder.receive(&mut self.conn_c, now()), outcome);
             assert_eq!(self.decoder.done(), done);
         }
 
@@ -398,10 +400,10 @@ mod tests {
     fn decode_stream_http() {
         let mut t = Test::new(StreamType::BiDi, Role::Server);
         t.decode(
-            &[u64::from(H3_FRAME_TYPE_HEADERS)],
+            &[u64::from(HFrameType::HEADERS)],
             false,
             &Ok((
-                ReceiveOutput::NewStream(NewStreamType::Http(u64::from(H3_FRAME_TYPE_HEADERS))),
+                ReceiveOutput::NewStream(NewStreamType::Http(u64::from(HFrameType::HEADERS))),
                 true,
             )),
             true,
@@ -409,9 +411,9 @@ mod tests {
 
         let mut t = Test::new(StreamType::UniDi, Role::Server);
         t.decode(
-            &[u64::from(H3_FRAME_TYPE_HEADERS)], /* this is the same as a
-                                                  * HTTP3_UNI_STREAM_TYPE_PUSH which
-                                                  * is not aallowed on the server side. */
+            &[u64::from(HFrameType::HEADERS)], /* this is the same as a
+                                                * HTTP3_UNI_STREAM_TYPE_PUSH which
+                                                * is not aallowed on the server side. */
             false,
             &Err(Error::HttpStreamCreation),
             true,
@@ -419,7 +421,7 @@ mod tests {
 
         let mut t = Test::new(StreamType::BiDi, Role::Client);
         t.decode(
-            &[u64::from(H3_FRAME_TYPE_HEADERS)],
+            &[u64::from(HFrameType::HEADERS)],
             false,
             &Err(Error::HttpStreamCreation),
             true,
@@ -427,8 +429,8 @@ mod tests {
 
         let mut t = Test::new(StreamType::UniDi, Role::Client);
         t.decode(
-            &[u64::from(H3_FRAME_TYPE_HEADERS), 0xaaaa_aaaa], /* this is the same as a
-                                                               * HTTP3_UNI_STREAM_TYPE_PUSH */
+            &[u64::from(HFrameType::HEADERS), 0xaaaa_aaaa], /* this is the same as a
+                                                             * HTTP3_UNI_STREAM_TYPE_PUSH */
             false,
             &Ok((
                 ReceiveOutput::NewStream(NewStreamType::Push(PushId::new(0xaaaa_aaaa))),
@@ -439,11 +441,27 @@ mod tests {
 
         let mut t = Test::new(StreamType::BiDi, Role::Server);
         t.decode(
-            &[H3_FRAME_TYPE_SETTINGS.into()],
+            &[HFrameType::SETTINGS.into()],
             true,
             &Err(Error::HttpFrame),
             true,
         );
+    }
+
+    #[test]
+    fn decode_stream_reserved_frame_type() {
+        // A reserved (HTTP/2) frame type that starts a request stream is a connection error of
+        // type H3_FRAME_UNEXPECTED, the same as when it arrives as a later frame, rather than
+        // being discharged like an unknown type (RFC 9114, Sections 7.1 and 11.2.1).
+        for reserved in HFrameType::RESERVED {
+            let mut t = Test::new(StreamType::BiDi, Role::Server);
+            t.decode(
+                &[u64::from(*reserved)],
+                false,
+                &Err(Error::HttpFrameUnexpected),
+                true,
+            );
+        }
     }
 
     #[test]

@@ -155,7 +155,7 @@ var gTests = [
       await setTrackEnabled(false, false);
 
       // Wait for capture state to propagate to the UI asynchronously.
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_DISABLED,
@@ -174,7 +174,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setTrackEnabled(true);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_ENABLED,
@@ -193,7 +193,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setTrackEnabled(null, true);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_ENABLED,
@@ -245,16 +245,20 @@ var gTests = [
       // Clone audio and video, their state will be enabled
       await cloneTracks(true, true);
 
+      observerPromise = expectObserverCalled("recording-device-events", 2);
+
       // Disable both audio and video.
       await setTrackEnabled(false, false);
 
-      observerPromise = expectObserverCalled("recording-device-events", 2);
+      await observerPromise;
+
+      observerPromise = expectObserverCalled("recording-device-events");
 
       // Stop the clones. This should disable the sharing indicators.
       await stopClonedTracks(true, true);
 
       // Wait for capture state to propagate to the UI asynchronously.
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
             STATE_CAPTURE_DISABLED &&
@@ -275,7 +279,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setTrackEnabled(true);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_ENABLED,
@@ -294,7 +298,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setTrackEnabled(null, true);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_ENABLED,
@@ -354,7 +358,7 @@ var gTests = [
       await setTrackEnabled(null, false);
 
       // Wait for capture state to propagate to the UI asynchronously.
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.screen == "ScreenPaused",
         "screen should be disabled"
@@ -367,7 +371,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setTrackEnabled(null, true);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () => window.gPermissionPanel._sharingState.webRTC.screen == "Screen",
         "screen should be enabled"
       );
@@ -419,7 +423,7 @@ var gTests = [
       await setCameraMuted(true);
 
       // Wait for capture state to propagate to the UI asynchronously.
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_DISABLED,
@@ -440,7 +444,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setCameraMuted(false);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_ENABLED,
@@ -506,7 +510,7 @@ var gTests = [
       await setMicrophoneMuted(true);
 
       // Wait for capture state to propagate to the UI asynchronously.
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_DISABLED,
@@ -527,7 +531,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setMicrophoneMuted(false);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_ENABLED,
@@ -595,7 +599,7 @@ var gTests = [
       await setTrackEnabled(null, false);
 
       // Wait for capture state to propagate to the UI asynchronously.
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_DISABLED,
@@ -621,7 +625,7 @@ var gTests = [
       await setCameraMuted(true);
       await setTrackEnabled(false, null);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_DISABLED,
@@ -646,7 +650,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events", 2);
       await setTrackEnabled(true, true);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_ENABLED,
@@ -667,7 +671,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setCameraMuted(false);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_ENABLED,
@@ -693,7 +697,7 @@ var gTests = [
       await setCameraMuted(true);
       await setTrackEnabled(false, false);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_DISABLED,
@@ -719,7 +723,7 @@ var gTests = [
       await setCameraMuted(false);
       await setTrackEnabled(true, null);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_ENABLED,
@@ -744,7 +748,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setTrackEnabled(null, true);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_ENABLED,
@@ -812,7 +816,7 @@ var gTests = [
       await setTrackEnabled(false, null);
 
       // Wait for capture state to propagate to the UI asynchronously.
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_DISABLED,
@@ -838,7 +842,7 @@ var gTests = [
       await setMicrophoneMuted(true);
       await setTrackEnabled(null, false);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_DISABLED,
@@ -863,7 +867,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events", 2);
       await setTrackEnabled(true, true);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_ENABLED,
@@ -884,7 +888,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setMicrophoneMuted(false);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_ENABLED,
@@ -910,7 +914,7 @@ var gTests = [
       await setMicrophoneMuted(true);
       await setTrackEnabled(false, false);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_DISABLED,
@@ -936,7 +940,7 @@ var gTests = [
       await setMicrophoneMuted(false);
       await setTrackEnabled(null, true);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.camera ==
           STATE_CAPTURE_ENABLED,
@@ -961,7 +965,7 @@ var gTests = [
       observerPromise = expectObserverCalled("recording-device-events");
       await setTrackEnabled(true, null);
 
-      await BrowserTestUtils.waitForCondition(
+      await TestUtils.waitForCondition(
         () =>
           window.gPermissionPanel._sharingState.webRTC.microphone ==
           STATE_CAPTURE_ENABLED,

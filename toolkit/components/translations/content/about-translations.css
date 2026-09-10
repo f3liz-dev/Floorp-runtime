@@ -2,176 +2,317 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
 :root {
+  --AT-viewport-padding: 24px;
+  --AT-page-padding-block-start: 80px;
+  --AT-page-padding-block-end: 32px;
+
   /* Provide defaults for when this page is viewed in "toolkit". */
   background-color: var(--background-color-canvas, #fff);
   color: var(--text-color, #15141a);
 
-  /* Provide backup values for some of the variables used in "browser" so that the styles
-     look nice by default in "toolkit". */
-  --AT-box-background: var(--background-color-box);
-  --AT-box-border-color: var(--in-content-box-border-color, #9e9ea0);
-  --AT-box-info-background: var(--in-content-box-info-background, #f0f0f4);
-
   /* Variables used in the page layout */
-  --AT-page-margin: 20px;
-  --AT-input-padding: 20px;
+  --AT-input-padding: 16px;
   /* This is somewhat arbitrary, but works well for the current design. If the computed
      header height changes, this will need to be adjusted. */
   --AT-header-height: 156px;
-  --AT-input-height: calc(min(400px, calc(100vh - var(--AT-header-height))));
-  --AT-select-arrow-inset: 5px;
+
+  --AT-section-height: calc(clamp(300px, 100vh - var(--AT-header-height), 300px) - var(--AT-viewport-padding) * 2);
+
+  --AT-content-width: calc(var(--AT-section-height) * 4.5);
+  --AT-content-max: calc(100vw - var(--AT-viewport-padding) * 2);
+
+  --AT-square-button-large: calc(var(--size-item-large) + var(--space-small));
+  --AT-square-button-small: var(--size-item-large);
+  --AT-source-textarea-button-inline-padding: calc(var(--AT-square-button-small) + var(--space-small) + var(--space-xsmall));
+  --AT-target-textarea-button-block-padding: calc(var(--AT-square-button-large) + var(--space-small));
 }
 
 body {
   display: flex;
-  justify-content: center;
-  align-items: center;
-  inset: 0;
-  position: absolute;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: flex-start;
   visibility: hidden;
+  margin: 0;
+  row-gap: var(--space-xxlarge);
+  padding: var(--AT-page-padding-block-start) var(--AT-viewport-padding) var(--AT-page-padding-block-end);
+}
+
+#about-translations-header {
+  display: flex;
   flex-direction: column;
-}
-
-.about-translations-header {
-  display: grid;
-  grid-template-columns: 1fr max-content 1fr;
-  gap: var(--space-small);
-  padding: var(--space-xsmall);
-}
-
-/* Increase the selector specificity to override the base `select` styles. */
-select.about-translations-select {
-  position: relative;
-  padding-inline: 10px 20px;
-  padding-block: 0;
-  min-width: 50%;
-  width: max-content;
-  margin: 5px;
-  background-position: right var(--AT-select-arrow-inset) center;
-}
-
-select#language-to {
-  justify-self: end;
-}
-
-.language-swap-icon {
-  width: 20px;
-  height: 20px;
-  background-image: url("chrome://global/skin/icons/arrows-updown.svg");
-  background-size: contain;
+  width: min(var(--AT-content-width), var(--AT-content-max));
   margin: 0 auto;
-  -moz-context-properties: fill;
-  fill: currentColor;
-  transform: rotateY(180deg) rotateZ(90deg);
+  row-gap: var(--space-medium);
+  align-items: flex-start;
+  justify-content: flex-start;
 }
 
-select.about-translations-select:dir(rtl) {
-  background-position-x: left var(--AT-select-arrow-inset);
+#about-translations-logo-and-h1 {
+  display: flex;
+  align-items: center;
+  justify-content: start;
+  column-gap: var(--space-small);
 }
 
-.about-translations-contents {
+#about-translations-logo {
+  width: var(--icon-size-large);
+  height: var(--icon-size-large);
+}
+
+#about-translations-h1 {
+  margin: 0;
+}
+
+#about-translations-main-user-interface {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: var(--space-medium);
+  width: min(var(--AT-content-width), var(--AT-content-max));
+  margin: 0 auto;
+}
+
+#about-translations-main-user-interface[hidden] {
+  display: none;
+}
+
+.about-translations-select {
+  --select-min-height: var(--AT-square-button-large);
+}
+
+#about-translations-swap-languages-button {
+  align-self: center;
+
+  &[type~="icon"]::part(button) {
+    width: var(--AT-square-button-large);
+    height: var(--AT-square-button-large);
+    background-image: url("chrome://global/skin/icons/swap-horizontal-20.svg");
+    background-size: 20px;
+  }
+}
+
+#about-translations-clear-button[type~="icon"]::part(button) {
+  width: var(--AT-square-button-small);
+  height: var(--AT-square-button-small);
+  background-image: url("chrome://global/skin/icons/close.svg");
+  background-size: var(--size-item-small);
+}
+
+#about-translations-source-section,
+#about-translations-target-section {
+  position: relative;
   display: flex;
   flex-direction: column;
-  box-sizing: border-box;
-  width: calc(100% - var(--AT-page-margin) * 2);
-  max-width: 1200px;
-  background-color: var(--AT-box-background);
-  border: 1px solid var(--AT-box-border-color);
-  border-radius: 4px;
-}
-
-.about-translations-input {
-  display: flex;
   width: 100%;
-  border-top: 1px solid var(--AT-box-border-color);
+  min-height: var(--AT-section-height);
 }
 
-.about-translations-input-start {
-  border-inline-end: 1px solid var(--AT-box-border-color);
+#about-translations-source-section {
+  background-color: var(--background-color-box);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-medium);
+  overflow: hidden;
+
+  &:focus-within {
+    outline: var(--focus-outline);
+    outline-offset: -1px;
+  }
+
+  /* Small subtree and predates lint */
+  /* stylelint-disable-next-line stylelint-plugin-mozilla/no-has-selector */
+  &:has(moz-button:focus, a:focus) {
+    outline: none;
+  }
 }
 
-.about-translations-input > * {
-  position: relative;
-  width: 50%;
+#about-translations-target-section {
+  background-color: var(--background-color-box);
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-medium);
+  overflow: hidden;
+
+  &:focus-within {
+    outline: var(--focus-outline);
+    outline-offset: -1px;
+  }
+
+  /* Small subtree and predates lint */
+  /* stylelint-disable-next-line stylelint-plugin-mozilla/no-has-selector */
+  &:has(moz-button:focus) {
+    outline: none;
+  }
+
+  &.has-translation-error > #about-translations-target-textarea {
+    visibility: hidden;
+  }
 }
 
-.about-translations-input-textarea {
-  /* Override user's dragging of the textarea width. */
-  width: 100% !important;
-  height: var(--AT-input-height);
-  box-sizing: border-box;
+#about-translations-translation-error-message {
+  --message-bar-border-radius: 0;
+  --message-bar-border-width: 0;
+  padding-inline: var(--space-xsmall);
+  border-block-end: var(--border-width) solid var(--border-color);
+}
+
+.about-translations-section-message {
+  --message-bar-border-radius: 0;
+  --message-bar-border-width: 0;
+  padding-inline: var(--space-xsmall);
+  border-block-end: var(--border-width) solid var(--border-color);
+}
+
+.about-translations-section-message-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  row-gap: var(--space-large);
+}
+
+.about-translations-section-message-subtext {
+  display: block;
+}
+
+.about-translations-section-message-action {
+  align-self: flex-start;
+}
+
+#about-translations-translation-error-subtext {
+  display: block;
+}
+
+#about-translations-translation-error-button {
+  margin-block-start: var(--space-large);
+}
+
+.about-translations-textarea {
+  flex: 1;
+  width: 100%;
   margin: 0;
   padding: var(--AT-input-padding);
-  border: 0;
+  overflow: hidden;
+  resize: none;
 }
 
-.about-translations-input-results-blank {
-  opacity: 0.7;
+#about-translations-source-textarea {
+  anchor-name: --AT-source-textarea-anchor;
+  border: none;
+  border-radius: 0;
+  background-color: transparent;
+  padding-inline-start: var(--AT-input-padding);
+  padding-inline-end: var(--AT-source-textarea-button-inline-padding);
+
+  &:focus-visible {
+    outline: none;
+  }
+
+  :dir(ltr) > &:dir(rtl),
+  :dir(rtl) > &:dir(ltr) {
+    /*
+      Reverse the side that reserves space for the anchored clear button
+      when locale direction differs from textarea direction.
+    */
+    padding-inline-start: var(--AT-source-textarea-button-inline-padding);
+    padding-inline-end: var(--AT-input-padding);
+  }
 }
 
-.about-translations-input-results {
+#about-translations-clear-button {
   position: absolute;
-  inset: 0;
-  padding: var(--AT-input-padding);
-  box-sizing: border-box;
-  overflow-y: scroll;
+  z-index: 1;
+  position-anchor: --AT-source-textarea-anchor;
+  inset-block-start: calc(anchor(top) + var(--space-small));
+  inset-inline-end: calc(anchor(end) + var(--space-small));
+
+  &:focus-visible {
+    outline: none;
+  }
 }
 
-.about-translations-info {
-  display: none;
-  padding: 10px;
-  background-color: var(--AT-box-info-background);
-  border-radius: 4px;
-  margin-bottom: var(--AT-input-padding);
+#about-translations-target-textarea {
+  anchor-name: --AT-target-textarea-anchor;
+  border: none;
+  border-radius: 0;
+  background-color: transparent;
+  padding-block-end: var(--AT-target-textarea-button-block-padding);
+
+  &:focus-visible {
+    outline: none;
+  }
 }
 
-.about-translations-info-message {
-  flex: 1;
-  align-self: center;
+#about-translations-copy-button {
+  position: absolute;
+  z-index: 1;
+  position-anchor: --AT-target-textarea-anchor;
+  inset-block-end: calc(anchor(end) + var(--space-small));
+  inset-inline-start: calc(anchor(start) + var(--space-small));
+
+  &:focus-visible {
+    outline: none;
+  }
 }
 
-.about-translations-info-icon {
-  width: 16px;
-  height: 16px;
-  margin: 10px;
-  background-image: url("chrome://global/skin/icons/info.svg");
-  -moz-context-properties: fill;
-  fill: currentColor;
+#about-translations-copy-button::part(button) {
+  padding-inline: var(--space-small);
 }
 
-@media (max-width: 700px) {
+#about-translations-empty-section {
+  width: auto;
+  height: auto;
+}
+
+@media (max-width: 1200px) {
   :root {
-    --AT-page-margin: 10px;
+    --AT-page-padding-block-start: 32px;
   }
-  h1 {
-    margin-top: 15px;
-  }
-  body {
-    padding-bottom: var(--AT-page-margin);
-  }
-  .about-translations-input {
-    flex-direction: column;
-    flex: 1;
-  }
-  .about-translations-input-textarea,
-  .about-translations-input {
-    font-size: 16px;
-  }
-  .about-translations-input > * {
+
+  #about-translations-main-user-interface {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    grid-template-rows: auto auto auto;
+    margin: 0;
     width: 100%;
-    flex: 1;
+    gap: var(--space-medium);
+    max-width: calc(100vw - var(--AT-viewport-padding) * 2);
   }
-  .about-translations-input-end {
-    border-top: 1px solid var(--AT-box-border-color);
-  }
-  .about-translations-input-textarea {
-    height: 100%;
-  }
-  .about-translations-contents {
-    flex: 1;
-  }
-  select.about-translations-select {
+
+  #about-translations-header {
+    margin: 0;
     width: 100%;
+    max-width: calc(100vw - var(--AT-viewport-padding) * 2);
+  }
+
+  #about-translations-source-select {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  #about-translations-swap-languages-button {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  #about-translations-target-select {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  #about-translations-empty-section {
+    display: none;
+  }
+
+  #about-translations-source-section {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  #about-translations-target-section {
+    grid-column: 1 / -1;
+    grid-row: 3;
   }
 }

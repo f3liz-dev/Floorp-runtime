@@ -5,7 +5,6 @@
 package mozilla.components.support.ktx.android.content
 
 import android.app.Activity
-import android.app.Application
 import android.content.Context
 import android.content.ContextWrapper
 import android.view.Window
@@ -32,10 +31,8 @@ class ContextKtTest {
 
     @Before
     fun setUp() {
-        accessibilityManager = shadowOf(
-            testContext
-                .getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager,
-        )
+        accessibilityManager =
+            shadowOf(testContext.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager)
     }
 
     @Test

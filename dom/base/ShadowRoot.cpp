@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,6 +5,7 @@
 #include "mozilla/dom/ShadowRoot.h"
 
 #include "ChildIterator.h"
+#include "mozilla/DeclarationBlock.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/GlobalStyleSheetCache.h"
 #include "mozilla/IdentifierMapEntry.h"
@@ -15,9 +14,14 @@
 #include "mozilla/ScopeExit.h"
 #include "mozilla/ServoBindings.h"
 #include "mozilla/ServoStyleRuleMap.h"
+#include "mozilla/ServoStyleSet.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StyleSheet.h"
+#include "mozilla/css/Rule.h"
 #include "mozilla/dom/BindContext.h"
+#include "mozilla/dom/CustomElementRegistry.h"
 #include "mozilla/dom/DirectionalityUtils.h"
+#include "mozilla/dom/DocumentBinding.h"
 #include "mozilla/dom/DocumentFragment.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ElementBinding.h"
@@ -55,22 +59,25 @@ NS_INTERFACE_MAP_END_INHERITING(DocumentFragment)
 NS_IMPL_ADDREF_INHERITED(ShadowRoot, DocumentFragment)
 NS_IMPL_RELEASE_INHERITED(ShadowRoot, DocumentFragment)
 
+/* Part of https://dom.spec.whatwg.org/#concept-attach-a-shadow-root step 5 */
 ShadowRoot::ShadowRoot(Element* aElement, ShadowRootMode aMode,
                        Element::DelegatesFocus aDelegatesFocus,
                        SlotAssignmentMode aSlotAssignment,
                        IsClonable aIsClonable, IsSerializable aIsSerializable,
                        Declarative aDeclarative,
-                       already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo)
-    : DocumentFragment(std::move(aNodeInfo)),
-      DocumentOrShadowRoot(this),
-      mMode(aMode),
-      mDelegatesFocus(aDelegatesFocus),
-      mSlotAssignment(aSlotAssignment),
-      mIsDetailsShadowTree(aElement->IsHTMLElement(nsGkAtoms::details)),
-      mIsAvailableToElementInternals(false),
-      mIsDeclarative(aDeclarative),
-      mIsClonable(aIsClonable),
-      mIsSerializable(aIsSerializable) {
+                       CustomSlotDispatch aCustomSlotDispatch,
+                       const Maybe<RefPtr<CustomElementRegistry>> aRegistry,
+                       already_AddRefed<mozilla::dom::NodeInfo> aNodeInfo)
+    : DocumentFragment(std::move(aNodeInfo)), DocumentOrShadowRoot(this) {
+  if (StaticPrefs::dom_scoped_custom_element_registries_enabled() &&
+      aRegistry.isSome()) {
+    if (*aRegistry) {
+      SetCustomElementRegistry(*aRegistry);
+    } else {
+      SetNullCustomElementRegistry();
+    }
+  }
+
   // nsINode.h relies on this.
   MOZ_ASSERT(static_cast<nsINode*>(this) == reinterpret_cast<nsINode*>(this));
   MOZ_ASSERT(static_cast<nsIContent*>(this) ==
@@ -78,12 +85,29 @@ ShadowRoot::ShadowRoot(Element* aElement, ShadowRootMode aMode,
 
   SetHost(aElement);
 
-  // Nodes in a shadow tree should never store a value
-  // in the subtree root pointer, nodes in the shadow tree
-  // track the subtree root using GetContainingShadow().
-  ClearSubtreeRootPointer();
-
-  SetFlags(NODE_IS_IN_SHADOW_TREE);
+  uint32_t flags = NODE_IS_IN_SHADOW_TREE;
+  if (aMode == ShadowRootMode::Closed) {
+    flags |= SHADOW_ROOT_MODE_CLOSED;
+  }
+  if (aDelegatesFocus == Element::DelegatesFocus::Yes) {
+    flags |= SHADOW_ROOT_DELEGATES_FOCUS;
+  }
+  if (aSlotAssignment == SlotAssignmentMode::Manual) {
+    flags |= SHADOW_ROOT_SLOT_ASSIGNMENT_MANUAL;
+  }
+  if (aDeclarative == Declarative::Yes) {
+    flags |= SHADOW_ROOT_IS_DECLARATIVE;
+  }
+  if (aIsClonable == IsClonable::Yes) {
+    flags |= SHADOW_ROOT_IS_CLONABLE;
+  }
+  if (aIsSerializable == IsSerializable::Yes) {
+    flags |= SHADOW_ROOT_IS_SERIALIZABLE;
+  }
+  if (aCustomSlotDispatch == CustomSlotDispatch::Yes) {
+    flags |= SHADOW_ROOT_HAS_CUSTOM_SLOT_DISPATCH;
+  }
+  SetFlags(flags);
   if (Host()->IsInNativeAnonymousSubtree()) {
     // NOTE(emilio): We could consider just propagating the
     // IN_NATIVE_ANONYMOUS_SUBTREE flag (not making this an anonymous root), but
@@ -96,21 +120,20 @@ ShadowRoot::ShadowRoot(Element* aElement, ShadowRootMode aMode,
     SetIsNativeAnonymousRoot();
   }
   Bind();
-
-  ExtendedDOMSlots()->mContainingShadow = this;
 }
 
 ShadowRoot::~ShadowRoot() {
   if (IsInComposedDoc()) {
     OwnerDoc()->RemoveComposedDocShadowRoot(*this);
   }
-
   MOZ_DIAGNOSTIC_ASSERT(!OwnerDoc()->IsComposedDocShadowRoot(*this));
 
-  UnsetFlags(NODE_IS_IN_SHADOW_TREE);
+  if (StaticPrefs::dom_scoped_custom_element_registries_enabled() &&
+      GetCustomElementRegistryState() == CustomElementRegistryState::Scoped) {
+    CustomElementRegistry::RemoveScopedRegistry(*this);
+  }
 
-  // nsINode destructor expects mSubtreeRoot == this.
-  SetSubtreeRootPointer(this);
+  DocumentOrShadowRoot::Unlink(this);
 }
 
 MOZ_DEFINE_MALLOC_SIZE_OF(ShadowRootAuthorStylesMallocSizeOf)
@@ -151,6 +174,15 @@ void ShadowRoot::CloneInternalDataFrom(ShadowRoot* aOther) {
   }
 
   CloneAdoptedSheetsFrom(*aOther);
+
+  // Clone built-in stylesheets that aren't associated to any node.
+  // Node-associated stylesheets get inserted when the node is cloned.
+  for (const auto& sheet : aOther->mStyleSheets) {
+    if (!sheet->GetOwnerNode()) [[unlikely]] {
+      RefPtr clone = sheet->Clone(nullptr, nullptr);
+      AppendStyleSheet(*clone);
+    }
+  }
 }
 
 nsresult ShadowRoot::Bind() {
@@ -177,12 +209,11 @@ nsresult ShadowRoot::Bind() {
 }
 
 void ShadowRoot::Unbind() {
+  UnbindContext context(*this, /* aBatchState = */ nullptr);
   if (IsInComposedDoc()) {
     SetIsConnected(false);
     OwnerDoc()->RemoveComposedDocShadowRoot(*this);
   }
-
-  UnbindContext context(*this);
   for (nsIContent* child = GetFirstChild(); child;
        child = child->GetNextSibling()) {
     child->UnbindFromTree(context);
@@ -205,15 +236,11 @@ void ShadowRoot::Unattach() {
 
 void ShadowRoot::InvalidateStyleAndLayoutOnSubtree(Element* aElement) {
   MOZ_ASSERT(aElement);
-  Document* doc = GetComposedDoc();
+  Document* doc = aElement->GetComposedDoc();
   if (!doc) {
-    return;
-  }
-
-  if (!aElement->IsInComposedDoc()) {
-    // If RemoveSlot is called from UnbindFromTree while we're moving
-    // (moveBefore) the slot elsewhere, invalidating styles and layout tree
-    // is done explicitly elsewhere.
+    // If not potentially in the flat tree, we don't need to invalidate, really.
+    // For tricky cases like moveBefore, invalidating styles and layout tree
+    // is done explicitly elsewhere as well.
     return;
   }
 
@@ -257,18 +284,17 @@ void ShadowRoot::AddSlot(HTMLSlotElement* aSlot) {
 
   InvalidateStyleAndLayoutOnSubtree(aSlot);
 
-  HTMLSlotElement* oldSlot = currentSlots->SafeElementAt(1);
+  HTMLSlotElement* oldSlot = currentSlots.SafeElementAt(1, nullptr);
   if (SlotAssignment() == SlotAssignmentMode::Named) {
     if (oldSlot) {
       MOZ_DIAGNOSTIC_ASSERT(oldSlot != aSlot);
 
       // Move assigned nodes from old slot to new slot.
       InvalidateStyleAndLayoutOnSubtree(oldSlot);
-      const nsTArray<RefPtr<nsINode>>& assignedNodes = oldSlot->AssignedNodes();
       bool doEnqueueSlotChange = false;
-      while (assignedNodes.Length() > 0) {
-        nsINode* assignedNode = assignedNodes[0];
-
+      auto assignedNodes =
+          ToTArray<AutoTArray<nsINode*, 8>>(oldSlot->AssignedNodes());
+      for (nsINode* assignedNode : assignedNodes) {
         oldSlot->RemoveAssignedNode(*assignedNode->AsContent());
         aSlot->AppendAssignedNode(*assignedNode->AsContent());
         doEnqueueSlotChange = true;
@@ -283,9 +309,12 @@ void ShadowRoot::AddSlot(HTMLSlotElement* aSlot) {
       // Otherwise add appropriate nodes to this slot from the host.
       for (nsIContent* child = GetHost()->GetFirstChild(); child;
            child = child->GetNextSibling()) {
+        if (!child->IsSlotable()) {
+          continue;
+        }
         nsAutoString slotName;
         GetSlotNameFor(*child, slotName);
-        if (!child->IsSlotable() || !slotName.Equals(name)) {
+        if (!slotName.Equals(name)) {
           continue;
         }
         doEnqueueSlotChange = true;
@@ -325,11 +354,11 @@ void ShadowRoot::RemoveSlot(HTMLSlotElement* aSlot) {
   MOZ_ASSERT(mSlotMap.Get(name));
 
   SlotArray& currentSlots = *mSlotMap.Get(name);
-  MOZ_DIAGNOSTIC_ASSERT(currentSlots->Contains(aSlot),
+  MOZ_DIAGNOSTIC_ASSERT(currentSlots.Contains(aSlot),
                         "Slot to de-register wasn't found?");
-  if (currentSlots->Length() == 1) {
+  if (currentSlots.Length() == 1) {
     MOZ_ASSERT_IF(SlotAssignment() == SlotAssignmentMode::Named,
-                  currentSlots->ElementAt(0) == aSlot);
+                  currentSlots.ElementAt(0) == aSlot);
 
     InvalidateStyleAndLayoutOnSubtree(aSlot);
 
@@ -349,7 +378,7 @@ void ShadowRoot::RemoveSlot(HTMLSlotElement* aSlot) {
     }
   }
 
-  const bool wasFirstSlot = currentSlots->ElementAt(0) == aSlot;
+  const bool wasFirstSlot = currentSlots.ElementAt(0) == aSlot;
   currentSlots.RemoveElement(*aSlot);
   if (!wasFirstSlot || SlotAssignment() == SlotAssignmentMode::Manual) {
     return;
@@ -358,16 +387,15 @@ void ShadowRoot::RemoveSlot(HTMLSlotElement* aSlot) {
   // Move assigned nodes from removed slot to the next slot in
   // tree order with the same name.
   InvalidateStyleAndLayoutOnSubtree(aSlot);
-  HTMLSlotElement* replacementSlot = currentSlots->ElementAt(0);
-  const nsTArray<RefPtr<nsINode>>& assignedNodes = aSlot->AssignedNodes();
+  HTMLSlotElement* replacementSlot = currentSlots.ElementAt(0);
+  auto assignedNodes =
+      ToTArray<AutoTArray<nsINode*, 8>>(aSlot->AssignedNodes());
   if (assignedNodes.IsEmpty()) {
     return;
   }
 
   InvalidateStyleAndLayoutOnSubtree(replacementSlot);
-  while (!assignedNodes.IsEmpty()) {
-    nsINode* assignedNode = assignedNodes[0];
-
+  for (auto* assignedNode : assignedNodes) {
     aSlot->RemoveAssignedNode(*assignedNode->AsContent());
     replacementSlot->AppendAssignedNode(*assignedNode->AsContent());
   }
@@ -409,12 +437,15 @@ void ShadowRoot::RuleRemoved(StyleSheet& aSheet, css::Rule& aRule) {
   ApplicableRulesChanged();
 }
 
-void ShadowRoot::RuleChanged(StyleSheet& aSheet, css::Rule*,
-                             const StyleRuleChange&) {
+void ShadowRoot::RuleChanged(StyleSheet& aSheet, css::Rule* aRule,
+                             const StyleRuleChange& aChange) {
   if (!aSheet.IsApplicable()) {
     return;
   }
-
+  if (mStyleRuleMap && aChange.mOldBlock != aChange.mNewBlock) {
+    mStyleRuleMap->RuleDeclarationsChanged(*aRule, aChange.mOldBlock,
+                                           aChange.mNewBlock);
+  }
   MOZ_ASSERT(mServoStyles);
   Servo_AuthorStyles_ForceDirty(mServoStyles.get());
   ApplicableRulesChanged();
@@ -553,8 +584,10 @@ void ShadowRoot::AppendBuiltInStyleSheet(BuiltInStyleSheet aSheet) {
   // NOTE(emilio): It's important to Clone() the stylesheet to avoid leaking,
   // since the built-in sheet is kept alive forever, and AppendStyleSheet will
   // set the associated global of the stylesheet.
-  RefPtr sheet = cache->BuiltInSheet(aSheet)->Clone(nullptr, nullptr);
-  AppendStyleSheet(*sheet);
+  if (auto* builtin = cache->GetBuiltInSheet(aSheet)) [[likely]] {
+    RefPtr sheet = builtin->Clone(nullptr, nullptr);
+    AppendStyleSheet(*sheet);
+  }
 }
 
 void ShadowRoot::RemoveSheetFromStyles(StyleSheet& aSheet) {
@@ -621,17 +654,12 @@ void ShadowRoot::GetEventTargetParent(EventChainPreVisitor& aVisitor) {
 
 void ShadowRoot::GetSlotNameFor(const nsIContent& aContent,
                                 nsAString& aName) const {
-  if (mIsDetailsShadowTree) {
-    const auto* summary = HTMLSummaryElement::FromNode(aContent);
-    if (summary && summary->IsMainSummary()) {
-      aName.AssignLiteral("internal-main-summary");
+  if (HasCustomSlotDispatch()) {
+    if (auto* host = GetHost()) {
+      host->GetSlotNameFor(*this, aContent, aName);
     }
-    // Otherwise use the default slot.
     return;
   }
-
-  // Note that if slot attribute is missing, assign it to the first default
-  // slot, if exists.
   if (const Element* element = Element::FromNode(aContent)) {
     element->GetAttr(nsGkAtoms::slot, aName);
   }
@@ -647,6 +675,9 @@ ShadowRoot::SlotInsertionPoint ShadowRoot::SlotInsertionPointFor(
       return {};
     }
   } else {
+    if (!HasSlots()) {
+      return {};
+    }
     nsAutoString slotName;
     GetSlotNameFor(aContent, slotName);
 
@@ -654,7 +685,7 @@ ShadowRoot::SlotInsertionPoint ShadowRoot::SlotInsertionPointFor(
     if (!slots) {
       return {};
     }
-    slot = (*slots)->ElementAt(0);
+    slot = (*slots).ElementAt(0);
   }
 
   MOZ_ASSERT(slot);
@@ -686,7 +717,7 @@ ShadowRoot::SlotInsertionPoint ShadowRoot::SlotInsertionPointFor(
       return {slot, Some(index)};
     }
   } else {
-    const nsTArray<RefPtr<nsINode>>& assignedNodes = slot->AssignedNodes();
+    const Span assignedNodes = slot->AssignedNodes();
     nsIContent* currentContent = GetHost()->GetFirstChild();
     for (uint32_t i = 0; i < assignedNodes.Length(); i++) {
       // Seek through the host's explicit children until the
@@ -753,29 +784,6 @@ void ShadowRoot::MaybeReassignContent(nsIContent& aElementOrText) {
   }
 }
 
-void ShadowRoot::MaybeReassignMainSummary(SummaryChangeReason aReason) {
-  MOZ_ASSERT(mIsDetailsShadowTree);
-  if (aReason == SummaryChangeReason::Insertion) {
-    // We've inserted a summary element, may need to remove the existing one.
-    SlotArray* array = mSlotMap.Get(u"internal-main-summary"_ns);
-    MOZ_RELEASE_ASSERT(array && (*array)->Length() == 1);
-    HTMLSlotElement* slot = (*array)->ElementAt(0);
-    auto* summary = HTMLSummaryElement::FromNodeOrNull(
-        slot->AssignedNodes().SafeElementAt(0));
-    if (summary) {
-      MaybeReassignContent(*summary);
-    }
-  } else if (MOZ_LIKELY(GetHost())) {
-    // We need to null-check GetHost() in case we're unlinking already.
-    auto* details = HTMLDetailsElement::FromNode(Host());
-    MOZ_DIAGNOSTIC_ASSERT(details);
-    // We've removed a summary element, we may need to assign the new one.
-    if (HTMLSummaryElement* newMainSummary = details->GetFirstSummary()) {
-      MaybeReassignContent(*newMainSummary);
-    }
-  }
-}
-
 Element* ShadowRoot::GetActiveElement() {
   return GetRetargetedFocusedElement();
 }
@@ -790,7 +798,9 @@ nsINode* ShadowRoot::ImportNodeAndAppendChildAt(nsINode& aParentNode,
     return nullptr;
   }
 
-  RefPtr<nsINode> node = OwnerDoc()->ImportNode(aNode, aDeep, rv);
+  BooleanOrImportNodeOptions options;
+  options.SetAsBoolean() = aDeep;
+  RefPtr<nsINode> node = OwnerDoc()->ImportNode(aNode, options, rv);
   if (rv.Failed()) {
     return nullptr;
   }
@@ -836,16 +846,21 @@ void ShadowRoot::MaybeUnslotHostChild(nsIContent& aChild) {
     InvalidateStyleAndLayoutOnSubtree(slot);
   }
 
-  slot->RemoveAssignedNode(aChild);
   slot->EnqueueSlotChangeEvent();
-
-  if (mIsDetailsShadowTree && aChild.IsHTMLElement(nsGkAtoms::summary)) {
-    MaybeReassignMainSummary(SummaryChangeReason::Deletion);
+  slot->RemoveAssignedNode(aChild);
+  if (HasCustomSlotDispatch()) {
+    if (auto* host = GetHost()) {
+      host->OnChildUnslotted(*this, aChild);
+    }
   }
 }
 
 void ShadowRoot::MaybeSlotHostChild(nsIContent& aChild) {
   MOZ_ASSERT(aChild.GetParent() == GetHost());
+  if (!HasSlots()) {
+    return;
+  }
+
   // Check to ensure that the child not an anonymous subtree root because even
   // though its parent could be the host it may not be in the host's child
   // list.
@@ -857,8 +872,10 @@ void ShadowRoot::MaybeSlotHostChild(nsIContent& aChild) {
     return;
   }
 
-  if (mIsDetailsShadowTree && aChild.IsHTMLElement(nsGkAtoms::summary)) {
-    MaybeReassignMainSummary(SummaryChangeReason::Insertion);
+  if (HasCustomSlotDispatch()) {
+    if (auto* host = GetHost()) {
+      host->OnChildBeforeSlotted(*this, aChild);
+    }
   }
 
   SlotInsertionPoint assignment = SlotInsertionPointFor(aChild);
@@ -899,6 +916,7 @@ void ShadowRoot::SetHTML(const nsAString& aHTML, const SetHTMLOptions& aOptions,
   nsContentUtils::SetHTML(this, host, aHTML, aOptions, aError);
 }
 
+/* https://html.spec.whatwg.org/#dom-shadowroot-sethtmlunsafe */
 void ShadowRoot::SetHTMLUnsafe(const TrustedHTMLOrString& aHTML,
                                const SetHTMLUnsafeOptions& aOptions,
                                nsIPrincipal* aSubjectPrincipal,
@@ -935,4 +953,113 @@ void ShadowRoot::GetHTML(const GetHTMLOptions& aOptions, nsAString& aResult) {
   nsContentUtils::SerializeNodeToMarkup<SerializeShadowRoots::Yes>(
       this, true, aResult, aOptions.mSerializableShadowRoots,
       aOptions.mShadowRoots);
+}
+
+// static
+bool ShadowRoot::ReferenceTargetIDTargetChanged(Element* aOldElement,
+                                                Element* aNewElement,
+                                                void* aData) {
+  ShadowRoot* shadowRoot = static_cast<ShadowRoot*>(aData);
+  if (aOldElement) {
+    aOldElement->RemoveReferenceTargetChangeObserver(
+        RecursiveReferenceTargetChanged, shadowRoot);
+  }
+  if (aNewElement) {
+    aNewElement->AddReferenceTargetChangeObserver(
+        RecursiveReferenceTargetChanged, shadowRoot);
+  }
+  shadowRoot->NotifyReferenceTargetChangedObservers();
+  return true;
+}
+
+// static
+bool ShadowRoot::RecursiveReferenceTargetChanged(void* aData) {
+  ShadowRoot* shadowRoot = static_cast<ShadowRoot*>(aData);
+  shadowRoot->NotifyReferenceTargetChangedObservers();
+  return true;
+}
+
+void ShadowRoot::SetReferenceTarget(RefPtr<nsAtom> aTarget) {
+  if (!StaticPrefs::dom_shadowdom_referenceTarget_enabled()) {
+    return;
+  }
+
+  if (aTarget == mReferenceTarget) {
+    return;
+  }
+
+  if (mReferenceTarget) {
+    RemoveIDTargetObserver(mReferenceTarget, ReferenceTargetIDTargetChanged,
+                           this, false);
+    if (Element* oldElement = GetReferenceTargetElement()) {
+      oldElement->RemoveReferenceTargetChangeObserver(
+          RecursiveReferenceTargetChanged, this);
+    }
+  }
+
+  if (!aTarget) {
+    mReferenceTarget = nullptr;
+  } else {
+    mReferenceTarget = std::move(aTarget);
+
+    Element* referenceTargetElement = AddIDTargetObserver(
+        mReferenceTarget, ReferenceTargetIDTargetChanged, this, false);
+    if (referenceTargetElement) {
+      referenceTargetElement->AddReferenceTargetChangeObserver(
+          RecursiveReferenceTargetChanged, this);
+    }
+  }
+
+  NotifyReferenceTargetChangedObservers();
+}
+
+void ShadowRoot::NotifyReferenceTargetChangedObservers() {
+  Element* host = GetHost();
+  if (!host) {
+    return;
+  }
+  host->NotifyReferenceTargetChanged();
+}
+
+void ShadowRoot::SetCustomElementRegistry(CustomElementRegistry* aRegistry) {
+  MOZ_ASSERT(StaticPrefs::dom_scoped_custom_element_registries_enabled());
+  MOZ_ASSERT(aRegistry,
+             "We shouldn't be setting a null custom element "
+             "registry via this method");
+  // If a scoped registry is already assigned, we can't override it.
+  MOZ_ASSERT(
+      GetCustomElementRegistryState() != CustomElementRegistryState::Scoped,
+      "We shouldn't override an already assigned scoped registry");
+  if (aRegistry->IsScoped()) {
+    SetCustomElementRegistryState(CustomElementRegistryState::Scoped);
+    CustomElementRegistry::SetScopedRegistry(*this, *aRegistry);
+    // https://html.spec.whatwg.org/#scoped-document-set
+    // Append shadow root's node document to the registry's scoped document set.
+    aRegistry->AddToScopedDocumentSet(OwnerDoc());
+  } else {
+    MOZ_ASSERT(aRegistry == OwnerDoc()->GetCustomElementRegistry(),
+               "Tried to set a global registry different to docs");
+    SetCustomElementRegistryState(CustomElementRegistryState::Global);
+  }
+}
+
+/* https://dom.spec.whatwg.org/#shadowroot-custom-element-registry */
+CustomElementRegistry* ShadowRoot::GetCustomElementRegistry() const {
+  MOZ_ASSERT(StaticPrefs::dom_scoped_custom_element_registries_enabled());
+  switch (GetCustomElementRegistryState()) {
+    case CustomElementRegistryState::Global:
+      if (Document* doc = OwnerDoc()) {
+        return doc->GetEffectiveGlobalCustomElementRegistry();
+      }
+      return nullptr;
+    case CustomElementRegistryState::Null:
+      return nullptr;
+    case CustomElementRegistryState::Scoped: {
+      RefPtr<CustomElementRegistry> registry =
+          CustomElementRegistry::GetScopedRegistry(*this);
+      return registry;
+    }
+  }
+  MOZ_ASSERT_UNREACHABLE("Invalid CustomElementRegistryState");
+  return nullptr;
 }

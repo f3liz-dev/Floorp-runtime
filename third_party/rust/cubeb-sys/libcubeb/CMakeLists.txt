@@ -1,7 +1,7 @@
 # TODO
 # - backend selection via command line, rather than simply detecting headers.
 
-cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.19 FATAL_ERROR)
 cmake_policy(SET CMP0091 NEW)
 project(cubeb
   VERSION 0.0.0)
@@ -475,9 +475,16 @@ add_custom_target(clang-format-check
     ${CMAKE_CURRENT_SOURCE_DIR}/test
     -type f (-name "*.cpp" -o -name "*.c" -o -name "*.h")
     -not -path "*/subprojects/speex/*"
+    -not -path "*/src/cubeb-coreaudio-rs/*"
+    -not -path "*/src/cubeb-pulse-rs/*"
     -print0
   | xargs -0 ${CLANG_FORMAT_BINARY} -Werror -n
   COMMENT "Check formatting with clang-format"
+  VERBATIM)
+
+add_custom_target(clang-format
+  COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/scripts/run-clang-format.sh ${CMAKE_CURRENT_SOURCE_DIR} ${CLANG_FORMAT_BINARY}
+  COMMENT "Formatting C and C++ with clang-format"
   VERBATIM)
 
 

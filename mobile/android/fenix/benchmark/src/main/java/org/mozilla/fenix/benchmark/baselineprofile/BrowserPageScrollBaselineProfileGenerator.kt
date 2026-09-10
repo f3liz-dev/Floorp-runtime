@@ -4,8 +4,6 @@
 
 package org.mozilla.fenix.benchmark.baselineprofile
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.benchmark.macro.junit4.BaselineProfileRule
@@ -13,9 +11,11 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.mozilla.fenix.benchmark.utils.HtmlAsset
+import org.mozilla.fenix.benchmark.utils.MockWebServerRule
 import org.mozilla.fenix.benchmark.utils.TARGET_PACKAGE
-import org.mozilla.fenix.benchmark.utils.flingToBeginning
-import org.mozilla.fenix.benchmark.utils.flingToEnd
+import org.mozilla.fenix.benchmark.utils.browserPageScrollJourney
+import org.mozilla.fenix.benchmark.utils.url
 
 /**
  * This test class generates a baseline profile on a critical user journey, that scrolls on some web
@@ -23,8 +23,6 @@ import org.mozilla.fenix.benchmark.utils.flingToEnd
  *
  * Refer to the [baseline profile documentation](https://d.android.com/topic/performance/baselineprofiles)
  * for more information.
- *
- * Make sure `autosignReleaseWithDebugKey=true` is present in local.properties.
  *
  * Generate the baseline profile using this gradle task:
  * ```
@@ -50,26 +48,16 @@ class BrowserPageScrollBaselineProfileGenerator {
     @get:Rule
     val rule = BaselineProfileRule()
 
+    @get:Rule
+    val mockRule = MockWebServerRule()
+
     @Test
     fun generateBaselineProfile() {
         rule.collect(
             packageName = TARGET_PACKAGE,
+            maxIterations = baselineProfileMaxIterations(),
         ) {
-            val intent = Intent(Intent.ACTION_VIEW)
-            intent.data = Uri.parse("https://www.mozilla.org/credits/")
-            intent.setPackage(packageName)
-
-            startActivityAndWait(intent = intent)
-
-            device.flingToEnd(
-                scrollableId = "$packageName:id/engineView",
-                maxSwipes = 1,
-            )
-
-            device.flingToBeginning(
-                scrollableId = "$packageName:id/engineView",
-                maxSwipes = 1,
-            )
+            browserPageScrollJourney(url = mockRule.url(HtmlAsset.LONG))
         }
     }
 }

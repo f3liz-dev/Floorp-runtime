@@ -21,9 +21,9 @@
  */
 
 const IGNORED_URLS = ["debugger eval code", "XStringBundle"];
-const IGNORED_EXTENSIONS = ["css", "svg", "png"];
+const IGNORED_EXTENSIONS = ["svg", "png"];
 import { getRawSourceURL } from "../utils/source";
-import { prefs } from "../utils/prefs";
+import { prefs, features } from "../utils/prefs";
 import { getDisplayURL } from "../utils/sources-tree/getURL";
 
 import TargetCommand from "resource://devtools/shared/commands/target/target-command.js";
@@ -32,6 +32,11 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   BinarySearch: "resource://gre/modules/BinarySearch.sys.mjs",
 });
+
+// Allow css if the stylesheetsInDebugger pref is enabled
+if (!features.stylesheetsInDebugger) {
+  IGNORED_EXTENSIONS.push("css");
+}
 
 export function initialSourcesTreeState({
   isWebExtension,
@@ -501,7 +506,8 @@ function addSource(threadItems, source, sourceActor) {
 }
 /**
  * Find all the source items in tree
- * @param {Object} item - Current item node in the tree
+ *
+ * @param {object} item - Current item node in the tree
  * @param {Function} callback
  */
 function findSourceInThreadItem(source, threadItem) {
@@ -617,7 +623,7 @@ export function sortThreads(a, b) {
  *
  * @param {GroupItem} groupItem
  *        The Group Item for the group where the path should be displayed.
- * @param {String} path
+ * @param {string} path
  *        Path of the directory for which we want a Directory Item.
  * @return {GroupItem|DirectoryItem}
  *        The parent Item where this path should be inserted.
@@ -767,8 +773,8 @@ function createSourceTreeItem(source, sourceActor, parent) {
  * Update `expanded` and `focusedItem` so that we show and focus
  * the new selected source.
  *
- * @param {Object} state
- * @param {Object} selectedLocation
+ * @param {object} state
+ * @param {object} selectedLocation
  *        The new location being selected.
  */
 function updateSelectedLocation(state, selectedLocation) {
@@ -794,8 +800,8 @@ function updateSelectedLocation(state, selectedLocation) {
 /**
  * Get the SourceItem displayed in the SourceTree for the currently selected location.
  *
- * @param {Object} state
- * @param {Object} selectedLocation
+ * @param {object} state
+ * @param {object} selectedLocation
  * @return {SourceItem}
  *        The directory source item where the given source is displayed.
  */
@@ -807,15 +813,22 @@ function getSourceItemForSelectedLocation(state, selectedLocation) {
     return null;
   }
 
-  // In the SourceTree, we never show the pretty printed sources and only
-  // the minified version, so if we are selecting a pretty file, fake selecting
-  // the minified version by looking up for the minified URL instead of the pretty one.
+  // In case of pretty printed sources, we want to find the minified version in the SourceTree.
+  // See details below
   const sourceUrl = getRawSourceURL(source.url);
 
   const { displayURL } = source;
   function findSourceInItem(item, path) {
     if (item.type == "source") {
-      if (item.source.url == sourceUrl) {
+      // In the SourceTree, we never show the pretty printed sources and only
+      // the minified versions, so if we are selecting a pretty file, fake selecting
+      // the minified version by looking up for the minified URL instead of the pretty one.
+      if (source.isPrettyPrinted && item.source.url == sourceUrl) {
+        return item;
+      }
+      // Lets also make sure to handle unique sources which have the same URL
+      // (e.g. link to same external style sheet within the HTML page)
+      if (item.source.url == sourceUrl && item.source.id == source.id) {
         return item;
       }
       return null;

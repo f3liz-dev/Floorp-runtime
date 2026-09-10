@@ -15,8 +15,9 @@
 
 #include <mach/mach_time.h>
 #include <cmath>
+#include <span>
 
-#include "api/array_view.h"
+#include "api/environment/environment.h"
 #include "api/task_queue/pending_task_safety_flag.h"
 #include "helpers.h"
 #include "modules/audio_device/fine_audio_buffer.h"
@@ -24,8 +25,6 @@
 #include "rtc_base/logging.h"
 #include "rtc_base/thread.h"
 #include "rtc_base/thread_annotations.h"
-#include "rtc_base/time_utils.h"
-#include "system_wrappers/include/field_trial.h"
 #include "system_wrappers/include/metrics.h"
 
 #import "base/RTCLogging.h"
@@ -33,6 +32,7 @@
 #import "components/audio/RTCAudioSession.h"
 #import "components/audio/RTCAudioSessionConfiguration.h"
 #import "components/audio/RTCNativeAudioSessionDelegateAdapter.h"
+#import "helpers/AudioTimeStamp+Nanoseconds.h"
 
 namespace webrtc {
 namespace ios_adm {
@@ -96,10 +96,12 @@ static void LogDeviceInfo() {
 #endif  // !defined(NDEBUG)
 
 AudioDeviceIOS::AudioDeviceIOS(
+    const Environment& env,
     bool bypass_voice_processing,
     AudioDeviceModule::MutedSpeechEventHandler muted_speech_event_handler,
     AudioDeviceIOSRenderErrorHandler render_error_handler)
-    : bypass_voice_processing_(bypass_voice_processing),
+    : env_(env),
+      bypass_voice_processing_(bypass_voice_processing),
       muted_speech_event_handler_(muted_speech_event_handler),
       render_error_handler_(render_error_handler),
       disregard_next_render_error_(false),
@@ -128,9 +130,6 @@ AudioDeviceIOS::AudioDeviceIOS(
 
   audio_session_observer_ =
       [[RTCNativeAudioSessionDelegateAdapter alloc] initWithObserver:this];
-  mach_timebase_info_data_t tinfo;
-  mach_timebase_info(&tinfo);
-  machTickUnitsToNanoseconds_ = (double)tinfo.numer / tinfo.denom;
 }
 
 AudioDeviceIOS::~AudioDeviceIOS() {
@@ -415,8 +414,8 @@ OSStatus AudioDeviceIOS::OnDeliverRecordedData(
   // Get audio timestamp for the audio.
   // The timestamp will not have NTP time epoch, but that will be addressed by
   // the TimeStampAligner in AudioDeviceBuffer::SetRecordedBuffer().
-  SInt64 capture_timestamp_ns =
-      time_stamp->mHostTime * machTickUnitsToNanoseconds_;
+  std::optional<int64_t> capture_timestamp_ns =
+      AudioTimeStampGetNanoseconds(time_stamp);
 
   // Allocate AudioBuffers to be used as storage for the received audio.
   // The AudioBufferList structure works as a placeholder for the
@@ -484,7 +483,7 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   // If so, we have an indication of a glitch in the output audio since the
   // core audio layer will most likely run dry in this state.
   ++num_playout_callbacks_;
-  const int64_t now_time = webrtc::TimeMillis();
+  const int64_t now_time = env_.clock().TimeInMilliseconds();
   if (time_stamp->mSampleTime != num_frames) {
     const int64_t delta_time = now_time - last_playout_time_;
     const int glitch_threshold =
@@ -531,8 +530,8 @@ OSStatus AudioDeviceIOS::OnGetPlayoutData(AudioUnitRenderActionFlags* flags,
   // the native I/O audio unit) and copy the result to the audio buffer in the
   // `io_data` destination.
   fine_audio_buffer_->GetPlayoutData(
-      webrtc::ArrayView<int16_t>(static_cast<int16_t*>(audio_buffer->mData),
-                                 num_frames),
+      std::span<int16_t>(static_cast<int16_t*>(audio_buffer->mData),
+                         num_frames),
       playout_delay_ms);
 
   last_hw_output_latency_update_sample_count_ += num_frames;
@@ -579,7 +578,7 @@ void AudioDeviceIOS::HandleInterruptionEnd() {
          is_interrupted_);
   is_interrupted_ = false;
   if (!audio_unit_) return;
-  if (webrtc::field_trial::IsEnabled("WebRTC-Audio-iOS-Holding")) {
+  if (env_.field_trials().IsEnabled("WebRTC-Audio-iOS-Holding")) {
     // Work around an issue where audio does not restart properly after an
     // interruption by restarting the audio unit when the interruption ends.
     if (audio_unit_->GetState() == VoiceProcessingAudioUnit::kStarted) {
@@ -688,9 +687,9 @@ void AudioDeviceIOS::HandleSampleRateChange() {
   if (restart_audio_unit) {
     OSStatus result = audio_unit_->Start();
     if (result != noErr) {
-      RTC_OBJC_TYPE(RTCAudioSession)* session =
+      RTC_OBJC_TYPE(RTCAudioSession)* new_session =
           [RTC_OBJC_TYPE(RTCAudioSession) sharedInstance];
-      [session notifyAudioUnitStartFailedWithError:result];
+      [new_session notifyAudioUnitStartFailedWithError:result];
       RTCLogError(@"Failed to start audio unit with sample rate: %d, reason %d",
                   playout_parameters_.sample_rate(),
                   result);
@@ -711,7 +710,8 @@ void AudioDeviceIOS::HandlePlayoutGlitchDetected(uint64_t glitch_duration_ms) {
   // Avoid doing glitch detection for two seconds after a volume change
   // has been detected to reduce the risk of false alarm.
   if (last_output_volume_change_time_ > 0 &&
-      webrtc::TimeSince(last_output_volume_change_time_) < 2000) {
+      env_.clock().TimeInMilliseconds() - last_output_volume_change_time_ <
+          2000) {
     RTCLog(@"Ignoring audio glitch due to recent output volume change.");
     return;
   }
@@ -734,7 +734,7 @@ void AudioDeviceIOS::HandleOutputVolumeChange() {
   RTCLog(@"Output volume change detected.");
   // Store time of this detection so it can be used to defer detection of
   // glitches too close in time to this event.
-  last_output_volume_change_time_ = webrtc::TimeMillis();
+  last_output_volume_change_time_ = env_.clock().TimeInMilliseconds();
 }
 
 void AudioDeviceIOS::UpdateAudioDeviceBuffer() {

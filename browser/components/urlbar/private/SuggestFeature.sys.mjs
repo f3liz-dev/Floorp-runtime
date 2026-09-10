@@ -7,9 +7,9 @@
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
-  QuickSuggest: "resource:///modules/QuickSuggest.sys.mjs",
-  UrlbarPrefs: "resource:///modules/UrlbarPrefs.sys.mjs",
-  UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
+  QuickSuggest: "moz-src:///browser/components/urlbar/QuickSuggest.sys.mjs",
+  UrlbarPrefs: "moz-src:///browser/components/urlbar/UrlbarPrefs.sys.mjs",
+  UrlbarShared: "chrome://browser/content/urlbar/UrlbarShared.mjs",
 });
 
 /**
@@ -55,8 +55,8 @@ export class SuggestFeature {
    *   include the feature's `featureGate` pref.
    *
    *   These prefs should control this feature specifically, so they should
-   *   never include `suggest.quicksuggest.sponsored` or
-   *   `suggest.quicksuggest.nonsponsored`. If the feature has no such prefs,
+   *   never include `suggest.quicksuggest.all` or
+   *   `suggest.quicksuggest.sponsored`. If the feature has no such prefs,
    *   this getter should return an empty array.
    */
   get primaryUserControlledPreferences() {
@@ -88,12 +88,12 @@ export class SuggestFeature {
   // Methods not designed for overriding below
 
   /**
-   * @returns {ConsoleInstance}
+   * @returns {Console}
    *   The feature's logger.
    */
   get logger() {
     if (!this._logger) {
-      this._logger = lazy.UrlbarUtils.getLogger({
+      this._logger = lazy.UrlbarShared.getLogger({
         prefix: `QuickSuggest.${this.name}`,
       });
     }
@@ -242,6 +242,36 @@ export class SuggestProvider extends SuggestFeature {
   }
 
   /**
+   * Gets the list of commands that should be shown in the result menu for a
+   * given result from the provider. All commands returned by this method should
+   * be handled by implementing `onEngagement()` with the possible exception of
+   * commands automatically handled by the urlbar, like "help".
+   *
+   * @param {UrlbarResult} _result
+   *   The result to get menu commands for.
+   * @returns {?UrlbarResultCommand[]}
+   */
+  getResultCommands(_result) {
+    return undefined;
+  }
+
+  /**
+   * Whether the "show less frequently" result-menu command should still be
+   * offered. Subclasses that support the command override this.
+   *
+   * @returns {boolean}
+   */
+  get canShowLessFrequently() {
+    return false;
+  }
+
+  /**
+   * Bumps the count backing `canShowLessFrequently`. Subclasses that support the
+   * "show less frequently" command override this.
+   */
+  incrementShowLessFrequentlyCount() {}
+
+  /**
    * The subclass should override this method if it manages any sponsored
    * suggestion types. It should return true if the given suggestion should be
    * considered sponsored.
@@ -305,7 +335,7 @@ export class SuggestProvider extends SuggestFeature {
    *   The user-interaction state. See `UrlbarProvider.onImpression()`.
    * @param {UrlbarQueryContext} queryContext
    *   The urlbar session's query context.
-   * @param {UrlbarController} controller
+   * @param {UrlbarParentController} controller
    *   The controller.
    * @param {Array} featureResults
    *   The feature's results that were visible at the end of the session. This
@@ -322,7 +352,7 @@ export class SuggestProvider extends SuggestFeature {
    *
    * @param {UrlbarQueryContext} queryContext
    *   The urlbar session's query context.
-   * @param {UrlbarController} controller
+   * @param {UrlbarParentController} controller
    *   The controller.
    * @param {object|null} details
    *   See `UrlbarProvider.onEngagement()`.
@@ -354,6 +384,28 @@ export class SuggestProvider extends SuggestFeature {
   }
 
   // Methods not designed for overriding below
+
+  /**
+   * Handles the shared "show less frequently" result-menu command: acknowledges
+   * the feedback, increments the provider's count, and once the cap is reached
+   * refreshes the result's baked menu commands so the command is dropped from
+   * the still-open view. Subclasses call this from `onEngagement()`.
+   *
+   * @param {UrlbarParentController} controller
+   *   The engagement's controller.
+   * @param {UrlbarResult} result
+   *   The result the command acted on.
+   */
+  handleShowLessFrequently(controller, result) {
+    controller.view.acknowledgeFeedback(result);
+    this.incrementShowLessFrequentlyCount();
+    if (!this.canShowLessFrequently) {
+      controller.view.updateResultMenuCommands(
+        result.id,
+        this.getResultCommands(result)
+      );
+    }
+  }
 
   /**
    * Enables or disables the feature. If the feature manages any Rust suggestion
@@ -410,7 +462,7 @@ export class SuggestBackend extends SuggestFeature {
    *
    * @param {UrlbarQueryContext} queryContext
    *    The query context.
-   * @param {UrlbarController} controller
+   * @param {UrlbarParentController} controller
    *    The controller.
    * @param {object} details
    *    Details object.

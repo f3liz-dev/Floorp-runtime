@@ -21,6 +21,7 @@ use serde_json::Value as JsonValue;
 
 use glean::net;
 use glean::ConfigurationBuilder;
+use glean_core::TestGetValue;
 
 pub mod metrics {
     #![allow(non_upper_case_globals)]
@@ -55,6 +56,7 @@ pub mod metrics {
                     lifetime: Lifetime::Ping,
                     disabled: false,
                     dynamic_label: None,
+                    ..Default::default()
                 },
                 TimeUnit::Millisecond,
             )
@@ -70,6 +72,7 @@ pub mod metrics {
                     lifetime: Lifetime::Ping,
                     disabled: false,
                     dynamic_label: None,
+                    ..Default::default()
                 },
                 TimeUnit::Millisecond,
             )
@@ -85,6 +88,7 @@ pub mod metrics {
                     lifetime: Lifetime::Ping,
                     disabled: false,
                     dynamic_label: None,
+                    ..Default::default()
                 },
                 TimeUnit::Millisecond,
             )
@@ -177,6 +181,8 @@ fn upload_timings() {
             sender: tx,
         })
         .build();
+
+    glean_core::glean_set_test_mode(true);
     common::initialize(cfg);
 
     // Wait for init to finish,

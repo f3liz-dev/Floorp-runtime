@@ -1,7 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-// Tests keyboard selection within UrlbarUtils.RESULT_TYPE.TIP results.
+// Tests keyboard selection within UrlbarShared.RESULT_TYPE.TIP results.
 
 "use strict";
 
@@ -13,22 +13,21 @@ const LEARN_MORE_URL =
 
 add_task(async function tipIsSecondResult() {
   let results = [
-    new UrlbarResult(
-      UrlbarUtils.RESULT_TYPE.URL,
-      UrlbarUtils.RESULT_SOURCE.HISTORY,
-      {
+    new UrlbarResult({
+      type: UrlbarShared.RESULT_TYPE.URL,
+      source: UrlbarShared.RESULT_SOURCE.HISTORY,
+      payload: {
         url: "http://mozilla.org/a",
         helpUrl: "http://example.com/",
         isBlockable: true,
-        blockL10n: { id: "urlbar-result-menu-remove-from-history" },
-      }
-    ),
+        blockL10n: { id: "urlbar-result-menu-remove-from-history2" },
+      },
+    }),
     makeTipResult({
       buttonUrl: TIP_URL,
       helpUrl: HELP_URL,
       descriptionL10n: {
         id: "urlbar-result-market-opt-in-description",
-        cacheable: true,
         parseMarkup: true,
       },
       descriptionLearnMoreTopic: LEARN_MORE_TOPIC,
@@ -36,7 +35,8 @@ add_task(async function tipIsSecondResult() {
   ];
 
   let provider = new UrlbarTestUtils.TestProvider({ results, priority: 1 });
-  UrlbarProvidersManager.registerProvider(provider);
+  let providersManager = ProvidersManager.getInstanceForSap("urlbar");
+  providersManager.registerProvider(provider);
 
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
     value: "test",
@@ -51,7 +51,7 @@ add_task(async function tipIsSecondResult() {
   let secondResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(
     secondResult.type,
-    UrlbarUtils.RESULT_TYPE.TIP,
+    UrlbarShared.RESULT_TYPE.TIP,
     "The second result should be a tip."
   );
 
@@ -136,7 +136,7 @@ add_task(async function tipIsSecondResult() {
   );
 
   await UrlbarTestUtils.promisePopupClose(window);
-  UrlbarProvidersManager.unregisterProvider(provider);
+  providersManager.unregisterProvider(provider);
 });
 
 add_task(async function tipIsOnlyResult() {
@@ -146,7 +146,6 @@ add_task(async function tipIsOnlyResult() {
       helpUrl: HELP_URL,
       descriptionL10n: {
         id: "urlbar-result-market-opt-in-description",
-        cacheable: true,
         parseMarkup: true,
       },
       descriptionLearnMoreTopic: LEARN_MORE_TOPIC,
@@ -154,7 +153,8 @@ add_task(async function tipIsOnlyResult() {
   ];
 
   let provider = new UrlbarTestUtils.TestProvider({ results, priority: 1 });
-  UrlbarProvidersManager.registerProvider(provider);
+  let providersManager = ProvidersManager.getInstanceForSap("urlbar");
+  providersManager.registerProvider(provider);
 
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
     value: "test",
@@ -169,7 +169,7 @@ add_task(async function tipIsOnlyResult() {
   let firstResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 0);
   Assert.equal(
     firstResult.type,
-    UrlbarUtils.RESULT_TYPE.TIP,
+    UrlbarShared.RESULT_TYPE.TIP,
     "The first and only result should be a tip."
   );
 
@@ -236,28 +236,27 @@ add_task(async function tipIsOnlyResult() {
   );
 
   await UrlbarTestUtils.promisePopupClose(window);
-  UrlbarProvidersManager.unregisterProvider(provider);
+  providersManager.unregisterProvider(provider);
 });
 
 add_task(async function tipHasNoResultMenuButton() {
   let results = [
-    new UrlbarResult(
-      UrlbarUtils.RESULT_TYPE.URL,
-      UrlbarUtils.RESULT_SOURCE.HISTORY,
-      {
+    new UrlbarResult({
+      type: UrlbarShared.RESULT_TYPE.URL,
+      source: UrlbarShared.RESULT_SOURCE.HISTORY,
+      payload: {
         url: "http://mozilla.org/a",
         helpUrl: "http://example.com/",
         isBlockable: true,
-        blockL10n: { id: "urlbar-result-menu-remove-from-history" },
-      }
-    ),
+        blockL10n: { id: "urlbar-result-menu-remove-from-history2" },
+      },
+    }),
 
     // No `helpUrl` means no result-menu button.
     makeTipResult({
       buttonUrl: TIP_URL,
       descriptionL10n: {
         id: "urlbar-result-market-opt-in-description",
-        cacheable: true,
         parseMarkup: true,
       },
       descriptionLearnMoreTopic: LEARN_MORE_TOPIC,
@@ -265,7 +264,8 @@ add_task(async function tipHasNoResultMenuButton() {
   ];
 
   let provider = new UrlbarTestUtils.TestProvider({ results, priority: 1 });
-  UrlbarProvidersManager.registerProvider(provider);
+  let providersManager = ProvidersManager.getInstanceForSap("urlbar");
+  providersManager.registerProvider(provider);
 
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
     value: "test",
@@ -280,7 +280,7 @@ add_task(async function tipHasNoResultMenuButton() {
   let secondResult = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(
     secondResult.type,
-    UrlbarUtils.RESULT_TYPE.TIP,
+    UrlbarShared.RESULT_TYPE.TIP,
     "The second result should be a tip."
   );
 
@@ -336,5 +336,5 @@ add_task(async function tipHasNoResultMenuButton() {
   );
 
   await UrlbarTestUtils.promisePopupClose(window);
-  UrlbarProvidersManager.unregisterProvider(provider);
+  providersManager.unregisterProvider(provider);
 });

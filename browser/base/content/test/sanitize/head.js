@@ -127,6 +127,14 @@ async function deleteOnShutdown(opt) {
     let uri = Services.io.newURI("https://www.example.com");
     PermissionTestUtils.add(uri, "cookie", opt.cookiePermission);
   }
+  if (opt.shutdownException !== undefined) {
+    let uri = Services.io.newURI("https://www.example.com");
+    PermissionTestUtils.add(
+      uri,
+      "persist-data-on-shutdown",
+      opt.shutdownException
+    );
+  }
 
   // Let's create a tab with some data.
   await opt.createData(
@@ -179,6 +187,10 @@ async function deleteOnShutdown(opt) {
   if (opt.cookiePermission !== undefined) {
     let uri = Services.io.newURI("https://www.example.com");
     PermissionTestUtils.remove(uri, "cookie");
+  }
+  if (opt.shutdownException !== undefined) {
+    let uri = Services.io.newURI("https://www.example.com");
+    PermissionTestUtils.remove(uri, "persist-data-on-shutdown");
   }
 }
 
@@ -241,13 +253,13 @@ function runAllCookiePermissionTests(originAttributes) {
     });
   });
 
-  // All is session, but with ALLOW custom permission, data in example.com,
-  // cookie permission set for www.example.com
+  // All is session, but with persist-data-on-shutdown ALLOW exception for
+  // www.example.com, data in example.com.
   tests.forEach(methods => {
     add_task(async function deleteStorageWithCustomPermission() {
       info(
         methods.name +
-          ": All is session, but with ALLOW custom permission, data in example.com, cookie permission set for www.example.com - OA: " +
+          ": All is session, but with persist-data-on-shutdown ALLOW exception, data in example.com, exception set for www.example.com - OA: " +
           originAttributes.name
       );
       await deleteOnShutdown({
@@ -255,7 +267,7 @@ function runAllCookiePermissionTests(originAttributes) {
         createData: methods.createData,
         checkData: methods.checkData,
         originAttributes: originAttributes.oa,
-        cookiePermission: Ci.nsICookiePermission.ACCESS_ALLOW,
+        shutdownException: Services.perms.ALLOW_ACTION,
         expectedForOrg: false,
         expectedForCom: true,
         fullHost: false,
@@ -263,13 +275,13 @@ function runAllCookiePermissionTests(originAttributes) {
     });
   });
 
-  // All is session, but with ALLOW custom permission, data in www.example.com,
-  // cookie permission set for www.example.com
+  // All is session, but with persist-data-on-shutdown ALLOW exception for
+  // www.example.com, data in www.example.com.
   tests.forEach(methods => {
     add_task(async function deleteStorageWithCustomPermission() {
       info(
         methods.name +
-          ": All is session, but with ALLOW custom permission, data in www.example.com, cookie permission set for www.example.com - OA: " +
+          ": All is session, but with persist-data-on-shutdown ALLOW exception, data in www.example.com, exception set for www.example.com - OA: " +
           originAttributes.name
       );
       await deleteOnShutdown({
@@ -277,7 +289,7 @@ function runAllCookiePermissionTests(originAttributes) {
         createData: methods.createData,
         checkData: methods.checkData,
         originAttributes: originAttributes.oa,
-        cookiePermission: Ci.nsICookiePermission.ACCESS_ALLOW,
+        shutdownException: Services.perms.ALLOW_ACTION,
         expectedForOrg: false,
         expectedForCom: true,
         fullHost: true,
@@ -371,7 +383,7 @@ function openPreferencesViaOpenPreferencesAPI(aPane, aOptions) {
           "load",
           async function () {
             let win = gBrowser.contentWindow;
-            let selectedPane = win.history.state;
+            let selectedPane = win.gLastCategory?.category;
             await finalPrefPaneLoaded;
             if (!aOptions || !aOptions.leaveOpen) {
               gBrowser.removeCurrentTab();
@@ -399,7 +411,7 @@ async function createDummyDataForHost(host) {
 /**
  * Helper function to create file URL to open
  *
- * @returns {Object} a file URL
+ * @returns {object} a file URL
  */
 function createFileURL() {
   if (!fileURL) {
@@ -499,6 +511,15 @@ function promiseSanitizationComplete() {
   return TestUtils.topicObserved("sanitizer-sanitization-complete");
 }
 
+function settingsRedesignHistoryEnabled() {
+  return (
+    Services.prefs.getBoolPref(
+      "browser.settings-redesign.history2.enabled",
+      false
+    ) || Services.prefs.getBoolPref("browser.settings-redesign.enabled", false)
+  );
+}
+
 /**
  * This wraps the dialog and provides some convenience methods for interacting
  * with it.
@@ -506,7 +527,7 @@ function promiseSanitizationComplete() {
  * @param {Window} browserWin (optional)
  *        The browser window that the dialog is expected to open in. If not
  *        supplied, the initial browser window of the test run is used.
- * @param {Object} {mode, checkingDataSizes}
+ * @param {object} {mode, checkingDataSizes}
  *        mode: context to open the dialog in
  *          One of
  *            clear on shutdown settings context ("clearOnShutdown"),
@@ -516,7 +537,6 @@ function promiseSanitizationComplete() {
  *          "browser" by default
  *        checkingDataSizes: boolean check if we should wait for the data sizes
  *          to load
- *
  */
 function ClearHistoryDialogHelper({
   mode = "browser",
@@ -572,9 +592,9 @@ ClearHistoryDialogHelper.prototype = {
   },
 
   /**
-   * @param {String} aCheckboxId
+   * @param {string} aCheckboxId
    *        The checkbox id name
-   * @param {Boolean} aCheckState
+   * @param {boolean} aCheckState
    *        True if the checkbox should be checked, false otherwise
    */
   validateCheckbox(aCheckboxId, aCheckState) {
@@ -652,9 +672,15 @@ ClearHistoryDialogHelper.prototype = {
     // We want to simulate opening the dialog inside preferences for clear history
     // and clear site data
     if (this._mode != "browser") {
-      await openPreferencesViaOpenPreferencesAPI("privacy", {
-        leaveOpen: true,
-      });
+      if (this._mode == "clearOnShutdown" && settingsRedesignHistoryEnabled()) {
+        await openPreferencesViaOpenPreferencesAPI("history", {
+          leaveOpen: true,
+        });
+      } else {
+        await openPreferencesViaOpenPreferencesAPI("privacy", {
+          leaveOpen: true,
+        });
+      }
       let tabWindow = gBrowser.selectedBrowser.contentWindow;
       let clearDialogOpenButtonId = this._mode + "Button";
       // the id for clear on shutdown is of a different format
@@ -668,6 +694,8 @@ ClearHistoryDialogHelper.prototype = {
         clearDialogOpenButtonId = "clearDataSettings";
       }
       // open dialog
+      // Wait a tick for the button to be initialized.œ
+      await new Promise(resolve => requestAnimationFrame(resolve));
       tabWindow.document.getElementById(clearDialogOpenButtonId).click();
     }
     // We open the dialog in the chrome context in other cases

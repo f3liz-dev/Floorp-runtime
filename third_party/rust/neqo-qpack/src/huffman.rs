@@ -5,9 +5,9 @@
 // except according to those terms.
 
 use crate::{
-    huffman_decode_helper::{huffman_decoder_root, HuffmanDecoderNode},
-    huffman_table::HUFFMAN_TABLE,
     Error, Res,
+    huffman_decode_helper::{HuffmanDecoderNode, huffman_decoder_root},
+    huffman_table::HUFFMAN_TABLE,
 };
 
 struct BitReader<'a> {
@@ -25,7 +25,7 @@ impl<'a> BitReader<'a> {
         }
     }
 
-    pub fn read_bit(&mut self) -> Res<u8> {
+    pub const fn read_bit(&mut self) -> Res<u8> {
         if self.input.len() == self.offset {
             return Err(Error::NeedMoreData);
         }
@@ -41,7 +41,7 @@ impl<'a> BitReader<'a> {
         Ok((self.input[self.offset] >> self.current_bit) & 0x01)
     }
 
-    pub fn verify_ending(&mut self, i: u8) -> Res<()> {
+    pub const fn verify_ending(&mut self, i: u8) -> Res<()> {
         if (i + self.current_bit) > 7 {
             return Err(Error::HuffmanDecompression);
         }
@@ -77,7 +77,7 @@ impl<'a> BitReader<'a> {
 /// Never, but rust can't know that.
 pub fn decode(input: &[u8]) -> Res<Vec<u8>> {
     let mut reader = BitReader::new(input);
-    let mut output = Vec::new();
+    let mut output = Vec::with_capacity(input.len() * 2); // Huffman typically expands, so start with a reasonable guestimate.
     while reader.has_more_data() {
         if let Some(c) = decode_character(&mut reader)? {
             output.push(u8::try_from(c).map_err(|_| Error::HuffmanDecompression)?);
@@ -116,11 +116,11 @@ fn decode_character(reader: &mut BitReader) -> Res<Option<u16>> {
 /// Never, but rust doesn't know that.
 #[must_use]
 pub fn encode(input: &[u8]) -> Vec<u8> {
-    let mut output: Vec<u8> = Vec::new();
+    let mut output: Vec<u8> = Vec::with_capacity(input.len()); // Huffman compresses, so this should be big enough to not reallocate.
     let mut left: u8 = 8;
     let mut saved: u8 = 0;
     for c in input {
-        let mut e = HUFFMAN_TABLE[*c as usize];
+        let mut e = HUFFMAN_TABLE[usize::from(*c)];
 
         // Fill the previous byte
         if e.len < left {
@@ -161,8 +161,9 @@ pub fn encode(input: &[u8]) -> Vec<u8> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::{decode, encode, Error};
+    use super::{Error, decode, encode};
 
     struct TestElement {
         pub val: &'static [u8],

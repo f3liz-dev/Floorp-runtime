@@ -8,8 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include <stddef.h>
-
+#include <cstddef>
 #include <memory>
 #include <ostream>
 #include <string>
@@ -17,10 +16,10 @@
 #include <utility>
 #include <vector>
 
+#include "absl/strings/string_view.h"
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "api/audio_codecs/builtin_audio_encoder_factory.h"
 #include "api/create_peerconnection_factory.h"
-#include "api/environment/environment_factory.h"
 #include "api/jsep.h"
 #include "api/make_ref_counted.h"
 #include "api/peer_connection_interface.h"
@@ -51,8 +50,11 @@
 #include "rtc_base/rtc_certificate_generator.h"
 #include "rtc_base/ssl_fingerprint.h"
 #include "rtc_base/thread.h"
+#include "test/create_test_environment.h"
+#include "test/create_test_field_trials.h"
 #include "test/gmock.h"
 #include "test/gtest.h"
+#include "test/run_loop.h"
 #include "test/wait_until.h"
 #ifdef WEBRTC_ANDROID
 #include "pc/test/android_test_initializer.h"
@@ -65,8 +67,10 @@ namespace webrtc {
 
 using RTCConfiguration = PeerConnectionInterface::RTCConfiguration;
 using RTCOfferAnswerOptions = PeerConnectionInterface::RTCOfferAnswerOptions;
+
 using ::testing::Combine;
 using ::testing::HasSubstr;
+using ::testing::NotNull;
 using ::testing::Values;
 
 constexpr int kGenerateCertTimeout = 1000;
@@ -92,28 +96,46 @@ class PeerConnectionCryptoBaseTest : public ::testing::Test {
         std::make_unique<VideoDecoderFactoryTemplate<
             LibvpxVp8DecoderTemplateAdapter, LibvpxVp9DecoderTemplateAdapter,
             OpenH264DecoderTemplateAdapter, Dav1dDecoderTemplateAdapter>>(),
-        nullptr /* audio_mixer */, nullptr /* audio_processing */);
+        nullptr /* audio_mixer */, nullptr /* audio_processing */,
+        nullptr /* audio_frame_processor */, CreateTestFieldTrialsPtr());
   }
 
-  WrapperPtr CreatePeerConnection() {
-    return CreatePeerConnection(RTCConfiguration());
+  WrapperPtr CreatePeerConnection() { return CreatePeerConnection(""); }
+
+  WrapperPtr CreatePeerConnection(absl::string_view field_trials) {
+    return CreatePeerConnection(RTCConfiguration(), field_trials);
   }
 
   WrapperPtr CreatePeerConnection(const RTCConfiguration& config) {
-    return CreatePeerConnection(config, nullptr);
+    return CreatePeerConnection(config, "");
+  }
+
+  WrapperPtr CreatePeerConnection(const RTCConfiguration& config,
+                                  absl::string_view field_trials) {
+    return CreatePeerConnection(config, nullptr, field_trials);
   }
 
   WrapperPtr CreatePeerConnection(
       const RTCConfiguration& config,
       std::unique_ptr<RTCCertificateGeneratorInterface> cert_gen) {
-    auto fake_port_allocator =
-        std::make_unique<FakePortAllocator>(CreateEnvironment(), vss_.get());
+    return CreatePeerConnection(config, std::move(cert_gen), "");
+  }
+
+  WrapperPtr CreatePeerConnection(
+      const RTCConfiguration& config,
+      std::unique_ptr<RTCCertificateGeneratorInterface> cert_gen,
+      absl::string_view field_trials) {
+    auto fake_port_allocator = std::make_unique<FakePortAllocator>(
+        CreateTestEnvironment(), vss_.get());
     auto observer = std::make_unique<MockPeerConnectionObserver>();
     RTCConfiguration modified_config = config;
     modified_config.sdp_semantics = sdp_semantics_;
     PeerConnectionDependencies pc_dependencies(observer.get());
     pc_dependencies.allocator = std::move(fake_port_allocator);
     pc_dependencies.cert_generator = std::move(cert_gen);
+    if (!field_trials.empty()) {
+      pc_dependencies.trials = CreateTestFieldTrialsPtr(field_trials);
+    }
     auto result = pc_factory_->CreatePeerConnectionOrError(
         modified_config, std::move(pc_dependencies));
     if (!result.ok()) {
@@ -155,7 +177,7 @@ class PeerConnectionCryptoBaseTest : public ::testing::Test {
   }
 
   std::unique_ptr<VirtualSocketServer> vss_;
-  AutoSocketServerThread main_;
+  test::RunLoop main_;
   scoped_refptr<PeerConnectionFactoryInterface> pc_factory_;
   const SdpSemantics sdp_semantics_;
 };
@@ -191,8 +213,8 @@ TEST_P(PeerConnectionCryptoTest, CorrectCryptoInOfferWhenDtlsEnabled) {
   RTCConfiguration config;
   auto caller = CreatePeerConnectionWithAudioVideo(config);
 
-  auto offer = caller->CreateOffer();
-  ASSERT_TRUE(offer);
+  std::unique_ptr<SessionDescriptionInterface> offer = caller->CreateOffer();
+  ASSERT_THAT(offer, NotNull());
 
   ASSERT_FALSE(offer->description()->contents().empty());
   EXPECT_TRUE(SdpContentsAll(HaveDtlsFingerprint(), offer->description()));
@@ -205,8 +227,8 @@ TEST_P(PeerConnectionCryptoTest, CorrectCryptoInAnswerWhenDtlsEnabled) {
   auto callee = CreatePeerConnectionWithAudioVideo(config);
 
   callee->SetRemoteDescription(caller->CreateOffer());
-  auto answer = callee->CreateAnswer();
-  ASSERT_TRUE(answer);
+  std::unique_ptr<SessionDescriptionInterface> answer = callee->CreateAnswer();
+  ASSERT_THAT(answer, NotNull());
 
   ASSERT_FALSE(answer->description()->contents().empty());
   EXPECT_TRUE(SdpContentsAll(HaveDtlsFingerprint(), answer->description()));
@@ -222,12 +244,14 @@ TEST_P(PeerConnectionCryptoTest, ExchangeOfferAnswerWhenDtlsOn) {
   auto caller = CreatePeerConnectionWithAudioVideo(config);
   auto callee = CreatePeerConnectionWithAudioVideo(config);
 
-  auto offer = caller->CreateOfferAndSetAsLocal();
-  ASSERT_TRUE(offer);
+  std::unique_ptr<SessionDescriptionInterface> offer =
+      caller->CreateOfferAndSetAsLocal();
+  ASSERT_THAT(offer, NotNull());
   ASSERT_TRUE(callee->SetRemoteDescription(std::move(offer)));
 
-  auto answer = callee->CreateAnswerAndSetAsLocal();
-  ASSERT_TRUE(answer);
+  std::unique_ptr<SessionDescriptionInterface> answer =
+      callee->CreateAnswerAndSetAsLocal();
+  ASSERT_THAT(answer, NotNull());
   ASSERT_TRUE(caller->SetRemoteDescription(std::move(answer)));
 }
 TEST_P(PeerConnectionCryptoTest,
@@ -235,7 +259,7 @@ TEST_P(PeerConnectionCryptoTest,
   RTCConfiguration config;
   auto caller = CreatePeerConnectionWithAudioVideo(config);
 
-  auto offer = caller->CreateOffer();
+  std::unique_ptr<SessionDescriptionInterface> offer = caller->CreateOffer();
   SdpContentsForEach(RemoveDtlsFingerprint(), offer->description());
 
   EXPECT_FALSE(caller->SetLocalDescription(std::move(offer)));
@@ -246,7 +270,7 @@ TEST_P(PeerConnectionCryptoTest,
   auto caller = CreatePeerConnectionWithAudioVideo(config);
   auto callee = CreatePeerConnectionWithAudioVideo(config);
 
-  auto offer = caller->CreateOffer();
+  std::unique_ptr<SessionDescriptionInterface> offer = caller->CreateOffer();
   SdpContentsForEach(RemoveDtlsFingerprint(), offer->description());
 
   EXPECT_FALSE(callee->SetRemoteDescription(std::move(offer)));
@@ -258,7 +282,7 @@ TEST_P(PeerConnectionCryptoTest,
   auto callee = CreatePeerConnectionWithAudioVideo(config);
 
   callee->SetRemoteDescription(caller->CreateOfferAndSetAsLocal());
-  auto answer = callee->CreateAnswer();
+  std::unique_ptr<SessionDescriptionInterface> answer = callee->CreateAnswer();
   SdpContentsForEach(RemoveDtlsFingerprint(), answer->description());
 }
 TEST_P(PeerConnectionCryptoTest,
@@ -268,7 +292,8 @@ TEST_P(PeerConnectionCryptoTest,
   auto callee = CreatePeerConnectionWithAudioVideo(config);
 
   callee->SetRemoteDescription(caller->CreateOfferAndSetAsLocal());
-  auto answer = callee->CreateAnswerAndSetAsLocal();
+  std::unique_ptr<SessionDescriptionInterface> answer =
+      callee->CreateAnswerAndSetAsLocal();
   SdpContentsForEach(RemoveDtlsFingerprint(), answer->description());
 
   EXPECT_FALSE(caller->SetRemoteDescription(std::move(answer)));
@@ -288,12 +313,14 @@ TEST_P(PeerConnectionCryptoTest,
       FakeRTCCertificateGenerator::GenerateCertificate());
   auto callee = CreatePeerConnectionWithAudioVideo(callee_config);
 
-  auto offer = caller->CreateOfferAndSetAsLocal();
-  ASSERT_TRUE(offer);
+  std::unique_ptr<SessionDescriptionInterface> offer =
+      caller->CreateOfferAndSetAsLocal();
+  ASSERT_THAT(offer, NotNull());
   ASSERT_TRUE(callee->SetRemoteDescription(std::move(offer)));
 
-  auto answer = callee->CreateAnswerAndSetAsLocal();
-  ASSERT_TRUE(answer);
+  std::unique_ptr<SessionDescriptionInterface> answer =
+      callee->CreateAnswerAndSetAsLocal();
+  ASSERT_THAT(answer, NotNull());
   ASSERT_TRUE(caller->SetRemoteDescription(std::move(answer)));
 }
 
@@ -379,7 +406,7 @@ TEST_P(PeerConnectionCryptoDtlsCertGenTest, TestCertificateGeneration) {
                      fake_certificate_generator->generated_failures();
             },
             ::testing::Gt(0),
-            {.timeout = webrtc::TimeDelta::Millis(kGenerateCertTimeout)}),
+            {.timeout = TimeDelta::Millis(kGenerateCertTimeout)}),
         IsRtcOk());
   } else {
     ASSERT_EQ(fake_certificate_generator->generated_certificates(), 0);
@@ -399,9 +426,7 @@ TEST_P(PeerConnectionCryptoDtlsCertGenTest, TestCertificateGeneration) {
     }
   }
   for (auto& observer : observers) {
-    EXPECT_THAT(
-        WaitUntil([&] { return observer->called(); }, ::testing::IsTrue()),
-        IsRtcOk());
+    EXPECT_TRUE(WaitUntil([&] { return observer->called(); }));
     if (cert_gen_result_ == CertGenResult::kSucceed) {
       EXPECT_TRUE(observer->result());
     } else {
@@ -424,20 +449,22 @@ INSTANTIATE_TEST_SUITE_P(
 // See: https://bugs.chromium.org/p/webrtc/issues/detail?id=4525
 TEST_P(PeerConnectionCryptoTest, CreateAnswerWithDifferentSslRoles) {
   auto caller = CreatePeerConnectionWithAudioVideo();
-  auto callee = CreatePeerConnectionWithAudioVideo();
+  // Munging allowed: kDtlsSetup (24)
+  auto callee = CreatePeerConnectionWithAudioVideo(
+      "WebRTC-NoSdpMangleAllowForTesting/Enabled,24/");
 
   RTCOfferAnswerOptions options_no_bundle;
   options_no_bundle.use_rtp_mux = false;
 
   // First, negotiate different SSL roles for audio and video.
   ASSERT_TRUE(callee->SetRemoteDescription(caller->CreateOfferAndSetAsLocal()));
-  auto answer = callee->CreateAnswer(options_no_bundle);
+  std::unique_ptr<SessionDescriptionInterface> answer =
+      callee->CreateAnswer(options_no_bundle);
 
   AudioConnectionRole(answer->description()) = CONNECTIONROLE_ACTIVE;
   VideoConnectionRole(answer->description()) = CONNECTIONROLE_PASSIVE;
 
-  ASSERT_TRUE(
-      callee->SetLocalDescription(CloneSessionDescription(answer.get())));
+  ASSERT_TRUE(callee->SetLocalDescription(answer->Clone()));
   ASSERT_TRUE(caller->SetRemoteDescription(std::move(answer)));
 
   // Now create an offer in the reverse direction, and ensure the initial
@@ -448,8 +475,7 @@ TEST_P(PeerConnectionCryptoTest, CreateAnswerWithDifferentSslRoles) {
   EXPECT_EQ(CONNECTIONROLE_PASSIVE, AudioConnectionRole(answer->description()));
   EXPECT_EQ(CONNECTIONROLE_ACTIVE, VideoConnectionRole(answer->description()));
 
-  ASSERT_TRUE(
-      caller->SetLocalDescription(CloneSessionDescription(answer.get())));
+  ASSERT_TRUE(caller->SetLocalDescription(answer->Clone()));
   ASSERT_TRUE(callee->SetRemoteDescription(std::move(answer)));
 
   // Lastly, start BUNDLE-ing on "audio", expecting that the "passive" role of
@@ -464,8 +490,7 @@ TEST_P(PeerConnectionCryptoTest, CreateAnswerWithDifferentSslRoles) {
   EXPECT_EQ(CONNECTIONROLE_PASSIVE, AudioConnectionRole(answer->description()));
   EXPECT_EQ(CONNECTIONROLE_PASSIVE, VideoConnectionRole(answer->description()));
 
-  ASSERT_TRUE(
-      caller->SetLocalDescription(CloneSessionDescription(answer.get())));
+  ASSERT_TRUE(caller->SetLocalDescription(answer->Clone()));
   ASSERT_TRUE(callee->SetRemoteDescription(std::move(answer)));
 }
 
@@ -477,16 +502,19 @@ TEST_P(PeerConnectionCryptoTest, SessionErrorIfFingerprintInvalid) {
   auto callee_certificate = RTCCertificate::FromPEM(kRsaPems[0]);
   auto other_certificate = RTCCertificate::FromPEM(kRsaPems[1]);
 
-  auto caller = CreatePeerConnectionWithAudioVideo();
+  // Munging allowed: kUnknownModification (fingerprint modification)
+  auto caller = CreatePeerConnectionWithAudioVideo(
+      RTCConfiguration(), "WebRTC-NoSdpMangleAllowForTesting/Enabled,1/");
   RTCConfiguration callee_config;
   callee_config.certificates.push_back(callee_certificate);
-  auto callee = CreatePeerConnectionWithAudioVideo(callee_config);
+  auto callee = CreatePeerConnectionWithAudioVideo(
+      callee_config, "WebRTC-NoSdpMangleAllowForTesting/Enabled,1/");
 
   ASSERT_TRUE(callee->SetRemoteDescription(caller->CreateOfferAndSetAsLocal()));
 
   // Create an invalid answer with the other certificate's fingerprint.
   auto valid_answer = callee->CreateAnswer();
-  auto invalid_answer = CloneSessionDescription(valid_answer.get());
+  auto invalid_answer = valid_answer->Clone();
   auto* audio_content = GetFirstAudioContent(invalid_answer->description());
   ASSERT_TRUE(audio_content);
   auto* audio_transport_info =

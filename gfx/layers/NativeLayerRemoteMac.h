@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,10 +7,10 @@
 
 #include <IOSurface/IOSurfaceRef.h>
 
+#include "NativeLayerCA.h"
 #include "mozilla/layers/NativeLayer.h"
 #include "mozilla/layers/NativeLayerCommandQueue.h"
 #include "mozilla/layers/NativeLayerMacSurfaceHandler.h"
-#include "mozilla/layers/NativeLayerRootRemoteMacChild.h"
 #include "nsRegion.h"
 
 namespace mozilla {
@@ -73,25 +72,34 @@ class NativeLayerRemoteMac final : public NativeLayer {
   // If dirty, add a CommandLayerInfo to the queue. Clear dirty flag.
   void FlushDirtyLayerInfoToCommandQueue();
 
+  void UpdateSnapshotLayer();
+  CALayer* CALayerForSnapshot();
+
  protected:
+  NativeLayerCARepresentation mSnapshotLayer;
   Maybe<NativeLayerMacSurfaceHandler> mSurfaceHandler;
   RefPtr<NativeLayerCommandQueue> mCommandQueue;
+  const Maybe<gfx::DeviceColor> mColor;
+  const bool mIsOpaque = false;
 
-  CFTypeRefPtr<IOSurfaceRef> mExternalImage;
-  bool mIsDRM = false;
-  bool mIsHDR = false;
+  bool mDirtyLayerInfo = true;
+  // mDirtyLayerInfo is set when any of these change:
   gfx::IntPoint mPosition;
   gfx::Matrix4x4 mTransform;
   gfx::IntRect mDisplayRect;
-  gfx::IntSize mSize;
   Maybe<gfx::IntRect> mClipRect;
   Maybe<gfx::RoundedRect> mRoundedClipRect;
   gfx::SamplingFilter mSamplingFilter = gfx::SamplingFilter::POINT;
   float mBackingScale = 1.0f;
   bool mSurfaceIsFlipped = false;
-  gfx::DeviceColor mColor;
-  const bool mIsOpaque = false;
-  bool mDirty = false;
+
+  bool mDirtyChangedSurface = true;
+  // mDirtyChangedSurface is set when any of these change, or when the
+  // value returned by FrontSurface() changes:
+  CFTypeRefPtr<IOSurfaceRef> mExternalImage;
+  bool mIsDRM = false;
+  bool mIsHDR = false;
+  gfx::IntSize mSize;
 };
 
 }  // namespace layers

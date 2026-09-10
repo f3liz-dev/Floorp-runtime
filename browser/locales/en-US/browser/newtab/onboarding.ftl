@@ -42,6 +42,7 @@ mr1-return-to-amo-add-extension-label = Add { $addon-name }
 onboarding-welcome-steps-indicator-label =
   .aria-label = Progress: step { $current } of { $total }
 
+
 # This button will open system settings to turn on prefers-reduced-motion
 mr1-onboarding-reduce-motion-button-label = Turn off animations
 
@@ -66,6 +67,15 @@ mr1-onboarding-theme-label-dark = Dark
 mr1-onboarding-theme-label-alpenglow = Alpenglow
 
 onboarding-theme-primary-button-label = Done
+
+## Accessible labels for the icon-only play/pause toggle that controls animated
+## illustrations on the onboarding screen. The button replaces the animation
+## with a static image when clicked.
+
+onboarding-animation-pause-button =
+  .aria-label = Pause animation
+onboarding-animation-play-button =
+  .aria-label = Play animation
 
 ## Please make sure to split the content of the title attribute into lines whose
 ## width corresponds to about 40 Latin characters, to ensure that the tooltip
@@ -435,6 +445,11 @@ onboarding-checklist-pin = Pin { -brand-short-name } to taskbar
 onboarding-checklist-import = Import from previous browser
 onboarding-checklist-extension = Add an extension
 onboarding-checklist-sign-up = Sign up or sign in to your account
+onboarding-checklist-minimize =
+    .label = Minimize
+onboarding-checklist-remove =
+    .label = Remove checklist
+onboarding-checklist-remove-2 = Remove checklist
 
 ## Tab Groups feature onboarding strings
 
@@ -475,3 +490,158 @@ dismiss-button-label = Dismiss
 sync-to-mobile-button-label = Sync to mobile
 desktop-to-mobile-qr-code-alt =
   .aria-label = QR code to download { -brand-product-name } for mobile
+
+## Fx Backup onboarding: Create Backup spotlight
+
+create-backup-screen-1-title = Upgrading to Windows 11?
+    Let’s back up your { -brand-product-name } data.
+create-backup-screen-1-subtitle = Automatically protect your passwords, bookmarks, and more in 1–2 minutes.
+create-backup-screen-1-flair = Recommended
+create-backup-learn-more-link = <a data-l10n-name="learn-more-label">Learn more</a>
+create-backup-screen-1-sync-label = Sync with { -brand-product-name }
+create-backup-screen-1-sync-body = Backs up all signed in devices
+create-backup-screen-1-backup-label = Back up to PC
+create-backup-screen-1-backup-body = Saves to your device or OneDrive
+create-backup-select-tile-button-label = Select
+create-backup-back-button-label = Back
+create-backup-show-fewer =
+  .label = Show fewer like this
+create-backup-screen-2-title = Choose { -brand-product-name } data to back up
+create-backup-screen-2-subtitle = Only takes a minute. Your data is backed up once a day.
+# Label for the "Easy setup" backup option
+create-backup-screen-2-easy-label = Easy setup
+# Preceded by a green check mark indicating that these are included in "Easy setup" backup
+create-backup-screen-2-easy-list-1 = Bookmarks, history, settings, and more
+# Preceded by a red X indicating that these are not included in the "Easy setup" backup
+create-backup-screen-2-easy-list-2 = Doesn’t include passwords and payments
+# Preceded by a red X indicating that "Easy setup" backups are not encrypted
+create-backup-screen-2-easy-list-3 = Not encrypted
+# Label for the "All data" backup option
+create-backup-screen-2-all-label = All data
+# Preceded by a green check mark indicating that these are included in the "All data" backup
+create-backup-screen-2-all-list-2 = Includes passwords and payments
+# Preceded by a green check mark and shield indicating "All data" backups are encrypted
+create-backup-screen-2-all-list-3 = Encrypted with a password
+
+# Title for a screen asking users to choose a file location
+create-backup-screen-3-location = Where do you want your backup saved?
+# Title for a screen asking users to create a password that will encrypt the backup
+create-backup-screen-3-title = Create a backup file password
+create-backup-screen-3-subtitle = Required to encrypt your data. Store it in a place you’ll remember.
+
+# These strings appear in the embedded backup component.
+
+fx-backup-opt-in-header = Choose file location
+fx-backup-opt-in-filepath-label = Pick a place you plan to transfer to a new device, like OneDrive.
+fx-backup-opt-in-create-password-label = Enter password
+fx-backup-opt-in-confirm-btn-label = Continue
+fx-backup-opt-in-cancel-btn-label = Back
+
+## Fx Backup confirmation screen strings
+
+fx-backup-confirmation-screen-title = Your backup is scheduled
+fx-backup-confirmation-screen-close-button = Close
+
+## These strings appear as a confirmation of which items will or won't be included as part of the selected backup method.
+
+fx-backup-confirmation-screen-all-data-item-text-1 = All browsing data included
+fx-backup-confirmation-screen-all-data-item-text-2 = Saved to your device
+fx-backup-confirmation-screen-all-data-item-text-3 = Encrypted and password protected
+
+fx-backup-confirmation-screen-easy-setup-item-text-1 = Bookmarks, history, settings, and other data included
+fx-backup-confirmation-screen-easy-setup-item-text-2 = Saved to your device
+fx-backup-confirmation-screen-easy-setup-item-text-3 = Passwords and payments not included
+fx-backup-confirmation-screen-easy-setup-item-subtext-3 = Go to <a data-l10n-name="settings">Settings</a> to include sensitive data.
+
+fx-backup-confirmation-screen-item-subtext-1 = Your backup will start in a few minutes and will run once a day. You can check progress in <a data-l10n-name="settings">Settings</a>.
+fx-backup-confirmation-screen-item-subtext-2 = { -brand-short-name } will look for your backup if you need to reinstall.
+
+## Restore from Backup Flow about:welcome screens
+
+restore-from-backup-secondary-top-button = Restore from Backup
+restore-from-backup-title = Let’s get { -brand-short-name } back how you like it
+restore-from-backup-subtitle = Recover all your bookmarks, history, and other data to get back to browsing.
+restore-from-backup-secondary-button = Don’t restore
+
+multiple-backups-info-tile = <strong>Multiple backup files found.</strong> The most recent file is selected. Restore other profiles in <a data-l10n-name="settings-label">Settings.</a>
+
+## Restored from Backup spotlight
+
+restored-from-backup-success-title = We’re back! Your { -brand-short-name } data has been restored.
+restored-from-backup-success-with-checklist-subtitle = Want to keep your favorite privacy-focused browser one click away?
+restored-from-backup-success-no-checklist-subtitle = You can turn backup on for this device in <a data-l10n-name="settings">Settings</a>.
+restored-from-backup-success-with-checklist-primary-button = Save and continue
+restored-from-backup-success-with-checklist-secondary-button = Skip this step
+restored-from-backup-success-no-checklist-primary-button = Continue
+restored-from-backup-error-title = Hmm, there was a problem with your backup file.
+restored-from-backup-error-subtitle = If you have another { -brand-short-name } backup file, try restoring from that one. <a data-l10n-name="restore-problems">Still having problems?</a>
+restored-from-backup-error-primary-button = Close
+
+## Onboarding Personalization Screen
+## A screen shown to users during the onboarding process that asks them two qualifying questions about their use of the browser
+
+onboarding-personalization-title = Customize your { -brand-short-name } experience
+onboarding-personalization-subtitle = Answer a few questions and we’ll recommend features and extensions to enhance your use of { -brand-short-name }.
+onboarding-personalization-use-case-title = What will you use { -brand-short-name } for?
+onboarding-personalization-use-case-personal-option = Personal
+onboarding-personalization-use-case-school-option = School
+onboarding-personalization-use-case-work-option = Work
+onboarding-personalization-motivation-title = Which features of { -brand-short-name } are the most important to you?
+onboarding-personalization-motivation-privacy-option = Privacy and Security
+onboarding-personalization-motivation-productivity-option = Productivity
+onboarding-personalization-motivation-other-option = Other
+
+## Onboarding 2026 brand refresh
+
+onboarding-refresh-pin-set-default-subtitle = We protect your data and block companies from spying on your clicks — automatically.
+# "safe paws" is a play on "safe hands", meaning you're being well taken care of or protected
+# If it doesn’t translate well, you can use the alternative: “You’re safe with Firefox.”
+onboarding-refresh-pin-set-default-title = You’re in safe paws
+onboarding-refresh-import-subtitle = Bring over your passwords, bookmarks, history and more.
+onboarding-refresh-import-title = Make { -brand-short-name } feel more like home
+onboarding-refresh-onboarding-addons-subtitle = Extensions are tiny apps that let you customize { -brand-short-name }. They can power up your privacy, enhance productivity, change the way { -brand-short-name } looks, and so much more.
+# "Give your browsing a boost" means to enhance or improve the browsing experience
+onboarding-refresh-onboarding-addons-title = Give your browsing a boost
+onboarding-refresh-sync-subtitle = Grab bookmarks, passwords, and more everywhere you’re signed in to { -brand-short-name }. Plus, your data is encrypted so only you can see it.
+onboarding-refresh-sync-title = Go anywhere. Sync everything.
+onboarding-refresh-gratitude-subtitle = Thank you for using { -brand-short-name }, the only major browser backed by a non-profit. With your support, we’re working to make the internet safer and more accessible for everyone.
+# "has your back" is an idiom suggesting support and protection
+onboarding-refresh-gratitude-title = { -brand-short-name } has your back
+
+## Smart window switcher callout
+
+smartwindow-switcher-callout = Switch between Smart and Classic Windows anytime.
+
+## Smart Window ToU modal
+
+# Existing users
+smartwindow-existing-user-fx-tou-title = { -brand-product-name } Terms of Use
+smartwindow-existing-user-fx-tou-body = To use { -smart-window-brand-name }, please accept the <a data-l10n-name="terms_of_use">Terms of Use</a> and updated <a data-l10n-name="privacy_notice">Privacy Notice</a>.
+smartwindow-existing-user-fx-tou-accept = Accept
+smartwindow-existing-user-fx-tou-go-back = Go back
+
+## Smart Window about:welcome screen
+
+smartwindow-onboarding-title = Make { -smart-window-brand-name } your go-to
+smartwindow-onboarding-subtitle = Summarize, compare, and ask questions without missing a beat.
+smartwindow-onboarding-primary-button = Continue
+# Kit is referring to the Firefox mascot
+smartwindow-onboarding-image-alt =
+  .aria-label = { -brand-product-name } mascot (Kit) with star props
+
+## Smart Window Sidebar Auto-Open Pref
+
+smartwindow-sidebar-auto-open-callout-title = Want to keep the assistant closed?
+smartwindow-sidebar-auto-open-callout-body = You can still open it whenever you need it.
+smartwindow-sidebar-auto-open-callout-accept = Yes, keep closed
+smartwindow-sidebar-auto-open-callout-dismiss = No thanks
+smartwindow-sidebar-auto-open-callout-accepted-title = The assistant will stay closed
+smartwindow-sidebar-auto-open-callout-accepted-subtitle = Use Ask to open it on any page. Change this anytime in <a data-l10n-name="settings">Settings</a>.
+smartwindow-sidebar-auto-open-callout-rejected-title = Got it
+smartwindow-sidebar-auto-open-callout-rejected-subtitle = If you change your mind, you can update the default in <a data-l10n-name="settings">Settings</a> anytime.
+
+## Theme Picker screen strings
+
+onboarding-theme-picker-title = Pick a theme
+onboarding-theme-picker-subtitle = Bring a little more color into { -brand-short-name }.
+onboarding-theme-picker-button-label = Save and continue

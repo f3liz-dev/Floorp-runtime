@@ -4,34 +4,34 @@
 
 // Original author: ekr@rtfm.com
 
-#include "logging.h"
-#include "nss.h"
-#include "ssl.h"
+#include "MediaPipeline.h"
 
+#include "AudioSegment.h"
+#include "Canonicals.h"
+#include "MediaConduitInterface.h"
+#include "MediaPipelineFilter.h"
+#include "MediaTrackGraph.h"
+#include "MediaTrackListener.h"
+#include "MediaTransportHandler.h"
+#include "PeerConnectionCtx.h"
+#include "SharedBuffer.h"
+#include "WebrtcCallWrapper.h"
+#include "WebrtcEnvironmentWrapper.h"
+#include "WebrtcTaskQueueWrapper.h"
 #include "api/audio/builtin_audio_processing_builder.h"
 #include "api/audio_codecs/builtin_audio_decoder_factory.h"
 #include "api/environment/environment_factory.h"
 #include "api/scoped_refptr.h"
-#include "AudioSegment.h"
-#include "Canonicals.h"
+#include "logging.h"
 #include "modules/audio_device/include/fake_audio_device.h"
 #include "modules/audio_mixer/audio_mixer_impl.h"
 #include "modules/audio_processing/include/audio_processing.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/SpinEventLoopUntil.h"
-#include "MediaConduitInterface.h"
-#include "MediaPipeline.h"
-#include "MediaPipelineFilter.h"
-#include "MediaTrackGraph.h"
-#include "MediaTrackListener.h"
 #include "mtransport_test_utils.h"
-#include "SharedBuffer.h"
-#include "MediaTransportHandler.h"
-#include "WebrtcCallWrapper.h"
-#include "WebrtcEnvironmentWrapper.h"
-#include "WebrtcTaskQueueWrapper.h"
-#include "PeerConnectionCtx.h"
+#include "nss.h"
+#include "ssl.h"
 
 #define GTEST_HAS_RTTI 0
 #include "gtest/gtest.h"
@@ -96,10 +96,11 @@ class FakeAudioTrack : public ProcessedMediaTrack {
   FakeAudioTrack()
       : ProcessedMediaTrack(44100, MediaSegment::AUDIO, nullptr),
         mMutex("Fake AudioTrack") {
-    NS_NewTimerWithFuncCallback(
-        getter_AddRefs(mTimer), FakeAudioTrackGenerateData, this, 20,
-        nsITimer::TYPE_REPEATING_SLACK,
-        "FakeAudioTrack::FakeAudioTrackGenerateData", test_utils->sts_target());
+    NS_NewTimerWithFuncCallback(getter_AddRefs(mTimer),
+                                FakeAudioTrackGenerateData, this, 20,
+                                nsITimer::TYPE_REPEATING_SLACK,
+                                "FakeAudioTrack::FakeAudioTrackGenerateData"_ns,
+                                test_utils->sts_target());
   }
 
   void Destroy() override {
@@ -263,7 +264,7 @@ class LoopbackTransport : public MediaTransportHandler {
   }
 
   void SetState(const std::string& aTransportId, TransportLayer::State aState) {
-    MediaTransportHandler::OnStateChange(aTransportId, aState);
+    MediaTransportHandler::OnStateChange(aTransportId, aState, {});
   }
 
   void SetRtcpState(const std::string& aTransportId,
@@ -305,7 +306,7 @@ class TestAgent {
         audio_conduit_(
             AudioSessionConduit::Create(call_, test_utils->sts_target())),
         transport_(new LoopbackTransport) {
-    Unused << WaitFor(InvokeAsync(call_->mCallThread, __func__, [&] {
+    (void)WaitFor(InvokeAsync(call_->mCallThread, __func__, [&] {
       audio_conduit_->InitControl(&control_);
       return GenericPromise::CreateAndResolve(true, "TestAgent()");
     }));
@@ -349,7 +350,7 @@ class TestAgent {
       audio_pipeline_->Shutdown();
     }
     if (audio_conduit_) {
-      Unused << WaitFor(audio_conduit_->Shutdown());
+      (void)WaitFor(audio_conduit_->Shutdown());
     }
     if (call_) {
       call_->Destroy();
@@ -414,7 +415,7 @@ class TestAgentSend : public TestAgent {
         MediaPipelineTransmit::Create(
             test_pc, transport_, AbstractThread::MainThread(),
             test_utils->sts_target(), false, audio_conduit_);
-    Unused << WaitFor(InvokeAsync(call_->mCallThread, __func__, [&] {
+    (void)WaitFor(InvokeAsync(call_->mCallThread, __func__, [&] {
       audio_pipeline->InitControl(&control_);
       return GenericPromise::CreateAndResolve(true, __func__);
     }));
@@ -447,7 +448,7 @@ class TestAgentReceive : public TestAgent {
         test_utils->sts_target(),
         static_cast<AudioSessionConduit*>(audio_conduit_.get()), nullptr,
         TrackingId(), PRINCIPAL_HANDLE_NONE, PrincipalPrivacy::NonPrivate);
-    Unused << WaitFor(InvokeAsync(call_->mCallThread, __func__, [&] {
+    (void)WaitFor(InvokeAsync(call_->mCallThread, __func__, [&] {
       audio_pipeline->InitControl(&control_);
       return GenericPromise::CreateAndResolve(true, __func__);
     }));

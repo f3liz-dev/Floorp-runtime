@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,7 +6,6 @@
 
 #include "mozilla/Assertions.h"
 #include "mozilla/RefPtr.h"
-#include "mozilla/Unused.h"
 #include "mozilla/dom/FetchEventOpProxyParent.h"
 #include "mozilla/dom/FetchStreamUtils.h"
 #include "mozilla/dom/FetchTypes.h"
@@ -51,7 +48,7 @@ mozilla::ipc::IPCResult FetchEventOpParent::RecvPreloadResponse(
         aPending.mPreloadResponse = Some(std::move(aResponse));
       },
       [&aResponse](Started& aStarted) {
-        Unused << aStarted.mFetchEventOpProxyParent->SendPreloadResponse(
+        (void)aStarted.mFetchEventOpProxyParent->SendPreloadResponse(
             ToParentToChild(aResponse));
       },
       [](const Finished&) {});
@@ -69,7 +66,7 @@ mozilla::ipc::IPCResult FetchEventOpParent::RecvPreloadResponseTiming(
         aPending.mTiming = Some(std::move(aTiming));
       },
       [&aTiming](Started& aStarted) {
-        Unused << aStarted.mFetchEventOpProxyParent->SendPreloadResponseTiming(
+        (void)aStarted.mFetchEventOpProxyParent->SendPreloadResponseTiming(
             std::move(aTiming));
       },
       [](const Finished&) {});
@@ -87,7 +84,7 @@ mozilla::ipc::IPCResult FetchEventOpParent::RecvPreloadResponseEnd(
         aPending.mEndArgs = Some(std::move(aArgs));
       },
       [&aArgs](Started& aStarted) {
-        Unused << aStarted.mFetchEventOpProxyParent->SendPreloadResponseEnd(
+        (void)aStarted.mFetchEventOpProxyParent->SendPreloadResponseEnd(
             std::move(aArgs));
       },
       [](const Finished&) {});

@@ -158,6 +158,14 @@ add_task(async function testInlinePreviews() {
     ],
   });
 
+  await invokeFunctionAndAssertInlinePreview({
+    dbg,
+    fnName: "innerBlockHoistedFuncDecl",
+    expectedInlinePreviews: [
+      { previews: [{ identifier: "foo:", value: "function foo()" }], line: 90 },
+    ],
+  });
+
   // Check inline previews for values within a module script
   await invokeFunctionAndAssertInlinePreview({
     dbg,
@@ -211,12 +219,6 @@ add_task(async function testInlinePreviews() {
 
 add_task(async function testInlinePreviewsWithExplicitResourceManagement() {
   await pushPref("devtools.debugger.features.inline-preview", true);
-  // javascript.options.experimental.explicit_resource_management is set to true, but it's
-  // only supported on Nightly at the moment, so only check for SuppressedError if
-  // they're supported.
-  if (!AppConstants.ENABLE_EXPLICIT_RESOURCE_MANAGEMENT) {
-    return;
-  }
   const dbg = await initDebugger("doc-inline-preview.html");
 
   const onPaused = waitForPaused(dbg);
@@ -246,6 +248,15 @@ add_task(async function testInlinePreviewsWithExplicitResourceManagement() {
           },
         ],
         line: 3,
+      },
+      {
+        previews: [
+          {
+            identifier: "erm.foo:",
+            value: "42",
+          },
+        ],
+        line: 7,
       },
     ],
   });

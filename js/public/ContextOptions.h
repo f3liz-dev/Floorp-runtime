@@ -1,6 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -29,6 +27,7 @@ class JS_PUBLIC_API ContextOptions {
         testWasmAwaitTier2_(false),
         disableIon_(false),
         disableEvalSecurityChecks_(false),
+        disableFilenameSecurityChecks_(false),
         asyncStack_(true),
         asyncStackCaptureDebuggeeOnly_(false),
         throwOnDebuggeeWouldRun_(true),
@@ -36,19 +35,6 @@ class JS_PUBLIC_API ContextOptions {
         fuzzing_(false) {
   }
   // clang-format on
-
-  bool asmJS() const {
-    return compileOptions_.asmJSOption() == AsmJSOption::Enabled;
-  }
-  AsmJSOption asmJSOption() const { return compileOptions_.asmJSOption(); }
-  ContextOptions& setAsmJS(bool flag) {
-    compileOptions_.setAsmJS(flag);
-    return *this;
-  }
-  ContextOptions& setAsmJSOption(AsmJSOption option) {
-    compileOptions_.setAsmJSOption(option);
-    return *this;
-  }
 
   bool wasm() const { return wasm_; }
   ContextOptions& setWasm(bool flag) {
@@ -84,18 +70,6 @@ class JS_PUBLIC_API ContextOptions {
     return *this;
   }
 
-  bool throwOnAsmJSValidationFailure() const {
-    return compileOptions_.throwOnAsmJSValidationFailure();
-  }
-  ContextOptions& setThrowOnAsmJSValidationFailure(bool flag) {
-    compileOptions_.setThrowOnAsmJSValidationFailure(flag);
-    return *this;
-  }
-  ContextOptions& toggleThrowOnAsmJSValidationFailure() {
-    compileOptions_.toggleThrowOnAsmJSValidationFailure();
-    return *this;
-  }
-
   // Override to allow disabling Ion for this context irrespective of the
   // process-wide Ion-enabled setting. This must be set right after creating
   // the context.
@@ -105,11 +79,27 @@ class JS_PUBLIC_API ContextOptions {
     return *this;
   }
 
+  // These next two checks are needed for PAC Scripts: we cannot enforce
+  // restrictions on them because they are user provided.
+
   // Override to allow disabling the eval restriction security checks for
   // this context.
   bool disableEvalSecurityChecks() const { return disableEvalSecurityChecks_; }
   ContextOptions& setDisableEvalSecurityChecks() {
     disableEvalSecurityChecks_ = true;
+    return *this;
+  }
+
+  // Override to allow disabling the filename security checks (checks that
+  // ensure the script doesn't come from the web) for this context. There is a
+  // lower-level flag for this same check in CompileOptions which will be set by
+  // this flag; this is needed here to propagate the flag down into eval
+  // contexts
+  bool disableFilenameSecurityChecks() const {
+    return disableFilenameSecurityChecks_;
+  }
+  ContextOptions& setDisableFilenameSecurityChecks() {
+    disableFilenameSecurityChecks_ = true;
     return *this;
   }
 
@@ -152,10 +142,7 @@ class JS_PUBLIC_API ContextOptions {
   // Defined out-of-line because it depends on a compile-time option
   ContextOptions& setFuzzing(bool flag);
 
-  void disableOptionsForSafeMode() {
-    setAsmJSOption(AsmJSOption::DisabledByAsmJSPref);
-    setWasmBaseline(false);
-  }
+  void disableOptionsForSafeMode() { setWasmBaseline(false); }
 
   PrefableCompileOptions& compileOptions() { return compileOptions_; }
   const PrefableCompileOptions& compileOptions() const {
@@ -172,9 +159,10 @@ class JS_PUBLIC_API ContextOptions {
 
   // JIT options.
   bool disableIon_ : 1;
-  bool disableEvalSecurityChecks_ : 1;
 
   // Runtime options.
+  bool disableEvalSecurityChecks_ : 1;
+  bool disableFilenameSecurityChecks_ : 1;
   bool asyncStack_ : 1;
   bool asyncStackCaptureDebuggeeOnly_ : 1;
   bool throwOnDebuggeeWouldRun_ : 1;

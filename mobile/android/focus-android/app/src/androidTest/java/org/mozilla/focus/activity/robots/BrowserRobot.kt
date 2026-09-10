@@ -22,10 +22,14 @@ import androidx.test.uiautomator.UiObject
 import androidx.test.uiautomator.UiObjectNotFoundException
 import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
+import java.time.LocalDate
+import mozilla.components.browser.toolbar.R as toolbarR
+import mozilla.components.feature.contextmenu.R as contextmenuR
+import mozilla.components.feature.findinpage.R as findinpageR
+import mozilla.components.ui.tabcounter.R as tabcounterR
 import org.hamcrest.Matchers.not
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.mozilla.focus.R
 import org.mozilla.focus.helpers.Constants.RETRY_COUNT
 import org.mozilla.focus.helpers.TestHelper.mDevice
 import org.mozilla.focus.helpers.TestHelper.packageName
@@ -34,22 +38,15 @@ import org.mozilla.focus.helpers.TestHelper.progressBar
 import org.mozilla.focus.helpers.TestHelper.waitingTime
 import org.mozilla.focus.helpers.TestHelper.waitingTimeShort
 import org.mozilla.focus.idlingResources.SessionLoadedIdlingResource
-import java.time.LocalDate
 
 class BrowserRobot {
 
     private lateinit var sessionLoadedIdlingResource: SessionLoadedIdlingResource
 
-    val progressBar =
-        mDevice.findObject(
-            UiSelector().resourceId("$packageName:id/progress"),
-        )
+    val progressBar = mDevice.findObject(UiSelector().resourceId("$packageName:id/progress"))
 
     fun verifyBrowserView() =
-        assertTrue(
-            mDevice.findObject(UiSelector().resourceId("$packageName:id/engineView"))
-                .waitForExists(waitingTime),
-        )
+        assertTrue(mDevice.findObject(UiSelector().resourceId("$packageName:id/engineView")).waitForExists(waitingTime))
 
     fun verifyPageContent(expectedText: String, alsoClick: Boolean = false) {
         sessionLoadedIdlingResource = SessionLoadedIdlingResource()
@@ -79,10 +76,7 @@ class BrowserRobot {
         // ETP has delays so we need to refresh the page multiple times until ETP starts working.
         for (i in 1..RETRY_COUNT) {
             try {
-                assertTrue(
-                    webPageItemContainingText(expectedText)
-                        .waitForExists(pageLoadingTime),
-                )
+                assertTrue(webPageItemContainingText(expectedText).waitForExists(pageLoadingTime))
                 // close the JavaScript alert
                 mDevice.pressBack()
                 break
@@ -97,23 +91,21 @@ class BrowserRobot {
     }
 
     fun refreshPageIfStillLoading(pageContent: String) {
-        browserScreen {
-        }.openMainMenu {
-            when (mDevice.findObject(UiSelector().description("Reload website")).exists()) {
-                true -> ThreeDotMainMenuRobot.Transition().clickReloadButton {}
-                false -> {
-                    ThreeDotMainMenuRobot.Transition().clickStopLoadingButton {
-                        if (!mDevice.findObject(UiSelector().textContains(pageContent))
-                                .waitForExists(waitingTime)
-                        ) {
-                            browserScreen {
-                            }.openMainMenu {
-                            }.clickReloadButton {}
+        browserScreen {}
+            .openMainMenu {
+                when (mDevice.findObject(UiSelector().description("Reload website")).exists()) {
+                    true -> ThreeDotMainMenuRobot.Transition().clickReloadButton {}
+                    false -> {
+                        ThreeDotMainMenuRobot.Transition().clickStopLoadingButton {
+                            if (
+                                !mDevice.findObject(UiSelector().textContains(pageContent)).waitForExists(waitingTime)
+                            ) {
+                                browserScreen {}.openMainMenu {}.clickReloadButton {}
+                            }
                         }
                     }
                 }
             }
-        }
     }
 
     fun verifyCustomTabUrl(url: String) {
@@ -128,10 +120,7 @@ class BrowserRobot {
         sessionLoadedIdlingResource = SessionLoadedIdlingResource()
 
         runWithIdleRes(sessionLoadedIdlingResource) {
-            assertTrue(
-                mDevice.findObject(UiSelector().textContains(expectedText))
-                    .waitForExists(waitingTime),
-            )
+            assertTrue(mDevice.findObject(UiSelector().textContains(expectedText)).waitForExists(waitingTime))
         }
     }
 
@@ -140,16 +129,12 @@ class BrowserRobot {
     fun clickGetCameraButton() = clickPageObject(webPageItemContainingText("Open camera"))
 
     fun verifyCameraPermissionPrompt(host: String) {
-        assertTrue(
-            mDevice.findObject(UiSelector().text("Allow $host to use your camera?"))
-                .waitForExists(waitingTime),
-        )
+        assertTrue(mDevice.findObject(UiSelector().text("Allow $host to use your camera?")).waitForExists(waitingTime))
     }
 
     fun verifyLocationPermissionPrompt(host: String) {
         assertTrue(
-            mDevice.findObject(UiSelector().text("Allow $host to use your location?"))
-                .waitForExists(waitingTime),
+            mDevice.findObject(UiSelector().text("Allow $host to use your location?")).waitForExists(waitingTime)
         )
     }
 
@@ -168,29 +153,25 @@ class BrowserRobot {
     fun longPressLink(linkText: String) = longClickPageObject(webPageItemWithText(linkText))
 
     fun openLinkInNewTab() {
-        mDevice.findObject(
-            UiSelector().textContains("Open link in private tab"),
-        ).waitForExists(waitingTime)
+        mDevice.findObject(UiSelector().textContains("Open link in private tab")).waitForExists(waitingTime)
         openLinkInPrivateTab.perform(click())
     }
 
     fun verifyNumberOfTabsOpened(tabsCount: Int) {
         assertTrue(
-            mDevice.findObject(
-                UiSelector().description("Private Tabs Open: $tabsCount. Tap to switch tabs."),
-            ).waitForExists(waitingTime),
+            mDevice
+                .findObject(UiSelector().description("Private Tabs Open: $tabsCount. Tap to switch tabs."))
+                .waitForExists(waitingTime)
         )
     }
 
     fun verifyTabsCounterNotShown() {
         assertFalse(
-            mDevice.findObject(UiSelector().resourceId("$packageName:id/counter_root"))
-                .waitForExists(waitingTimeShort),
+            mDevice.findObject(UiSelector().resourceId("$packageName:id/counter_root")).waitForExists(waitingTimeShort)
         )
     }
 
-    fun verifyShareAppsListOpened() =
-        assertTrue(shareAppsList.waitForExists(waitingTime))
+    fun verifyShareAppsListOpened() = assertTrue(shareAppsList.waitForExists(waitingTime))
 
     fun clickPlayButton() = clickPageObject(webPageItemWithText("Play"))
 
@@ -205,7 +186,13 @@ class BrowserRobot {
                 if (i == RETRY_COUNT) {
                     throw e
                 } else {
-                    clickPlayButton()
+                    // Video failed to start - refresh the page and try again
+                    browserScreen {}
+                        .openMainMenu {}
+                        .clickReloadButton {
+                            progressBar.waitUntilGone(waitingTime)
+                            clickPlayButton()
+                        }
                 }
             }
         }
@@ -226,11 +213,9 @@ class BrowserRobot {
 
     fun verifyLinkContextMenu(linkAddress: String) {
         assertTrue(
-            mDevice.findObject(
-                UiSelector().resourceId("$packageName:id/parentPanel"),
-            ).waitForExists(waitingTime),
+            mDevice.findObject(UiSelector().resourceId("$packageName:id/parentPanel")).waitForExists(waitingTime)
         )
-        onView(withId(R.id.titleView)).check(matches(withText(linkAddress)))
+        onView(withId(contextmenuR.id.titleView)).check(matches(withText(linkAddress)))
         openLinkInPrivateTab.check(matches(isDisplayed()))
         copyLink.check(matches(isDisplayed()))
         shareLink.check(matches(isDisplayed()))
@@ -238,11 +223,9 @@ class BrowserRobot {
 
     fun verifyImageContextMenu(hasLink: Boolean, linkAddress: String) {
         assertTrue(
-            mDevice.findObject(
-                UiSelector().resourceId("$packageName:id/parentPanel"),
-            ).waitForExists(waitingTime),
+            mDevice.findObject(UiSelector().resourceId("$packageName:id/parentPanel")).waitForExists(waitingTime)
         )
-        onView(withId(R.id.titleView)).check(matches(withText(linkAddress)))
+        onView(withId(contextmenuR.id.titleView)).check(matches(withText(linkAddress)))
         if (hasLink) {
             openLinkInPrivateTab.check(matches(isDisplayed()))
             downloadLink.check(matches(isDisplayed()))
@@ -257,8 +240,7 @@ class BrowserRobot {
 
     fun clickContextMenuCopyLink(): ViewInteraction = copyLink.perform(click())
 
-    fun clickShareImage() =
-        shareImage.inRoot(RootMatchers.isDialog()).check(matches(isDisplayed())).perform(click())
+    fun clickShareImage() = shareImage.inRoot(RootMatchers.isDialog()).check(matches(isDisplayed())).perform(click())
 
     fun clickShareLink(): ViewInteraction = shareLink.perform(click())
 
@@ -266,7 +248,8 @@ class BrowserRobot {
 
     fun clickLinkMatchingText(expectedText: String) = clickPageObject(webPageItemContainingText(expectedText))
 
-    fun verifyOpenLinksInAppsPrompt(openLinksInAppsEnabled: Boolean, link: String) = assertOpenLinksInAppsPrompt(openLinksInAppsEnabled, link)
+    fun verifyOpenLinksInAppsPrompt(openLinksInAppsEnabled: Boolean) =
+        assertOpenLinksInAppsPrompt(openLinksInAppsEnabled)
 
     fun clickOpenLinksInAppsCancelButton() {
         for (i in 1..RETRY_COUNT) {
@@ -290,13 +273,9 @@ class BrowserRobot {
     fun clickCalendarForm() = clickPageObject(webPageItemWithResourceId("calendar"))
 
     fun selectDate() {
-        mDevice.findObject(UiSelector().resourceId("android:id/month_view")).waitForExists(waitingTime)
-
-        mDevice.findObject(
-            UiSelector()
-                .textContains("$currentDay")
-                .descriptionContains("$currentDay $currentMonth $currentYear"),
-        ).click()
+        mDevice
+            .findObject(UiSelector().textContains("$currentDay").descriptionContains("$currentMonth $currentDay"))
+            .click()
     }
 
     fun clickButtonWithText(button: String) = mDevice.findObject(UiSelector().textContains(button)).click()
@@ -304,18 +283,9 @@ class BrowserRobot {
     fun clickSubmitDateButton() = clickPageObject(webPageItemWithResourceId("submitDate"))
 
     fun verifySelectedDate() {
-        mDevice.findObject(
-            UiSelector()
-                .textContains("Submit date")
-                .resourceId("submitDate"),
-        ).waitForExists(waitingTime)
+        mDevice.findObject(UiSelector().textContains("Submit date").resourceId("submitDate")).waitForExists(waitingTime)
 
-        assertTrue(
-            mDevice.findObject(
-                UiSelector()
-                    .text("Selected date is: $currentDate"),
-            ).waitForExists(waitingTime),
-        )
+        assertTrue(mDevice.findObject(UiSelector().text("Selected date is: $currentDate")).waitForExists(waitingTime))
     }
 
     fun clickAndWriteTextInInputBox(text: String) {
@@ -338,9 +308,7 @@ class BrowserRobot {
 
                 break
             } catch (e: NullPointerException) {
-                browserScreen {
-                }.openMainMenu {
-                }.clickReloadButton {}
+                browserScreen {}.openMainMenu {}.clickReloadButton {}
             }
         }
     }
@@ -364,27 +332,18 @@ class BrowserRobot {
     fun clickSubmitTextInputButton() = clickPageObject(webPageItemWithResourceId("submitInput"))
 
     fun selectDropDownOption(optionName: String) {
-        mDevice.findObject(
-            UiSelector().resourceId("$packageName:id/customPanel"),
-        ).waitForExists(waitingTime)
+        mDevice.findObject(UiSelector().resourceId("$packageName:id/customPanel")).waitForExists(waitingTime)
         mDevice.findObject(UiSelector().textContains(optionName)).click()
     }
 
     fun clickSubmitDropDownButton() = clickPageObject(webPageItemWithResourceId("submitOption"))
 
     fun verifySelectedDropDownOption(optionName: String) {
-        mDevice.findObject(
-            UiSelector()
-                .textContains("Submit drop down option")
-                .resourceId("submitOption"),
-        ).waitForExists(waitingTime)
+        mDevice
+            .findObject(UiSelector().textContains("Submit drop down option").resourceId("submitOption"))
+            .waitForExists(waitingTime)
 
-        assertTrue(
-            mDevice.findObject(
-                UiSelector()
-                    .text("Selected option is: $optionName"),
-            ).waitForExists(waitingTime),
-        )
+        assertTrue(mDevice.findObject(UiSelector().text("Selected option is: $optionName")).waitForExists(waitingTime))
     }
 
     fun enterFindInPageQuery(expectedText: String) {
@@ -411,13 +370,13 @@ class BrowserRobot {
         for (i in 1..RETRY_COUNT) {
             try {
                 assertTrue(
-                    mDevice.findObject(
-                        UiSelector()
-                            .resourceId("cookie_message")
-                            .childSelector(
-                                UiSelector().textContains(areCookiesEnabled),
-                            ),
-                    ).waitForExists(waitingTime),
+                    mDevice
+                        .findObject(
+                            UiSelector()
+                                .resourceId("cookie_message")
+                                .childSelector(UiSelector().textContains(areCookiesEnabled))
+                        )
+                        .waitForExists(waitingTime)
                 )
                 break
             } catch (e: AssertionError) {
@@ -445,11 +404,11 @@ class BrowserRobot {
                 if (i == RETRY_COUNT) {
                     throw e
                 } else {
-                    browserScreen {
-                    }.openMainMenu {
-                    }.clickReloadButton {
-                        progressBar.waitUntilGone(waitingTime)
-                    }
+                    browserScreen {}
+                        .openMainMenu {}
+                        .clickReloadButton {
+                            progressBar.waitUntilGone(waitingTime)
+                        }
                 }
             }
         }
@@ -468,11 +427,11 @@ class BrowserRobot {
                 if (i == RETRY_COUNT) {
                     throw e
                 } else {
-                    browserScreen {
-                    }.openMainMenu {
-                    }.clickReloadButton {
-                        progressBar.waitUntilGone(waitingTime)
-                    }
+                    browserScreen {}
+                        .openMainMenu {}
+                        .clickReloadButton {
+                            progressBar.waitUntilGone(waitingTime)
+                        }
                 }
             }
         }
@@ -491,11 +450,11 @@ class BrowserRobot {
                 if (i == RETRY_COUNT) {
                     throw e
                 } else {
-                    browserScreen {
-                    }.openMainMenu {
-                    }.clickReloadButton {
-                        progressBar.waitUntilGone(waitingTime)
-                    }
+                    browserScreen {}
+                        .openMainMenu {}
+                        .clickReloadButton {
+                            progressBar.waitUntilGone(waitingTime)
+                        }
                 }
             }
         }
@@ -511,9 +470,7 @@ class BrowserRobot {
         }
 
         fun clearBrowsingData(interact: HomeScreenRobot.() -> Unit): HomeScreenRobot.Transition {
-            eraseBrowsingButton
-                .check(matches(isDisplayed()))
-                .perform(click())
+            eraseBrowsingButton.check(matches(isDisplayed())).perform(click())
 
             HomeScreenRobot().interact()
             return HomeScreenRobot.Transition()
@@ -521,9 +478,7 @@ class BrowserRobot {
 
         fun openMainMenu(interact: ThreeDotMainMenuRobot.() -> Unit): ThreeDotMainMenuRobot.Transition {
             browserURLbar.waitForExists(waitingTime)
-            mainMenu
-                .check(matches(isDisplayed()))
-                .perform(click())
+            mainMenu.check(matches(isDisplayed())).perform(click())
 
             ThreeDotMainMenuRobot().interact()
             return ThreeDotMainMenuRobot.Transition()
@@ -536,7 +491,9 @@ class BrowserRobot {
             return HomeScreenRobot.Transition()
         }
 
-        fun openSiteSecurityInfoSheet(interact: SiteSecurityInfoSheetRobot.() -> Unit): SiteSecurityInfoSheetRobot.Transition {
+        fun openSiteSecurityInfoSheet(
+            interact: SiteSecurityInfoSheetRobot.() -> Unit
+        ): SiteSecurityInfoSheetRobot.Transition {
             if (securityIcon.exists()) {
                 securityIcon.click()
             } else {
@@ -585,48 +542,35 @@ inline fun runWithIdleRes(ir: IdlingResource?, pendingCheck: () -> Unit) {
     }
 }
 
-private fun assertOpenLinksInAppsPrompt(openLinksInAppsEnabled: Boolean, link: String) {
+private fun assertOpenLinksInAppsPrompt(openLinksInAppsEnabled: Boolean) {
     if (openLinksInAppsEnabled) {
         mDevice.findObject(UiSelector().resourceId("$packageName:id/parentPanel")).waitForExists(waitingTime)
         assertTrue(openLinksInAppsMessage.waitForExists(waitingTimeShort))
-        assertTrue(openLinksInAppsLink(link).exists())
         assertTrue(openLinksInAppsCancelButton.waitForExists(waitingTimeShort))
         assertTrue(openLinksInAppsOpenButton.waitForExists(waitingTimeShort))
     } else {
         assertFalse(
-            mDevice.findObject(
-                UiSelector().resourceId("$packageName:id/parentPanel"),
-            ).waitForExists(waitingTimeShort),
+            mDevice.findObject(UiSelector().resourceId("$packageName:id/parentPanel")).waitForExists(waitingTimeShort)
         )
     }
 }
 
-private fun openLinksInAppsLink(link: String) = mDevice.findObject(UiSelector().textContains(link))
-
-private val browserURLbar = mDevice.findObject(
-    UiSelector().resourceId("$packageName:id/mozac_browser_toolbar_url_view"),
-)
+private val browserURLbar =
+    mDevice.findObject(UiSelector().resourceId("$packageName:id/mozac_browser_toolbar_url_view"))
 
 private val eraseBrowsingButton = onView(withContentDescription("Erase browsing history"))
 
-private val tabsCounter = onView(withId(R.id.counter_root))
+private val tabsCounter = onView(withId(tabcounterR.id.counter_root))
 
-private val mainMenu = onView(withId(R.id.mozac_browser_toolbar_menu))
+private val mainMenu = onView(withId(toolbarR.id.mozac_browser_toolbar_menu))
 
-private val shareAppsList =
-    mDevice.findObject(UiSelector().resourceId("android:id/resolver_list"))
+private val shareAppsList = mDevice.findObject(UiSelector().resourceId("android:id/resolver_list"))
 
 private val securityIcon =
-    mDevice.findObject(
-        UiSelector()
-            .resourceId("$packageName:id/mozac_browser_toolbar_tracking_protection_indicator"),
-    )
+    mDevice.findObject(UiSelector().resourceId("$packageName:id/mozac_browser_toolbar_tracking_protection_indicator"))
 
 private val site_info_indicator =
-    mDevice.findObject(
-        UiSelector()
-            .resourceId("$packageName:id/mozac_browser_toolbar_site_info_indicator"),
-    )
+    mDevice.findObject(UiSelector().resourceId("$packageName:id/mozac_browser_toolbar_site_info_indicator"))
 
 // Link long-tap context menu items
 private val openLinkInPrivateTab = onView(withText("Open link in private tab"))
@@ -647,15 +591,13 @@ private val copyImageLocation = onView(withText("Copy image location"))
 private val shareImage = onView(withText("Share image"))
 
 // Find in page toolbar
-private val findInPageQuery = onView(withId(R.id.find_in_page_query_text))
-
-private val findInPageResult = onView(withId(R.id.find_in_page_result_text))
+private val findInPageQuery = onView(withId(findinpageR.id.find_in_page_query_text))
 
 private val findInPageNextButton = mDevice.findObject(UiSelector().resourceId("$packageName:id/find_in_page_next_btn"))
 
 private val findInPagePrevButton = mDevice.findObject(UiSelector().resourceId("$packageName:id/find_in_page_prev_btn"))
 
-private val findInPageCloseButton = onView(withId(R.id.find_in_page_close_btn))
+private val findInPageCloseButton = onView(withId(findinpageR.id.find_in_page_close_btn))
 
 private val openLinksInAppsMessage = mDevice.findObject(UiSelector().resourceId("$packageName:id/alertTitle"))
 
@@ -663,33 +605,19 @@ private val openLinksInAppsCancelButton = mDevice.findObject(UiSelector().textCo
 
 private val openLinksInAppsOpenButton =
     mDevice.findObject(
-        UiSelector()
-            .index(1)
-            .textContains("OPEN")
-            .className("android.widget.Button")
-            .packageName(packageName),
+        UiSelector().index(1).textContains("OPEN").className("android.widget.Button").packageName(packageName)
     )
 
 private val currentDate = LocalDate.now()
 private val currentDay = currentDate.dayOfMonth
 private val currentMonth = currentDate.month
-private val currentYear = currentDate.year
 
-private val permissionAllowBtn = mDevice.findObject(
-    UiSelector()
-        .resourceId("$packageName:id/allow_button"),
-)
+private val permissionAllowBtn = mDevice.findObject(UiSelector().resourceId("$packageName:id/allow_button"))
 
-private val permissionDenyBtn = mDevice.findObject(
-    UiSelector()
-        .resourceId("$packageName:id/deny_button"),
-)
+private val permissionDenyBtn = mDevice.findObject(UiSelector().resourceId("$packageName:id/deny_button"))
 
-private fun webPageItemContainingText(itemText: String) =
-    mDevice.findObject(UiSelector().textContains(itemText))
+private fun webPageItemContainingText(itemText: String) = mDevice.findObject(UiSelector().textContains(itemText))
 
-private fun webPageItemWithText(itemText: String) =
-    mDevice.findObject(UiSelector().text(itemText))
+private fun webPageItemWithText(itemText: String) = mDevice.findObject(UiSelector().text(itemText))
 
-private fun webPageItemWithResourceId(resourceId: String) =
-    mDevice.findObject(UiSelector().resourceId(resourceId))
+private fun webPageItemWithResourceId(resourceId: String) = mDevice.findObject(UiSelector().resourceId(resourceId))

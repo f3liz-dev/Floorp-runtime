@@ -16,6 +16,7 @@ class MozTextLabel extends HTMLLabelElement {
   #insertSeparator = false;
   #alwaysAppendAccessKey = false;
   #lastFormattedAccessKey = null;
+  #lastFormattedText = null;
   #observer = null;
 
   // Default to underlining accesskeys for Windows and Linux.
@@ -42,23 +43,10 @@ class MozTextLabel extends HTMLLabelElement {
       );
       if (MozTextLabel.#underlineAccesskey) {
         try {
-          const nsIPrefLocalizedString = Ci.nsIPrefLocalizedString;
-          const prefNameInsertSeparator =
-            "intl.menuitems.insertseparatorbeforeaccesskeys";
-          const prefNameAlwaysAppendAccessKey =
-            "intl.menuitems.alwaysappendaccesskeys";
-
-          let val = Services.prefs.getComplexValue(
-            prefNameInsertSeparator,
-            nsIPrefLocalizedString
-          ).data;
-          this.#insertSeparator = val == "true";
-          val = Services.prefs.getComplexValue(
-            prefNameAlwaysAppendAccessKey,
-            nsIPrefLocalizedString
-          ).data;
-          this.#alwaysAppendAccessKey = val == "true";
-        } catch (e) {
+          this.#insertSeparator =
+            Services.locale.insertSeparatorBeforeAccesskeys;
+          this.#alwaysAppendAccessKey = Services.locale.alwaysAppendAccesskeys;
+        } catch {
           this.#insertSeparator = this.#alwaysAppendAccessKey = true;
         }
       }
@@ -154,7 +142,7 @@ class MozTextLabel extends HTMLLabelElement {
     if (
       (controlElement.localName == "checkbox" ||
         controlElement.localName == "radio") &&
-      controlElement.getAttribute("disabled") == "true"
+      controlElement.hasAttribute("disabled")
     ) {
       return;
     }
@@ -197,11 +185,14 @@ class MozTextLabel extends HTMLLabelElement {
   formatAccessKey() {
     // Skip doing any DOM manipulation whenever possible:
     let accessKey = this.accessKey || this.getAttribute("shownaccesskey");
+    let text = this.textContent;
     if (
       !MozTextLabel.#underlineAccesskey ||
-      this.#lastFormattedAccessKey == accessKey ||
-      !this.textContent ||
-      !this.textContent.trim()
+      (!accessKey && !this.#lastFormattedAccessKey) ||
+      (this.#lastFormattedAccessKey == accessKey &&
+        this.#lastFormattedText == text) ||
+      !text ||
+      !text.trim()
     ) {
       return;
     }
@@ -209,7 +200,12 @@ class MozTextLabel extends HTMLLabelElement {
     try {
       this.#formatAccessKey(accessKey);
     } finally {
-      queueMicrotask(() => this.#startMutationObserver());
+      this.#lastFormattedText = this.textContent;
+      queueMicrotask(() => {
+        this.#startMutationObserver();
+        // ensure the access key is formatted
+        this.formatAccessKey();
+      });
     }
   }
 

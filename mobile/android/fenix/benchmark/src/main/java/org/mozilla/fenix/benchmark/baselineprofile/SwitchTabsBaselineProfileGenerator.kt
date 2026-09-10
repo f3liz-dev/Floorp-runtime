@@ -4,24 +4,16 @@
 
 package org.mozilla.fenix.benchmark.baselineprofile
 
-import android.content.Intent
-import android.net.Uri
 import android.os.Build
 import androidx.annotation.RequiresApi
 import androidx.benchmark.macro.junit4.BaselineProfileRule
 import org.junit.Rule
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.junit.runners.Parameterized
-import org.mozilla.fenix.benchmark.utils.EXTRA_COMPOSABLE_TOOLBAR
-import org.mozilla.fenix.benchmark.utils.ParameterizedToolbarsTest
+import org.mozilla.fenix.benchmark.utils.HtmlAsset
+import org.mozilla.fenix.benchmark.utils.MockWebServerRule
 import org.mozilla.fenix.benchmark.utils.TARGET_PACKAGE
-import org.mozilla.fenix.benchmark.utils.closeAllTabs
-import org.mozilla.fenix.benchmark.utils.enterSearchMode
-import org.mozilla.fenix.benchmark.utils.loadSite
-import org.mozilla.fenix.benchmark.utils.openNewTabOnTabsTray
-import org.mozilla.fenix.benchmark.utils.openTabsTray
-import org.mozilla.fenix.benchmark.utils.switchTabs
+import org.mozilla.fenix.benchmark.utils.switchTabsJourney
+import org.mozilla.fenix.benchmark.utils.url
 
 /**
  * This test class generates a baseline profile on a critical user journey, that opens 2 new tabs and
@@ -29,8 +21,6 @@ import org.mozilla.fenix.benchmark.utils.switchTabs
  *
  * Refer to the [baseline profile documentation](https://d.android.com/topic/performance/baselineprofiles)
  * for more information.
- *
- * Make sure `autosignReleaseWithDebugKey=true` is present in local.properties.
  *
  * Generate the baseline profile using this gradle task:
  * ```
@@ -49,38 +39,25 @@ import org.mozilla.fenix.benchmark.utils.switchTabs
  * When using this class to generate a baseline profile, only API 33+ or rooted API 28+ are supported.
  */
 @RequiresApi(Build.VERSION_CODES.P)
-@RunWith(Parameterized::class)
 @BaselineProfileGenerator
-class SwitchTabsBaselineProfileGenerator(
-    private val useComposableToolbar: Boolean,
-): ParameterizedToolbarsTest() {
+class SwitchTabsBaselineProfileGenerator {
 
     @get:Rule
     val rule = BaselineProfileRule()
+
+    @get:Rule
+    val mockRule = MockWebServerRule()
 
     @Test
     fun generateBaselineProfile() {
         rule.collect(
             packageName = TARGET_PACKAGE,
+            maxIterations = baselineProfileMaxIterations(),
         ) {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("fenix-nightly://home"))
-                .putExtra(EXTRA_COMPOSABLE_TOOLBAR, useComposableToolbar)
-            intent.setPackage(packageName)
-
-            startActivityAndWait(intent = intent)
-
-            device.enterSearchMode(useComposableToolbar)
-            device.loadSite(url = "example.com", useComposableToolbar)
-
-            device.openTabsTray(useComposableToolbar)
-            device.openNewTabOnTabsTray()
-            device.loadSite(url = "https://www.mozilla.org/credits/", useComposableToolbar)
-
-            device.openTabsTray(useComposableToolbar)
-            device.switchTabs(siteName = "Example Domain", newTabUrl = "http://example.com")
-
-            device.openTabsTray(useComposableToolbar)
-            device.closeAllTabs()
+            switchTabsJourney(
+                simpleHtmlUrl = mockRule.url(HtmlAsset.SIMPLE),
+                longHtmlUrl = mockRule.url(HtmlAsset.LONG),
+            )
         }
     }
 }

@@ -1,3 +1,6 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 Unicode true
 
 OutFile "setup-stub.exe"
@@ -28,9 +31,11 @@ Function CheckCpuSupportsSSE
 FunctionEnd
 
 !include "stub.nsh"
+!include stub_helpers.nsh
 
 Page custom createProfileCleanup
 Page custom createInstall ; Download / Installation page
+Page instfiles
 
 Function CanWrite
   StrCpy $CanWriteToInstallDir "false"
@@ -137,20 +142,36 @@ Function PromptForInstall
 FunctionEnd
 
 Function .onInit
+  ; After elevation, this is re-run with /UAC: on the command line. In this
+  ; case, we do not want to prompt the user---they've already been prompted!
   ${GetParameters} $0
-  ; If the only parameter is "/Prompt", ask the user before anything else.
-  ; The "only parameter" requirement is needed, because when we show the user
-  ; the UAC prompt, we restart the stub installer with the same parameters,
-  ; plus a couple of extras related to elevation.
-  ${If} $0 == "/Prompt"
-    Call PromptForInstall
-    Pop $0
-    ${If} $0 != "yes"
-      StrCpy $AbortInstallation "true"
-      Quit
+  ClearErrors
+  ${GetOptions} "$0" "/UAC:" $1
+  ${If} ${Errors}
+    Call EnsureSingleInstance
+    ClearErrors
+    ${GetOptions} "$0" "/Prompt" $1
+    ${IfNot} ${Errors}
+      Call PromptForInstall
+      Pop $0
+      ${If} $0 != "yes"
+        StrCpy $AbortInstallation "true"
+        Quit
+      ${EndIf}
     ${EndIf}
   ${EndIf}
   Call CommonOnInit
+FunctionEnd
+
+Function EnsureSingleInstance
+  StrCpy $R0 "Mozilla${BrandFullNameInternal}StubInstallerMutex"
+  System::Call 'kernel32::CreateMutexW(i 0, i 0, w "$R0") i.s ?e'
+  Pop $R0  ; GetLastError
+  Pop $R1  ; Mutex handle
+  ${If} $R0 == 183 ; ERROR_ALREADY_EXISTS
+    System::Call 'kernel32::CloseHandle(i $R1)'
+    Quit
+  ${EndIf}
 FunctionEnd
 
 Function .onUserAbort
@@ -176,6 +197,7 @@ Function .onUserAbort
       Call StartDownload
     ${EndIf}
   ${Else}
+    StrCpy $ExitCode "${ERR_USER_CANCELLED_BEFORE_DOWNLOAD}"
     Call SendPing
   ${EndIf}
 

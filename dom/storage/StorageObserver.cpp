@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -71,6 +69,7 @@ nsresult StorageObserver::Init() {
   obs->AddObserver(sSelf, "dom-storage:clear-origin-attributes-data", true);
   obs->AddObserver(sSelf, "extension:purge-localStorage", true);
   obs->AddObserver(sSelf, "browser:purge-sessionStorage", true);
+  obs->AddObserver(sSelf, "extension:purge-sessionStorage", true);
 
   // Shutdown
   obs->AddObserver(sSelf, "profile-after-change", true);
@@ -148,7 +147,7 @@ void StorageObserver::Notify(const char* aTopic,
 
   MOZ_ASSERT(sSelf);
 
-  for (auto sink : mSinks.ForwardRange()) {
+  for (auto const& sink : mSinks.ForwardRange()) {
     sink->Observe(aTopic, aOriginAttributesPattern, aOriginScope);
   }
 }
@@ -178,7 +177,7 @@ nsresult StorageObserver::GetOriginScope(const char16_t* aData,
     return rv;
   }
 
-  aOriginScope = originScope;
+  aOriginScope = std::move(originScope);
   return NS_OK;
 }
 
@@ -358,7 +357,8 @@ StorageObserver::Observe(nsISupports* aSubject, const char* aTopic,
     return NS_OK;
   }
 
-  if (!strcmp(aTopic, "browser:purge-sessionStorage")) {
+  if (!strcmp(aTopic, "browser:purge-sessionStorage") ||
+      !strcmp(aTopic, "extension:purge-sessionStorage")) {
     // The caller passed an nsIClearBySiteEntry object which consists of both
     // site and pattern.
     // If both are passed, aSubject takes precedence over aData.
@@ -376,9 +376,11 @@ StorageObserver::Observe(nsISupports* aSubject, const char* aTopic,
       NS_ENSURE_SUCCESS(rv, rv);
 
       nsCString originScope;
-      rv = GetOriginScope(NS_ConvertUTF8toUTF16(schemelessSite).get(),
-                          originScope);
-      NS_ENSURE_SUCCESS(rv, rv);
+      if (!schemelessSite.IsEmpty()) {
+        rv = GetOriginScope(NS_ConvertUTF8toUTF16(schemelessSite).get(),
+                            originScope);
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
 
       Notify(aTopic, patternJSON, originScope);
     } else if (aData) {

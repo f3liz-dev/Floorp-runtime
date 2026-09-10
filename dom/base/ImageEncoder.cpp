@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,7 +8,6 @@
 #include "gfxUtils.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/SyncRunnable.h"
-#include "mozilla/Unused.h"
 #include "mozilla/dom/CanvasRenderingContext2D.h"
 #include "mozilla/dom/GeneratePlaceholderCanvasData.h"
 #include "mozilla/dom/MemoryBlobImpl.h"
@@ -152,7 +149,7 @@ class EncodingRunnable : public Runnable {
                    EncodingCompleteEvent* aEncodingCompleteEvent,
                    int32_t aFormat, const CSSIntSize aSize,
                    CanvasUtils::ImageExtraction aExtractionBehavior,
-                   bool aUsingCustomOptions)
+                   const nsCString& aRandomizationKey, bool aUsingCustomOptions)
       : Runnable("EncodingRunnable"),
         mType(aType),
         mOptions(aOptions),
@@ -163,22 +160,23 @@ class EncodingRunnable : public Runnable {
         mFormat(aFormat),
         mSize(aSize),
         mExtractionBehavior(aExtractionBehavior),
+        mRandomizationKey(aRandomizationKey),
         mUsingCustomOptions(aUsingCustomOptions) {}
 
   nsresult ProcessImageData(uint64_t* aImgSize, void** aImgData) {
     nsCOMPtr<nsIInputStream> stream;
     nsresult rv = ImageEncoder::ExtractDataInternal(
         mType, mOptions, mImageBuffer.get(), mFormat, mSize,
-        mExtractionBehavior, mImage, nullptr, nullptr, getter_AddRefs(stream),
-        mEncoder);
+        mExtractionBehavior, mRandomizationKey, mImage, nullptr, nullptr,
+        getter_AddRefs(stream), mEncoder);
 
     // If there are unrecognized custom parse options, we should fall back to
     // the default values for the encoder without any options at all.
     if (rv == NS_ERROR_INVALID_ARG && mUsingCustomOptions) {
       rv = ImageEncoder::ExtractDataInternal(
           mType, u""_ns, mImageBuffer.get(), mFormat, mSize,
-          mExtractionBehavior, mImage, nullptr, nullptr, getter_AddRefs(stream),
-          mEncoder);
+          mExtractionBehavior, mRandomizationKey, mImage, nullptr, nullptr,
+          getter_AddRefs(stream), mEncoder);
     }
     NS_ENSURE_SUCCESS(rv, rv);
 
@@ -203,7 +201,7 @@ class EncodingRunnable : public Runnable {
     if (NS_FAILED(rv)) {
       if (!mEncodingCompleteEvent->CanBeDeletedOnAnyThread()) {
         // Better to leak than to crash.
-        Unused << mEncodingCompleteEvent.forget();
+        mEncodingCompleteEvent.forget().leak();
       }
       return rv;
     }
@@ -221,6 +219,7 @@ class EncodingRunnable : public Runnable {
   int32_t mFormat;
   const CSSIntSize mSize;
   CanvasUtils::ImageExtraction mExtractionBehavior;
+  nsCString mRandomizationKey;
   bool mUsingCustomOptions;
 };
 
@@ -228,6 +227,7 @@ class EncodingRunnable : public Runnable {
 nsresult ImageEncoder::ExtractData(
     nsAString& aType, const nsAString& aOptions, const CSSIntSize aSize,
     CanvasUtils::ImageExtraction aExtractionBehavior,
+    const nsCString& aRandomizationKey,
     nsICanvasRenderingContextInternal* aContext,
     OffscreenCanvasDisplayHelper* aOffscreenDisplay, nsIInputStream** aStream) {
   nsCOMPtr<imgIEncoder> encoder = ImageEncoder::GetImageEncoder(aType);
@@ -236,14 +236,15 @@ nsresult ImageEncoder::ExtractData(
   }
 
   return ExtractDataInternal(aType, aOptions, nullptr, 0, aSize,
-                             aExtractionBehavior, nullptr, aContext,
-                             aOffscreenDisplay, aStream, encoder);
+                             aExtractionBehavior, aRandomizationKey, nullptr,
+                             aContext, aOffscreenDisplay, aStream, encoder);
 }
 
 /* static */
 nsresult ImageEncoder::ExtractDataFromLayersImageAsync(
     nsAString& aType, const nsAString& aOptions, bool aUsingCustomOptions,
     layers::Image* aImage, CanvasUtils::ImageExtraction aExtractionBehavior,
+    const nsCString& aRandomizationKey,
     EncodeCompleteCallback* aEncodeCallback) {
   nsCOMPtr<imgIEncoder> encoder = ImageEncoder::GetImageEncoder(aType);
   if (!encoder) {
@@ -254,10 +255,10 @@ nsresult ImageEncoder::ExtractDataFromLayersImageAsync(
       new EncodingCompleteEvent(aEncodeCallback);
 
   CSSIntSize size = CSSIntSize::FromUnknownSize(aImage->GetSize());
-  nsCOMPtr<nsIRunnable> event =
-      new EncodingRunnable(aType, aOptions, nullptr, aImage, encoder,
-                           completeEvent, imgIEncoder::INPUT_FORMAT_HOSTARGB,
-                           size, aExtractionBehavior, aUsingCustomOptions);
+  nsCOMPtr<nsIRunnable> event = new EncodingRunnable(
+      aType, aOptions, nullptr, aImage, encoder, completeEvent,
+      imgIEncoder::INPUT_FORMAT_HOSTARGB, size, aExtractionBehavior,
+      VoidCString(), aUsingCustomOptions);
   return NS_DispatchBackgroundTask(event.forget());
 }
 
@@ -266,6 +267,7 @@ nsresult ImageEncoder::ExtractDataAsync(
     nsAString& aType, const nsAString& aOptions, bool aUsingCustomOptions,
     UniquePtr<uint8_t[]> aImageBuffer, int32_t aFormat, const CSSIntSize aSize,
     CanvasUtils::ImageExtraction aExtractionBehavior,
+    const nsCString& aRandomizationKey,
     EncodeCompleteCallback* aEncodeCallback) {
   nsCOMPtr<imgIEncoder> encoder = ImageEncoder::GetImageEncoder(aType);
   if (!encoder) {
@@ -277,7 +279,8 @@ nsresult ImageEncoder::ExtractDataAsync(
 
   nsCOMPtr<nsIRunnable> event = new EncodingRunnable(
       aType, aOptions, std::move(aImageBuffer), nullptr, encoder, completeEvent,
-      aFormat, aSize, aExtractionBehavior, aUsingCustomOptions);
+      aFormat, aSize, aExtractionBehavior, aRandomizationKey,
+      aUsingCustomOptions);
   return NS_DispatchBackgroundTask(event.forget());
 }
 
@@ -286,10 +289,11 @@ nsresult ImageEncoder::GetInputStream(int32_t aWidth, int32_t aHeight,
                                       uint8_t* aImageBuffer, int32_t aFormat,
                                       imgIEncoder* aEncoder,
                                       const nsAString& aEncoderOptions,
+                                      const nsACString& aRandomizationKey,
                                       nsIInputStream** aStream) {
-  nsresult rv =
-      aEncoder->InitFromData(aImageBuffer, aWidth * aHeight * 4, aWidth,
-                             aHeight, aWidth * 4, aFormat, aEncoderOptions);
+  nsresult rv = aEncoder->InitFromData(aImageBuffer, aWidth * aHeight * 4,
+                                       aWidth, aHeight, aWidth * 4, aFormat,
+                                       aEncoderOptions, aRandomizationKey);
   NS_ENSURE_SUCCESS(rv, rv);
 
   nsCOMPtr<imgIEncoder> encoder(aEncoder);
@@ -301,7 +305,8 @@ nsresult ImageEncoder::GetInputStream(int32_t aWidth, int32_t aHeight,
 nsresult ImageEncoder::ExtractDataInternal(
     const nsAString& aType, const nsAString& aOptions, uint8_t* aImageBuffer,
     int32_t aFormat, const CSSIntSize aSize,
-    CanvasUtils::ImageExtraction aExtractionBehavior, layers::Image* aImage,
+    CanvasUtils::ImageExtraction aExtractionBehavior,
+    const nsCString& aRandomizationKey, layers::Image* aImage,
     nsICanvasRenderingContextInternal* aContext,
     OffscreenCanvasDisplayHelper* aOffscreenDisplay, nsIInputStream** aStream,
     imgIEncoder* aEncoder) {
@@ -337,14 +342,14 @@ nsresult ImageEncoder::ExtractDataInternal(
     if (!emptyCanvas->Map(DataSourceSurface::MapType::WRITE, &map)) {
       return NS_ERROR_INVALID_ARG;
     }
+    auto size = map.mStride * aSize.height;
     if (usePlaceholder) {
-      auto size = 4 * aSize.width * aSize.height;
       auto* data = map.mData;
       GeneratePlaceholderCanvasData(size, data);
     }
-    rv = aEncoder->InitFromData(map.mData, aSize.width * aSize.height * 4,
-                                aSize.width, aSize.height, aSize.width * 4,
-                                imgIEncoder::INPUT_FORMAT_HOSTARGB, aOptions);
+    rv = aEncoder->InitFromData(map.mData, size, aSize.width, aSize.height,
+                                map.mStride, imgIEncoder::INPUT_FORMAT_HOSTARGB,
+                                aOptions, VoidCString());
     emptyCanvas->Unmap();
     if (NS_SUCCEEDED(rv)) {
       imgStream = aEncoder;
@@ -354,16 +359,15 @@ nsresult ImageEncoder::ExtractDataInternal(
       return NS_ERROR_INVALID_ARG;
     }
 
-    rv = ImageEncoder::GetInputStream(aSize.width, aSize.height, aImageBuffer,
-                                      aFormat, aEncoder, aOptions,
-                                      getter_AddRefs(imgStream));
+    rv = ImageEncoder::GetInputStream(
+        aSize.width, aSize.height, aImageBuffer, aFormat, aEncoder, aOptions,
+        aRandomizationKey, getter_AddRefs(imgStream));
   } else if (aContext) {
     NS_ConvertUTF16toUTF8 encoderType(aType);
     rv = aContext->GetInputStream(encoderType.get(), aOptions,
-                                  aExtractionBehavior,
+                                  aExtractionBehavior, aRandomizationKey,
                                   getter_AddRefs(imgStream));
   } else if (aOffscreenDisplay) {
-    const NS_ConvertUTF16toUTF8 encoderType(aType);
     if (BufferSizeFromDimensions(aSize.width, aSize.height, 4) == 0) {
       return NS_ERROR_INVALID_ARG;
     }
@@ -379,19 +383,35 @@ nsresult ImageEncoder::ExtractDataInternal(
       return NS_ERROR_OUT_OF_MEMORY;
     }
 
-    {
+    auto size = data->GetSize();
+    if (BufferSizeFromDimensions(size.width, size.height, 4) == 0) {
+      return NS_ERROR_INVALID_ARG;
+    }
+
+    if (aExtractionBehavior == CanvasUtils::ImageExtraction::Randomize) {
+      UniquePtr<uint8_t[]> imageBuffer = gfx::SurfaceToPackedBGRA(data);
+      if (!imageBuffer) {
+        return NS_ERROR_OUT_OF_MEMORY;
+      }
+      aOffscreenDisplay->MaybeRandomizePixels(aExtractionBehavior,
+                                              imageBuffer.get(), size);
+      rv = ImageEncoder::GetInputStream(
+          size.width, size.height, imageBuffer.get(),
+          imgIEncoder::INPUT_FORMAT_HOSTARGB, aEncoder, aOptions,
+          aRandomizationKey, getter_AddRefs(imgStream));
+    } else {
       DataSourceSurface::MappedSurface map;
       if (!data->Map(gfx::DataSourceSurface::MapType::READ, &map)) {
         return NS_ERROR_INVALID_ARG;
       }
-      auto size = data->GetSize();
-      rv = aEncoder->InitFromData(map.mData, size.width * size.height * 4,
-                                  size.width, size.height, size.width * 4,
-                                  imgIEncoder::INPUT_FORMAT_HOSTARGB, aOptions);
+      rv = aEncoder->InitFromData(map.mData, map.mStride * size.height,
+                                  size.width, size.height, map.mStride,
+                                  imgIEncoder::INPUT_FORMAT_HOSTARGB, aOptions,
+                                  aRandomizationKey);
       data->Unmap();
-    }
-    if (NS_SUCCEEDED(rv)) {
-      imgStream = aEncoder;
+      if (NS_SUCCEEDED(rv)) {
+        imgStream = aEncoder;
+      }
     }
   } else if (aImage) {
     // It is safe to convert PlanarYCbCr format from YUV to RGB off-main-thread.
@@ -403,24 +423,28 @@ nsresult ImageEncoder::ExtractDataInternal(
       layers::PlanarYCbCrImage* ycbcrImage =
           static_cast<layers::PlanarYCbCrImage*>(aImage);
       gfxImageFormat format = SurfaceFormat::A8R8G8B8_UINT32;
-      int32_t stride = GetAlignedStride<16>(aSize.width, 4);
-      size_t length = BufferSizeFromStrideAndHeight(stride, aSize.height);
+      auto stride = GetAlignedStride<16>(aSize.width, 4);
+      if (stride.isNothing()) {
+        return NS_ERROR_INVALID_ARG;
+      }
+      size_t length =
+          BufferSizeFromStrideAndHeight(stride.value(), aSize.height);
       if (length == 0) {
         return NS_ERROR_INVALID_ARG;
       }
       data.SetCapacity(length);
 
       rv = ConvertYCbCrToRGB(*ycbcrImage->GetData(), format,
-                             aSize.ToUnknownSize(), data.Elements(), stride);
+                             aSize.ToUnknownSize(), data.Elements(),
+                             stride.value());
       if (NS_FAILED(rv)) {
         MOZ_ASSERT_UNREACHABLE("Failed to convert YUV into RGB data");
         return rv;
       }
 
-      rv = aEncoder->InitFromData(data.Elements(),
-                                  aSize.width * aSize.height * 4, aSize.width,
-                                  aSize.height, aSize.width * 4,
-                                  imgIEncoder::INPUT_FORMAT_HOSTARGB, aOptions);
+      rv = aEncoder->InitFromData(
+          data.Elements(), length, aSize.width, aSize.height, stride.value(),
+          imgIEncoder::INPUT_FORMAT_HOSTARGB, aOptions, VoidCString());
     } else {
       if (BufferSizeFromDimensions(aSize.width, aSize.height, 4) == 0) {
         return NS_ERROR_INVALID_ARG;
@@ -435,9 +459,10 @@ nsresult ImageEncoder::ExtractDataInternal(
         return NS_ERROR_INVALID_ARG;
       }
       auto size = dataSurface->GetSize();
-      rv = aEncoder->InitFromData(map.mData, size.width * size.height * 4,
-                                  size.width, size.height, size.width * 4,
-                                  imgIEncoder::INPUT_FORMAT_HOSTARGB, aOptions);
+      rv = aEncoder->InitFromData(map.mData, map.mStride * size.height,
+                                  size.width, size.height, map.mStride,
+                                  imgIEncoder::INPUT_FORMAT_HOSTARGB, aOptions,
+                                  VoidCString());
       dataSurface->Unmap();
     }
 

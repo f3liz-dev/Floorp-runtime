@@ -17,7 +17,6 @@ import mozilla.components.support.base.Component
 import mozilla.components.support.base.facts.Action
 import mozilla.components.support.base.facts.Facts
 import mozilla.components.support.base.facts.processor.CollectionProcessor
-import mozilla.components.support.test.ext.joinBlocking
 import mozilla.components.support.test.mock
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -42,11 +41,9 @@ class FxSuggestFactsMiddlewareTest {
 
     @Test
     fun `GIVEN no suggestions are visible WHEN the engagement is completed THEN no facts are collected`() {
-        val store = BrowserStore(
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+        val store = BrowserStore(middleware = listOf(FxSuggestFactsMiddleware()))
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false))
 
         assertTrue(processor.facts.isEmpty())
     }
@@ -55,24 +52,29 @@ class FxSuggestFactsMiddlewareTest {
     fun `GIVEN 2 non-AMP suggestions are visible WHEN the engagement is completed THEN no facts are collected`() {
         val provider: AwesomeBar.SuggestionProvider = mock()
         val providerGroup = AwesomeBar.SuggestionProviderGroup(listOf(provider))
-        val providerGroupSuggestions = listOf(
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(provider),
-        )
-        val store = BrowserStore(
-            initialState = BrowserState(
-                awesomeBarState = AwesomeBarState(
-                    visibilityState = AwesomeBar.VisibilityState(
-                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions),
+        val providerGroupSuggestions =
+            listOf(
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(provider),
+            )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        awesomeBarState =
+                            AwesomeBarState(
+                                visibilityState =
+                                    AwesomeBar.VisibilityState(
+                                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions)
+                                    ),
+                                clickedSuggestion = providerGroupSuggestions[1],
+                            ),
+                        search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
                     ),
-                    clickedSuggestion = providerGroupSuggestions[1],
-                ),
-                search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
-            ),
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+                middleware = listOf(FxSuggestFactsMiddleware()),
+            )
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false))
 
         assertTrue(processor.facts.isEmpty())
     }
@@ -81,41 +83,49 @@ class FxSuggestFactsMiddlewareTest {
     fun `GIVEN 1 AMP suggestion is visible WHEN the engagement is abandoned THEN 1 impression fact is collected`() {
         val provider: AwesomeBar.SuggestionProvider = mock()
         val providerGroup = AwesomeBar.SuggestionProviderGroup(listOf(provider))
-        val providerGroupSuggestions = listOf(
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/impression",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/click",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+        val providerGroupSuggestions =
+            listOf(
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/impression",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/click",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                        ),
                 ),
-            ),
-        )
-        val store = BrowserStore(
-            initialState = BrowserState(
-                awesomeBarState = AwesomeBarState(
-                    visibilityState = AwesomeBar.VisibilityState(
-                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions),
+            )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        awesomeBarState =
+                            AwesomeBarState(
+                                visibilityState =
+                                    AwesomeBar.VisibilityState(
+                                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions)
+                                    )
+                            ),
+                        search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
                     ),
-                ),
-                search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
-            ),
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+                middleware = listOf(FxSuggestFactsMiddleware()),
+            )
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = true)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = true))
 
         assertEquals(1, processor.facts.size)
         processor.facts[0].apply {
@@ -134,7 +144,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(123, impressionInfo.blockId)
             assertEquals("mozilla", impressionInfo.advertiser)
             assertEquals("https://example.com/impression", impressionInfo.reportingUrl)
@@ -147,7 +160,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertFalse(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertTrue(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -159,41 +173,49 @@ class FxSuggestFactsMiddlewareTest {
     fun `GIVEN 1 AMP suggestion is visible WHEN the engagement is completed THEN 1 impression fact is collected`() {
         val provider: AwesomeBar.SuggestionProvider = mock()
         val providerGroup = AwesomeBar.SuggestionProviderGroup(listOf(provider))
-        val providerGroupSuggestions = listOf(
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/impression",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/click",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+        val providerGroupSuggestions =
+            listOf(
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/impression",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/click",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                        ),
                 ),
-            ),
-        )
-        val store = BrowserStore(
-            initialState = BrowserState(
-                awesomeBarState = AwesomeBarState(
-                    visibilityState = AwesomeBar.VisibilityState(
-                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions),
+            )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        awesomeBarState =
+                            AwesomeBarState(
+                                visibilityState =
+                                    AwesomeBar.VisibilityState(
+                                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions)
+                                    )
+                            ),
+                        search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
                     ),
-                ),
-                search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
-            ),
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+                middleware = listOf(FxSuggestFactsMiddleware()),
+            )
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false))
 
         assertEquals(1, processor.facts.size)
         processor.facts[0].apply {
@@ -212,7 +234,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(123, impressionInfo.blockId)
             assertEquals("mozilla", impressionInfo.advertiser)
             assertEquals("https://example.com/impression", impressionInfo.reportingUrl)
@@ -225,7 +250,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertFalse(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -237,42 +263,50 @@ class FxSuggestFactsMiddlewareTest {
     fun `GIVEN 1 AMP suggestion is visible and a non-AMP suggestion is clicked WHEN the engagement is completed THEN 1 impression fact is collected`() {
         val provider: AwesomeBar.SuggestionProvider = mock()
         val providerGroup = AwesomeBar.SuggestionProviderGroup(listOf(provider))
-        val providerGroupSuggestions = listOf(
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/impression",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/click",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+        val providerGroupSuggestions =
+            listOf(
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/impression",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/click",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                        ),
                 ),
-            ),
-        )
-        val store = BrowserStore(
-            initialState = BrowserState(
-                awesomeBarState = AwesomeBarState(
-                    visibilityState = AwesomeBar.VisibilityState(
-                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions),
+            )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        awesomeBarState =
+                            AwesomeBarState(
+                                visibilityState =
+                                    AwesomeBar.VisibilityState(
+                                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions)
+                                    ),
+                                clickedSuggestion = providerGroupSuggestions[0],
+                            ),
+                        search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
                     ),
-                    clickedSuggestion = providerGroupSuggestions[0],
-                ),
-                search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
-            ),
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+                middleware = listOf(FxSuggestFactsMiddleware()),
+            )
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false))
 
         assertEquals(1, processor.facts.size)
         processor.facts[0].apply {
@@ -291,7 +325,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(123, impressionInfo.blockId)
             assertEquals("mozilla", impressionInfo.advertiser)
             assertEquals("https://example.com/impression", impressionInfo.reportingUrl)
@@ -304,7 +341,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertFalse(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -316,42 +354,50 @@ class FxSuggestFactsMiddlewareTest {
     fun `GIVEN 1 AMP suggestion is visible and clicked WHEN the engagement is completed THEN 1 impression fact and 1 click fact are collected`() {
         val provider: AwesomeBar.SuggestionProvider = mock()
         val providerGroup = AwesomeBar.SuggestionProviderGroup(listOf(provider))
-        val providerGroupSuggestions = listOf(
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/impression",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/click",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+        val providerGroupSuggestions =
+            listOf(
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/impression",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/click",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                        ),
                 ),
-            ),
-        )
-        val store = BrowserStore(
-            initialState = BrowserState(
-                awesomeBarState = AwesomeBarState(
-                    visibilityState = AwesomeBar.VisibilityState(
-                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions),
+            )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        awesomeBarState =
+                            AwesomeBarState(
+                                visibilityState =
+                                    AwesomeBar.VisibilityState(
+                                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions)
+                                    ),
+                                clickedSuggestion = providerGroupSuggestions[1],
+                            ),
+                        search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
                     ),
-                    clickedSuggestion = providerGroupSuggestions[1],
-                ),
-                search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
-            ),
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+                middleware = listOf(FxSuggestFactsMiddleware()),
+            )
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false))
 
         assertEquals(2, processor.facts.size)
         processor.facts[0].apply {
@@ -370,7 +416,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(123, impressionInfo.blockId)
             assertEquals("mozilla", impressionInfo.advertiser)
             assertEquals("https://example.com/impression", impressionInfo.reportingUrl)
@@ -383,7 +432,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertTrue(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -403,7 +453,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val clickInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val clickInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(123, clickInfo.blockId)
             assertEquals("mozilla", clickInfo.advertiser)
             assertEquals("https://example.com/click", clickInfo.reportingUrl)
@@ -422,61 +475,72 @@ class FxSuggestFactsMiddlewareTest {
     fun `GIVEN 2 AMP suggestions are visible WHEN the engagement is completed THEN 2 impression facts are collected`() {
         val provider: AwesomeBar.SuggestionProvider = mock()
         val providerGroup = AwesomeBar.SuggestionProviderGroup(listOf(provider))
-        val providerGroupSuggestions = listOf(
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/impression-1",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/click-1",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+        val providerGroupSuggestions =
+            listOf(
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/impression-1",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/click-1",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                        ),
                 ),
-            ),
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 456,
-                        advertiser = "good place eats",
-                        reportingUrl = "https://example.com/impression-2",
-                        iabCategory = "8 - Food & Drink",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 456,
-                        advertiser = "good place eats",
-                        reportingUrl = "https://example.com/click-2",
-                        iabCategory = "8 - Food & Drink",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 456,
+                                    advertiser = "good place eats",
+                                    reportingUrl = "https://example.com/impression-2",
+                                    iabCategory = "8 - Food & Drink",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 456,
+                                    advertiser = "good place eats",
+                                    reportingUrl = "https://example.com/click-2",
+                                    iabCategory = "8 - Food & Drink",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                        ),
                 ),
-            ),
-        )
-        val store = BrowserStore(
-            initialState = BrowserState(
-                awesomeBarState = AwesomeBarState(
-                    visibilityState = AwesomeBar.VisibilityState(
-                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions),
+            )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        awesomeBarState =
+                            AwesomeBarState(
+                                visibilityState =
+                                    AwesomeBar.VisibilityState(
+                                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions)
+                                    )
+                            ),
+                        search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
                     ),
-                ),
-                search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
-            ),
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+                middleware = listOf(FxSuggestFactsMiddleware()),
+            )
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false))
 
         assertEquals(2, processor.facts.size)
         processor.facts[0].apply {
@@ -495,7 +559,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(123, impressionInfo.blockId)
             assertEquals("mozilla", impressionInfo.advertiser)
             assertEquals("https://example.com/impression-1", impressionInfo.reportingUrl)
@@ -508,7 +575,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertFalse(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -530,7 +598,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(456, impressionInfo.blockId)
             assertEquals("good place eats", impressionInfo.advertiser)
             assertEquals("https://example.com/impression-2", impressionInfo.reportingUrl)
@@ -543,7 +614,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertFalse(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -555,62 +627,73 @@ class FxSuggestFactsMiddlewareTest {
     fun `GIVEN 2 AMP suggestions are visible and a non-AMP suggestion is clicked WHEN the engagement is completed THEN 2 impression facts are collected`() {
         val provider: AwesomeBar.SuggestionProvider = mock()
         val providerGroup = AwesomeBar.SuggestionProviderGroup(listOf(provider))
-        val providerGroupSuggestions = listOf(
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/impression-1",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/click-1",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+        val providerGroupSuggestions =
+            listOf(
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/impression-1",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/click-1",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                        ),
                 ),
-            ),
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 456,
-                        advertiser = "good place eats",
-                        reportingUrl = "https://example.com/impression-2",
-                        iabCategory = "8 - Food & Drink",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 456,
-                        advertiser = "good place eats",
-                        reportingUrl = "https://example.com/click-2",
-                        iabCategory = "8 - Food & Drink",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 456,
+                                    advertiser = "good place eats",
+                                    reportingUrl = "https://example.com/impression-2",
+                                    iabCategory = "8 - Food & Drink",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 456,
+                                    advertiser = "good place eats",
+                                    reportingUrl = "https://example.com/click-2",
+                                    iabCategory = "8 - Food & Drink",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                        ),
                 ),
-            ),
-        )
-        val store = BrowserStore(
-            initialState = BrowserState(
-                awesomeBarState = AwesomeBarState(
-                    visibilityState = AwesomeBar.VisibilityState(
-                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions),
+            )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        awesomeBarState =
+                            AwesomeBarState(
+                                visibilityState =
+                                    AwesomeBar.VisibilityState(
+                                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions)
+                                    ),
+                                clickedSuggestion = providerGroupSuggestions[2],
+                            ),
+                        search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
                     ),
-                    clickedSuggestion = providerGroupSuggestions[2],
-                ),
-                search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
-            ),
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+                middleware = listOf(FxSuggestFactsMiddleware()),
+            )
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false))
 
         assertEquals(2, processor.facts.size)
         processor.facts[0].apply {
@@ -629,7 +712,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(123, impressionInfo.blockId)
             assertEquals("mozilla", impressionInfo.advertiser)
             assertEquals("https://example.com/impression-1", impressionInfo.reportingUrl)
@@ -642,7 +728,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertFalse(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -664,7 +751,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(456, impressionInfo.blockId)
             assertEquals("good place eats", impressionInfo.advertiser)
             assertEquals("https://example.com/impression-2", impressionInfo.reportingUrl)
@@ -677,7 +767,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertFalse(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -689,62 +780,73 @@ class FxSuggestFactsMiddlewareTest {
     fun `GIVEN 2 AMP suggestions are visible and an AMP suggestion is clicked WHEN the engagement is completed THEN 2 impression facts and 1 click fact are collected`() {
         val provider: AwesomeBar.SuggestionProvider = mock()
         val providerGroup = AwesomeBar.SuggestionProviderGroup(listOf(provider))
-        val providerGroupSuggestions = listOf(
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/impression-1",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 123,
-                        advertiser = "mozilla",
-                        reportingUrl = "https://example.com/click-1",
-                        iabCategory = "22 - Shopping",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+        val providerGroupSuggestions =
+            listOf(
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/impression-1",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 123,
+                                    advertiser = "mozilla",
+                                    reportingUrl = "https://example.com/click-1",
+                                    iabCategory = "22 - Shopping",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                        ),
                 ),
-            ),
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 456,
-                        advertiser = "good place eats",
-                        reportingUrl = "https://example.com/impression-2",
-                        iabCategory = "8 - Food & Drink",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Amp(
-                        blockId = 456,
-                        advertiser = "good place eats",
-                        reportingUrl = "https://example.com/click-2",
-                        iabCategory = "8 - Food & Drink",
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 456,
+                                    advertiser = "good place eats",
+                                    reportingUrl = "https://example.com/impression-2",
+                                    iabCategory = "8 - Food & Drink",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Amp(
+                                    blockId = 456,
+                                    advertiser = "good place eats",
+                                    reportingUrl = "https://example.com/click-2",
+                                    iabCategory = "8 - Food & Drink",
+                                    contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
+                                ),
+                        ),
                 ),
-            ),
-        )
-        val store = BrowserStore(
-            initialState = BrowserState(
-                awesomeBarState = AwesomeBarState(
-                    visibilityState = AwesomeBar.VisibilityState(
-                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions),
+            )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        awesomeBarState =
+                            AwesomeBarState(
+                                visibilityState =
+                                    AwesomeBar.VisibilityState(
+                                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions)
+                                    ),
+                                clickedSuggestion = providerGroupSuggestions[3],
+                            ),
+                        search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
                     ),
-                    clickedSuggestion = providerGroupSuggestions[3],
-                ),
-                search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
-            ),
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+                middleware = listOf(FxSuggestFactsMiddleware()),
+            )
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false))
 
         assertEquals(3, processor.facts.size)
         processor.facts[0].apply {
@@ -763,7 +865,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(123, impressionInfo.blockId)
             assertEquals("mozilla", impressionInfo.advertiser)
             assertEquals("https://example.com/impression-1", impressionInfo.reportingUrl)
@@ -776,7 +881,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertFalse(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -798,7 +904,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(456, impressionInfo.blockId)
             assertEquals("good place eats", impressionInfo.advertiser)
             assertEquals("https://example.com/impression-2", impressionInfo.reportingUrl)
@@ -811,7 +920,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertTrue(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -831,7 +941,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val clickInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp)
+            val clickInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Amp
+                )
             assertEquals(456, clickInfo.blockId)
             assertEquals("good place eats", clickInfo.advertiser)
             assertEquals("https://example.com/click-2", clickInfo.reportingUrl)
@@ -850,33 +963,37 @@ class FxSuggestFactsMiddlewareTest {
     fun `GIVEN 1 Wikipedia suggestion is visible WHEN the engagement is completed THEN 1 impression fact is collected`() {
         val provider: AwesomeBar.SuggestionProvider = mock()
         val providerGroup = AwesomeBar.SuggestionProviderGroup(listOf(provider))
-        val providerGroupSuggestions = listOf(
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Wikipedia(
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Wikipedia(
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+        val providerGroupSuggestions =
+            listOf(
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Wikipedia(contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d"),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Wikipedia(contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d"),
+                        ),
                 ),
-            ),
-        )
-        val store = BrowserStore(
-            initialState = BrowserState(
-                awesomeBarState = AwesomeBarState(
-                    visibilityState = AwesomeBar.VisibilityState(
-                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions),
+            )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        awesomeBarState =
+                            AwesomeBarState(
+                                visibilityState =
+                                    AwesomeBar.VisibilityState(
+                                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions)
+                                    )
+                            ),
+                        search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
                     ),
-                ),
-                search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
-            ),
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+                middleware = listOf(FxSuggestFactsMiddleware()),
+            )
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false))
 
         assertEquals(1, processor.facts.size)
         processor.facts[0].apply {
@@ -895,7 +1012,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Wikipedia)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Wikipedia
+                )
             assertEquals("c303282d-f2e6-46ca-a04a-35d3d873712d", impressionInfo.contextId)
 
             val position = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.POSITION) as? Long)
@@ -904,7 +1024,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertFalse(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -916,34 +1037,38 @@ class FxSuggestFactsMiddlewareTest {
     fun `GIVEN 1 Wikipedia suggestion is visible and clicked WHEN the engagement is completed THEN 1 impression fact and 1 click fact are collected`() {
         val provider: AwesomeBar.SuggestionProvider = mock()
         val providerGroup = AwesomeBar.SuggestionProviderGroup(listOf(provider))
-        val providerGroupSuggestions = listOf(
-            AwesomeBar.Suggestion(provider),
-            AwesomeBar.Suggestion(
-                provider = provider,
-                metadata = mapOf(
-                    FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to FxSuggestInteractionInfo.Wikipedia(
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
-                    FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to FxSuggestInteractionInfo.Wikipedia(
-                        contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d",
-                    ),
+        val providerGroupSuggestions =
+            listOf(
+                AwesomeBar.Suggestion(provider),
+                AwesomeBar.Suggestion(
+                    provider = provider,
+                    metadata =
+                        mapOf(
+                            FxSuggestSuggestionProvider.MetadataKeys.IMPRESSION_INFO to
+                                FxSuggestInteractionInfo.Wikipedia(contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d"),
+                            FxSuggestSuggestionProvider.MetadataKeys.CLICK_INFO to
+                                FxSuggestInteractionInfo.Wikipedia(contextId = "c303282d-f2e6-46ca-a04a-35d3d873712d"),
+                        ),
                 ),
-            ),
-        )
-        val store = BrowserStore(
-            initialState = BrowserState(
-                awesomeBarState = AwesomeBarState(
-                    visibilityState = AwesomeBar.VisibilityState(
-                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions),
+            )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        awesomeBarState =
+                            AwesomeBarState(
+                                visibilityState =
+                                    AwesomeBar.VisibilityState(
+                                        visibleProviderGroups = mapOf(providerGroup to providerGroupSuggestions)
+                                    ),
+                                clickedSuggestion = providerGroupSuggestions[1],
+                            ),
+                        search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
                     ),
-                    clickedSuggestion = providerGroupSuggestions[1],
-                ),
-                search = SearchState(region = RegionState(home = "AQ", current = "AQ")),
-            ),
-            middleware = listOf(FxSuggestFactsMiddleware()),
-        )
+                middleware = listOf(FxSuggestFactsMiddleware()),
+            )
 
-        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false)).joinBlocking()
+        store.dispatch(AwesomeBarAction.EngagementFinished(abandoned = false))
 
         assertEquals(2, processor.facts.size)
         processor.facts[0].apply {
@@ -962,7 +1087,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val impressionInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Wikipedia)
+            val impressionInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Wikipedia
+                )
             assertEquals("c303282d-f2e6-46ca-a04a-35d3d873712d", impressionInfo.contextId)
 
             val position = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.POSITION) as? Long)
@@ -971,7 +1099,8 @@ class FxSuggestFactsMiddlewareTest {
             val isClicked = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.IS_CLICKED) as? Boolean)
             assertTrue(isClicked)
 
-            val engagementAbandoned = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
+            val engagementAbandoned =
+                requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.ENGAGEMENT_ABANDONED) as? Boolean)
             assertFalse(engagementAbandoned)
 
             val clientCountry = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.CLIENT_COUNTRY) as? String)
@@ -991,7 +1120,10 @@ class FxSuggestFactsMiddlewareTest {
                 metadata?.keys,
             )
 
-            val clickInfo = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Wikipedia)
+            val clickInfo =
+                requireNotNull(
+                    metadata?.get(FxSuggestFacts.MetadataKeys.INTERACTION_INFO) as? FxSuggestInteractionInfo.Wikipedia
+                )
             assertEquals("c303282d-f2e6-46ca-a04a-35d3d873712d", clickInfo.contextId)
 
             val position = requireNotNull(metadata?.get(FxSuggestFacts.MetadataKeys.POSITION) as? Long)

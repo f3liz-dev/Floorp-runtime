@@ -38,6 +38,16 @@ const skipIfNotBrowser = () => ({
   skip_if: () => AppConstants.MOZ_BUILD_APP != "browser",
 });
 
+add_setup(() => {
+  // head.js turns pre-onboarding off in xpcshell so Telemetry isn't gated on
+  // browser UI, but this test needs the TOU flow on
+  DEFAULT_BRANCH.setBoolPref(TOU_PREONBOARDING_ENABLED_PREF, true);
+  Services.prefs.clearUserPref(TOU_PREONBOARDING_ENABLED_PREF);
+  // Legacy TOU acceptance only migrates where TOU is available, which on
+  // Linux requires an eligible distribution.
+  DEFAULT_BRANCH.setCharPref("distribution.id", "mozilla-test");
+});
+
 function setupLegacyAndRolloutPrefs({
   acceptedVersion,
   notifiedTime,

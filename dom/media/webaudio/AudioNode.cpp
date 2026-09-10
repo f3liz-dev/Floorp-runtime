@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -208,7 +206,7 @@ AudioNode* AudioNode::Connect(AudioNode& aDestination, uint32_t aOutput,
     return &aDestination;
   }
 
-  WEB_AUDIO_API_LOG("%f: %s %u Connect() to %s %u", Context()->CurrentTime(),
+  WEB_AUDIO_API_LOG("{:f}: {} {} Connect() to {} {}", Context()->CurrentTime(),
                     NodeType(), Id(), aDestination.NodeType(),
                     aDestination.Id());
 
@@ -291,7 +289,7 @@ void AudioNode::SendChannelMixingParametersToTrack() {
 template <>
 bool AudioNode::DisconnectFromOutputIfConnected<AudioNode>(
     uint32_t aOutputNodeIndex, uint32_t aInputIndex) {
-  WEB_AUDIO_API_LOG("%f: %s %u Disconnect()", Context()->CurrentTime(),
+  WEB_AUDIO_API_LOG("{:f}: {} {} Disconnect()", Context()->CurrentTime(),
                     NodeType(), Id());
 
   AudioNode* destination = mOutputNodes[aOutputNodeIndex];

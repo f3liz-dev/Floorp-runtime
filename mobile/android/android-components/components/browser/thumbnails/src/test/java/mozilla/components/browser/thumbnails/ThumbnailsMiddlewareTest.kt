@@ -14,7 +14,6 @@ import mozilla.components.browser.state.state.createTab
 import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.browser.thumbnails.storage.ThumbnailStorage
 import mozilla.components.concept.base.images.ImageSaveRequest
-import mozilla.components.support.test.ext.joinBlocking
 import mozilla.components.support.test.middleware.CaptureActionsMiddleware
 import mozilla.components.support.test.mock
 import org.junit.Test
@@ -28,13 +27,14 @@ class ThumbnailsMiddlewareTest {
         val request = ImageSaveRequest("test-tab1", false)
         val tab = createTab("https://www.mozilla.org", id = "test-tab1")
         val thumbnailStorage: ThumbnailStorage = mock()
-        val store = BrowserStore(
-            initialState = BrowserState(tabs = listOf(tab)),
-            middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
-        )
+        val store =
+            BrowserStore(
+                initialState = BrowserState(tabs = listOf(tab)),
+                middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
+            )
 
         val bitmap: Bitmap = mock()
-        store.dispatch(ContentAction.UpdateThumbnailAction(request.id, bitmap)).joinBlocking()
+        store.dispatch(ContentAction.UpdateThumbnailAction(request.id, bitmap))
         verify(thumbnailStorage).saveThumbnail(request, bitmap)
     }
 
@@ -43,32 +43,36 @@ class ThumbnailsMiddlewareTest {
         val request = ImageSaveRequest("test-tab1", true)
         val tab = createTab("https://www.mozilla.org", id = "test-tab1", private = true)
         val thumbnailStorage: ThumbnailStorage = mock()
-        val store = BrowserStore(
-            initialState = BrowserState(tabs = listOf(tab)),
-            middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
-        )
+        val store =
+            BrowserStore(
+                initialState = BrowserState(tabs = listOf(tab)),
+                middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
+            )
 
         val bitmap: Bitmap = mock()
-        store.dispatch(ContentAction.UpdateThumbnailAction(request.id, bitmap)).joinBlocking()
+        store.dispatch(ContentAction.UpdateThumbnailAction(request.id, bitmap))
         verify(thumbnailStorage).saveThumbnail(request, bitmap)
     }
 
     @Test
     fun `thumbnail storage removes the thumbnail on remove all normal tabs action`() {
         val thumbnailStorage: ThumbnailStorage = mock()
-        val store = BrowserStore(
-            initialState = BrowserState(
-                tabs = listOf(
-                    createTab("https://www.mozilla.org", id = "test-tab1"),
-                    createTab("https://www.firefox.com", id = "test-tab2"),
-                    createTab("https://www.wikipedia.com", id = "test-tab3"),
-                    createTab("https://www.example.org", private = true, id = "test-tab4"),
-                ),
-            ),
-            middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
-        )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        tabs =
+                            listOf(
+                                createTab("https://www.mozilla.org", id = "test-tab1"),
+                                createTab("https://www.firefox.com", id = "test-tab2"),
+                                createTab("https://www.wikipedia.com", id = "test-tab3"),
+                                createTab("https://www.example.org", private = true, id = "test-tab4"),
+                            )
+                    ),
+                middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
+            )
 
-        store.dispatch(TabListAction.RemoveAllNormalTabsAction).joinBlocking()
+        store.dispatch(TabListAction.RemoveAllNormalTabsAction)
         verify(thumbnailStorage).deleteThumbnail("test-tab1", false)
         verify(thumbnailStorage).deleteThumbnail("test-tab2", false)
         verify(thumbnailStorage).deleteThumbnail("test-tab3", false)
@@ -78,19 +82,22 @@ class ThumbnailsMiddlewareTest {
     @Test
     fun `thumbnail storage removes the thumbnail on remove all private tabs action`() {
         val thumbnailStorage: ThumbnailStorage = mock()
-        val store = BrowserStore(
-            initialState = BrowserState(
-                tabs = listOf(
-                    createTab("https://www.mozilla.org", id = "test-tab1"),
-                    createTab("https://www.firefox.com", private = true, id = "test-tab2"),
-                    createTab("https://www.wikipedia.com", private = true, id = "test-tab3"),
-                    createTab("https://www.example.org", private = true, id = "test-tab4"),
-                ),
-            ),
-            middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
-        )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        tabs =
+                            listOf(
+                                createTab("https://www.mozilla.org", id = "test-tab1"),
+                                createTab("https://www.firefox.com", private = true, id = "test-tab2"),
+                                createTab("https://www.wikipedia.com", private = true, id = "test-tab3"),
+                                createTab("https://www.example.org", private = true, id = "test-tab4"),
+                            )
+                    ),
+                middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
+            )
 
-        store.dispatch(TabListAction.RemoveAllPrivateTabsAction).joinBlocking()
+        store.dispatch(TabListAction.RemoveAllPrivateTabsAction)
         verify(thumbnailStorage, never()).deleteThumbnail("test-tab1", false)
         verify(thumbnailStorage).deleteThumbnail("test-tab2", true)
         verify(thumbnailStorage).deleteThumbnail("test-tab3", true)
@@ -100,17 +107,20 @@ class ThumbnailsMiddlewareTest {
     @Test
     fun `thumbnail storage removes the thumbnail on remove all tabs action`() {
         val thumbnailStorage: ThumbnailStorage = mock()
-        val store = BrowserStore(
-            initialState = BrowserState(
-                tabs = listOf(
-                    createTab("https://www.mozilla.org", id = "test-tab1"),
-                    createTab("https://www.firefox.com", id = "test-tab2"),
-                ),
-            ),
-            middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
-        )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        tabs =
+                            listOf(
+                                createTab("https://www.mozilla.org", id = "test-tab1"),
+                                createTab("https://www.firefox.com", id = "test-tab2"),
+                            )
+                    ),
+                middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
+            )
 
-        store.dispatch(TabListAction.RemoveAllTabsAction()).joinBlocking()
+        store.dispatch(TabListAction.RemoveAllTabsAction())
         verify(thumbnailStorage).clearThumbnails()
     }
 
@@ -118,17 +128,20 @@ class ThumbnailsMiddlewareTest {
     fun `thumbnail storage removes the thumbnail on remove tab action`() {
         val sessionIdOrUrl = "test-tab1"
         val thumbnailStorage: ThumbnailStorage = mock()
-        val store = BrowserStore(
-            initialState = BrowserState(
-                tabs = listOf(
-                    createTab("https://www.mozilla.org", id = "test-tab1"),
-                    createTab("https://www.firefox.com", id = "test-tab2"),
-                ),
-            ),
-            middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
-        )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        tabs =
+                            listOf(
+                                createTab("https://www.mozilla.org", id = "test-tab1"),
+                                createTab("https://www.firefox.com", id = "test-tab2"),
+                            )
+                    ),
+                middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
+            )
 
-        store.dispatch(TabListAction.RemoveTabAction(sessionIdOrUrl)).joinBlocking()
+        store.dispatch(TabListAction.RemoveTabAction(sessionIdOrUrl))
         verify(thumbnailStorage).deleteThumbnail(sessionIdOrUrl, false)
     }
 
@@ -136,17 +149,20 @@ class ThumbnailsMiddlewareTest {
     fun `WHEN remove tab action with private tab THEN thumbnail storage removes the thumbnail`() {
         val sessionIdOrUrl = "test-tab1"
         val thumbnailStorage: ThumbnailStorage = mock()
-        val store = BrowserStore(
-            initialState = BrowserState(
-                tabs = listOf(
-                    createTab("https://www.mozilla.org", id = "test-tab1", private = true),
-                    createTab("https://www.firefox.com", id = "test-tab2"),
-                ),
-            ),
-            middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
-        )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        tabs =
+                            listOf(
+                                createTab("https://www.mozilla.org", id = "test-tab1", private = true),
+                                createTab("https://www.firefox.com", id = "test-tab2"),
+                            )
+                    ),
+                middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
+            )
 
-        store.dispatch(TabListAction.RemoveTabAction(sessionIdOrUrl)).joinBlocking()
+        store.dispatch(TabListAction.RemoveTabAction(sessionIdOrUrl))
         verify(thumbnailStorage).deleteThumbnail(sessionIdOrUrl, true)
     }
 
@@ -154,38 +170,45 @@ class ThumbnailsMiddlewareTest {
     fun `thumbnail storage removes the thumbnail on remove tabs action`() {
         val sessionIdOrUrl = "test-tab1"
         val thumbnailStorage: ThumbnailStorage = mock()
-        val store = BrowserStore(
-            initialState = BrowserState(
-                tabs = listOf(
-                    createTab("https://www.mozilla.org", id = "test-tab1"),
-                    createTab("https://www.firefox.com", id = "test-tab2"),
-                ),
-            ),
-            middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
-        )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        tabs =
+                            listOf(
+                                createTab("https://www.mozilla.org", id = "test-tab1"),
+                                createTab("https://www.firefox.com", id = "test-tab2"),
+                            )
+                    ),
+                middleware = listOf(ThumbnailsMiddleware(thumbnailStorage)),
+            )
 
-        store.dispatch(TabListAction.RemoveTabsAction(listOf(sessionIdOrUrl))).joinBlocking()
+        store.dispatch(TabListAction.RemoveTabsAction(listOf(sessionIdOrUrl)))
         verify(thumbnailStorage).deleteThumbnail(sessionIdOrUrl, false)
     }
 
     @Test
     fun `thumbnail actions are the only ones consumed by the middleware`() {
         val capture = CaptureActionsMiddleware<BrowserState, BrowserAction>()
-        val store = BrowserStore(
-            initialState = BrowserState(
-                tabs = listOf(
-                    createTab("https://www.mozilla.org", id = "test-tab1"),
-                    createTab("https://www.firefox.com", id = "test-tab2"),
-                ),
-            ),
-            middleware = listOf(
-                ThumbnailsMiddleware(mock()),
-                capture,
-            ),
-        )
+        val store =
+            BrowserStore(
+                initialState =
+                    BrowserState(
+                        tabs =
+                            listOf(
+                                createTab("https://www.mozilla.org", id = "test-tab1"),
+                                createTab("https://www.firefox.com", id = "test-tab2"),
+                            )
+                    ),
+                middleware =
+                    listOf(
+                        ThumbnailsMiddleware(mock()),
+                        capture,
+                    ),
+            )
 
-        store.dispatch(ContentAction.UpdateThumbnailAction("test-tab1", mock())).joinBlocking()
-        store.dispatch(TabListAction.RemoveTabAction("test-tab1")).joinBlocking()
+        store.dispatch(ContentAction.UpdateThumbnailAction("test-tab1", mock()))
+        store.dispatch(TabListAction.RemoveTabAction("test-tab1"))
 
         // We shouldn't allow thumbnail actions to continue being processed.
         capture.assertNotDispatched(ContentAction.UpdateThumbnailAction::class)
@@ -193,7 +216,7 @@ class ThumbnailsMiddlewareTest {
         capture.assertLastAction(TabListAction.RemoveTabAction::class) {}
 
         // All other actions should also continue being processed.
-        store.dispatch(EngineAction.KillEngineSessionAction("test-tab1")).joinBlocking()
+        store.dispatch(EngineAction.KillEngineSessionAction("test-tab1"))
         capture.assertLastAction(EngineAction.KillEngineSessionAction::class) {}
     }
 }

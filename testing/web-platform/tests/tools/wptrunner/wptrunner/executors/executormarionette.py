@@ -20,7 +20,7 @@ from .base import (CallbackHandler,
                    RefTestImplementation,
                    TestharnessExecutor,
                    TimedRunner,
-                   WdspecExecutor,
+                   PytestExecutor,
                    get_pages,
                    strip_server)
 from .protocol import (AccessibilityProtocolPart,
@@ -34,6 +34,7 @@ from .protocol import (AccessibilityProtocolPart,
                        DevicePostureProtocolPart,
                        DisplayFeaturesProtocolPart,
                        GenerateTestReportProtocolPart,
+                       GlobalPrivacyControlProtocolPart,
                        PrefsProtocolPart,
                        PrintProtocolPart,
                        Protocol,
@@ -402,6 +403,26 @@ class MarionetteSelectorProtocolPart(SelectorProtocolPart):
     def setup(self):
         self.marionette = self.parent.marionette
 
+    def elements_by_selector_array(self, selectors):
+        shadow_roots = []
+        selectors = selectors.copy()
+        selectors.reverse()
+
+        while selectors:
+            selector = selectors.pop()
+            intermediate = []
+            if not shadow_roots:
+                intermediate = self.marionette.find_elements("css selector", selector)
+            else:
+                for root in shadow_roots:
+                    intermediate.extend(root.find_elements("css selector", selector))
+
+            if (selectors):
+                shadow_roots = [element.shadow_root for element in intermediate]
+                shadow_roots = [root for root in shadow_roots if root is not None]
+            else:
+                return intermediate
+
     def elements_by_selector(self, selector):
         return self.marionette.find_elements("css selector", selector)
 
@@ -576,8 +597,8 @@ class MarionetteGenerateTestReportProtocolPart(GenerateTestReportProtocolPart):
     def setup(self):
         self.marionette = self.parent.marionette
 
-    def generate_test_report(self, config):
-        raise NotImplementedError("generate_test_report not yet implemented")
+    def generate_test_report(self, message):
+        self.marionette.generate_test_report(message)
 
 class MarionetteVirtualAuthenticatorProtocolPart(VirtualAuthenticatorProtocolPart):
     def setup(self):
@@ -618,6 +639,29 @@ class MarionetteSetPermissionProtocolPart(SetPermissionProtocolPart):
             self.marionette._send_message("WebDriver:SetPermission", body)
         except errors.UnsupportedOperationException as e:
             raise NotImplementedError("set_permission not yet implemented") from e
+
+
+class MarionetteGlobalPrivacyControlProtocolPart(GlobalPrivacyControlProtocolPart):
+    def setup(self):
+        self.marionette = self.parent.marionette
+
+    def set_global_privacy_control(self, gpc):
+        body = {
+            "gpc": gpc,
+        }
+        try:
+            return self.marionette._send_message("GPC:SetGlobalPrivacyControl", body)["value"]
+        except errors.UnsupportedOperationException as e:
+            raise NotImplementedError("set_global_privacy_control not yet implemented") from e
+
+    def get_global_privacy_control(self):
+        try:
+            return self.marionette._send_message("GPC:GetGlobalPrivacyControl")["value"]
+        except errors.UnsupportedOperationException as e:
+            raise NotImplementedError("get_global_privacy_control not yet implemented") from e
+
+
+
 
 
 class MarionettePrintProtocolPart(PrintProtocolPart):
@@ -707,6 +751,12 @@ class MarionetteAccessibilityProtocolPart(AccessibilityProtocolPart):
     def get_computed_role(self, element):
         return element.computed_role
 
+    def get_accessibility_properties_for_element(self, element):
+        return element.accessibility_properties
+
+    def get_accessibility_properties_for_accessibility_node(self, id):
+        return self.marionette.get_accessibility_properties_for_accessibility_node(id)
+
 
 class MarionetteVirtualSensorProtocolPart(VirtualSensorProtocolPart):
     def setup(self):
@@ -765,14 +815,14 @@ class MarionetteWebExtensionsProtocolPart(WebExtensionsProtocolPart):
     def setup(self):
         self.addons = Addons(self.parent.marionette)
 
-    def install_web_extension(self, extension):
-        if extension["type"] == "base64":
-            extension_id = self.addons.install(data=extension["value"], temp=True)
+    def install_web_extension(self, type, path, value):
+        if type == "base64":
+            extension_id = self.addons.install(data=value, temp=True)
         else:
-            path = self.parent.test_dir + extension["path"]
-            extension_id = self.addons.install(path, temp=True)
+            extension_path = self.parent.test_dir + path
+            extension_id = self.addons.install(extension_path, temp=True)
 
-        return {'extension': extension_id}
+        return extension_id
 
     def uninstall_web_extension(self, extension_id):
         return self.addons.uninstall(extension_id)
@@ -795,6 +845,7 @@ class MarionetteProtocol(Protocol):
                   MarionetteGenerateTestReportProtocolPart,
                   MarionetteVirtualAuthenticatorProtocolPart,
                   MarionetteSetPermissionProtocolPart,
+                  MarionetteGlobalPrivacyControlProtocolPart,
                   MarionettePrintProtocolPart,
                   MarionetteDebugProtocolPart,
                   MarionetteAccessibilityProtocolPart,
@@ -1232,7 +1283,7 @@ class InternalRefTestImplementation(RefTestImplementation):
                 "cacheScreenshots": self.executor.cache_screenshots}
         if self.executor.group_metadata is not None:
             data["urlCount"] = {urljoin(self.executor.server_url(key[0]), key[1]):value
-                                for key, value in self.executor.group_metadata.get("url_count", {}).items()
+                                for key, value in self.executor.group_metadata.extra.get("url_count", {}).items()
                                 if value > 1}
         self.chrome_scope = chrome_scope
         if chrome_scope:
@@ -1304,11 +1355,20 @@ class MarionetteCrashtestExecutor(CrashtestExecutor):
         self.original_pref_values = {}
         self.debug = debug
 
+        self.install_extensions = browser.extensions
+
         with open(os.path.join(here, "test-wait.js")) as f:
             self.wait_script = f.read() % {"classname": "test-wait"}
 
         if marionette is None:
             do_delayed_imports()
+
+    def setup(self, runner, protocol=None):
+        super().setup(runner, protocol)
+        for extension_path in self.install_extensions:
+            self.logger.info("Installing extension from %s" % extension_path)
+            addons = Addons(self.protocol.marionette)
+            addons.install(extension_path)
 
     def is_alive(self):
         return self.protocol.is_alive()
@@ -1418,7 +1478,7 @@ class MarionettePrintRefTestExecutor(MarionetteRefTestExecutor):
         return screenshots
 
 
-class MarionetteWdspecExecutor(WdspecExecutor):
+class MarionettePytestExecutor(PytestExecutor):
     def __init__(self, logger, browser, *args, **kwargs):
         super().__init__(logger, browser, *args, **kwargs)
 

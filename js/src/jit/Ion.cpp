@@ -1,6 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -10,17 +8,16 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/MemoryReporting.h"
-#include "mozilla/ThreadLocal.h"
 
 #include "gc/GCContext.h"
 #include "gc/PublicIterators.h"
 #include "jit/AliasAnalysis.h"
-#include "jit/AlignmentMaskAnalysis.h"
 #include "jit/AutoWritableJitCode.h"
 #include "jit/BacktrackingAllocator.h"
 #include "jit/BaselineFrame.h"
 #include "jit/BaselineJIT.h"
 #include "jit/BranchHinting.h"
+#include "jit/BranchPruning.h"
 #include "jit/CodeGenerator.h"
 #include "jit/CompileInfo.h"
 #include "jit/DominatorTree.h"
@@ -28,6 +25,7 @@
 #include "jit/EffectiveAddressAnalysis.h"
 #include "jit/ExecutableAllocator.h"
 #include "jit/FoldLinearArithConstants.h"
+#include "jit/FoldTests.h"
 #include "jit/InlineScriptTree.h"
 #include "jit/InstructionReordering.h"
 #include "jit/Invalidation.h"
@@ -52,11 +50,13 @@
 #include "jit/ScriptFromCalleeToken.h"
 #include "jit/SimpleAllocator.h"
 #include "jit/Sink.h"
+#include "jit/TypeAnalysis.h"
 #include "jit/UnrollLoops.h"
 #include "jit/ValueNumbering.h"
 #include "jit/WarpBuilder.h"
 #include "jit/WarpOracle.h"
 #include "jit/WasmBCE.h"
+#include "jit/WasmRefTypeAnalysis.h"
 #include "js/Printf.h"
 #include "js/UniquePtr.h"
 #include "util/Memory.h"
@@ -98,10 +98,6 @@ JitRuntime::~JitRuntime() {
   MOZ_ASSERT_IF(jitcodeGlobalTable_, jitcodeGlobalTable_->empty());
   js_delete(jitcodeGlobalTable_.ref());
 
-  // interpreterEntryMap should be cleared out during finishRoots()
-  MOZ_ASSERT_IF(interpreterEntryMap_, interpreterEntryMap_->empty());
-  js_delete(interpreterEntryMap_.ref());
-
   js_delete(jitHintsMap_.ref());
 }
 
@@ -141,13 +137,6 @@ bool JitRuntime::initialize(JSContext* cx) {
     }
   }
 
-  if (JitOptions.emitInterpreterEntryTrampoline) {
-    interpreterEntryMap_ = cx->new_<EntryTrampolineMap>();
-    if (!interpreterEntryMap_) {
-      return false;
-    }
-  }
-
   if (!GenerateBaselineInterpreter(cx, baselineInterpreter_)) {
     return false;
   }
@@ -177,27 +166,13 @@ bool JitRuntime::generateTrampolines(JSContext* cx) {
   generateInvalidator(masm, &bailoutTail);
   rangeRecorder.recordOffset("Trampoline: Invalidator");
 
-  // The arguments rectifier has to use the same frame layout as the function
-  // frames it rectifies.
-  static_assert(std::is_base_of_v<JitFrameLayout, RectifierFrameLayout>,
-                "a rectifier frame can be used with jit frame");
-  static_assert(std::is_base_of_v<JitFrameLayout, WasmToJSJitFrameLayout>,
-                "wasm frames simply are jit frames");
-  static_assert(sizeof(JitFrameLayout) == sizeof(WasmToJSJitFrameLayout),
-                "thus a rectifier frame can be used with a wasm frame");
+  JitSpew(JitSpew_Codegen, "# Emitting EnterJIT [Normal] trampoline");
+  generateEnterJIT(cx, masm, EnterJitMode::Normal);
+  rangeRecorder.recordOffset("Trampoline: EnterJIT [Normal]");
 
-  JitSpew(JitSpew_Codegen, "# Emitting arguments rectifier");
-  generateArgumentsRectifier(masm, ArgumentsRectifierKind::Normal);
-  rangeRecorder.recordOffset("Trampoline: Arguments Rectifier");
-
-  JitSpew(JitSpew_Codegen, "# Emitting trial inlining arguments rectifier");
-  generateArgumentsRectifier(masm, ArgumentsRectifierKind::TrialInlining);
-  rangeRecorder.recordOffset(
-      "Trampoline: Arguments Rectifier (Trial Inlining)");
-
-  JitSpew(JitSpew_Codegen, "# Emitting EnterJIT sequence");
-  generateEnterJIT(cx, masm);
-  rangeRecorder.recordOffset("Trampoline: EnterJIT");
+  JitSpew(JitSpew_Codegen, "# Emitting EnterJIT [GeneratorResume] trampoline");
+  generateEnterJIT(cx, masm, EnterJitMode::GeneratorResume);
+  rangeRecorder.recordOffset("Trampoline: EnterJIT [GeneratorResume]");
 
   JitSpew(JitSpew_Codegen, "# Emitting Pre Barrier for Value");
   valuePreBarrierOffset_ = generatePreBarrier(cx, masm, MIRType::Value);
@@ -253,6 +228,14 @@ bool JitRuntime::generateTrampolines(JSContext* cx) {
   JitSpew(JitSpew_Codegen, "# Emitting Ion generic construct stub");
   generateIonGenericCallStub(masm, IonGenericCallKind::Construct);
   rangeRecorder.recordOffset("Trampoline: IonGenericConstruct");
+
+  JitSpew(JitSpew_Codegen, "# Emitting megamorphic load stub");
+  generateMegamorphicLoadStub(masm);
+  rangeRecorder.recordOffset("Trampoline: MegamorphicLoad");
+
+  JitSpew(JitSpew_Codegen, "# Emitting permissive megamorphic load stub");
+  generateMegamorphicLoadStubPermissive(masm);
+  rangeRecorder.recordOffset("Trampoline: MegamorphicLoadPermissive");
 
   JitSpew(JitSpew_Codegen, "# Emitting trampoline natives");
   TrampolineNativeJitEntryOffsets nativeOffsets;
@@ -405,13 +388,25 @@ void jit::LinkIonScript(JSContext* cx, HandleScript calleeScript) {
 
 uint8_t* jit::LazyLinkTopActivation(JSContext* cx,
                                     LazyLinkExitFrameLayout* frame) {
-  RootedScript calleeScript(
-      cx, ScriptFromCalleeToken(frame->jsFrame()->calleeToken()));
+  JitFrameLayout* jsFrame = frame->jsFrame();
+  RootedScript calleeScript(cx, ScriptFromCalleeToken(jsFrame->calleeToken()));
 
   LinkIonScript(cx, calleeScript);
 
   MOZ_ASSERT(calleeScript->hasBaselineScript());
   MOZ_ASSERT(calleeScript->jitCodeRaw());
+
+  // Enter the Baseline code instead of Ion code in two cases:
+  //
+  // * The caller is resuming a suspended generator. We currently don't resume
+  //   GeneratorResumeKind::Throw in Ion so this just means a resume that hits
+  //   this rare window doesn't enter Ion yet.
+  // * The caller pushed a trial-inlining ICScript for us: it's only used by
+  //   Baseline code.
+  FrameDescriptor descriptor = jsFrame->descriptor();
+  if (descriptor.isResumingGenerator() || descriptor.hasInlinedICScript()) {
+    return calleeScript->baselineScript()->method()->raw();
+  }
 
   return calleeScript->jitCodeRaw();
 }
@@ -429,18 +424,6 @@ void JitRuntime::TraceAtomZoneRoots(JSTracer* trc) {
     JitCode* code = i;
     TraceRoot(trc, &code, "wrapper");
   }
-}
-
-/* static */
-bool JitRuntime::MarkJitcodeGlobalTableIteratively(GCMarker* marker) {
-  if (marker->runtime()->hasJitRuntime() &&
-      marker->runtime()->jitRuntime()->hasJitcodeGlobalTable()) {
-    return marker->runtime()
-        ->jitRuntime()
-        ->getJitcodeGlobalTable()
-        ->markIteratively(marker);
-  }
-  return false;
 }
 
 /* static */
@@ -548,16 +531,32 @@ void JitZone::traceWeak(JSTracer* trc, Zone* zone) {
   MOZ_ASSERT(this == zone->jitZone());
 
   for (WeakHeapPtr<JitCode*>& stub : stubs_) {
-    TraceWeakEdge(trc, &stub, "JitZone::stubs_");
+    TraceOrClearWeakEdge(trc, &stub, "JitZone::stubs_");
   }
 
   baselineCacheIRStubCodes_.traceWeak(trc);
   inlinedCompilations_.traceWeak(trc);
 
-  TraceWeakEdge(trc, &lastStubFoldingBailoutChild_,
-                "JitZone::lastStubFoldingBailoutChild_");
-  TraceWeakEdge(trc, &lastStubFoldingBailoutParent_,
-                "JitZone::lastStubFoldingBailoutParent_");
+  TraceOrClearWeakEdge(trc, &lastStubFoldingBailoutInner_,
+                       "JitZone::lastStubFoldingBailoutInner_");
+  TraceOrClearWeakEdge(trc, &lastStubFoldingBailoutOuter_,
+                       "JitZone::lastStubFoldingBailoutOuter_");
+}
+
+void JitZone::traceScriptTableRoots(JSTracer* trc) {
+  // Trace the table used to hold interpreter entry code generated with
+  // --emit-interpreter-entry.
+  if (interpreterEntryMap) {
+    interpreterEntryMap->trace(trc);
+  }
+}
+
+void JitZone::finishScriptTableRoots() {
+  // Clear out the interpreter entry map before the final gc.
+  if (interpreterEntryMap) {
+    interpreterEntryMap->clear();
+    interpreterEntryMap.reset();
+  }
 }
 
 void JitZone::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
@@ -643,12 +642,15 @@ void JitCode::traceChildren(JSTracer* trc) {
 }
 
 void JitCode::finalize(JS::GCContext* gcx) {
-  // If this jitcode had a bytecode map, it must have already been removed.
+  // If this jitcode had a bytecode map, either the entry has been removed
+  // from the table, or it has been detached (jitcode_ set to null) because
+  // the profiler buffer still references it.
 #ifdef DEBUG
   JSRuntime* rt = gcx->runtime();
   if (hasBytecodeMap_) {
     MOZ_ASSERT(rt->jitRuntime()->hasJitcodeGlobalTable());
-    MOZ_ASSERT(!rt->jitRuntime()->getJitcodeGlobalTable()->lookup(raw()));
+    auto* entry = rt->jitRuntime()->getJitcodeGlobalTable()->lookup(raw());
+    MOZ_ASSERT(!entry || !entry->hasJitcode());
   }
 #endif
 
@@ -782,9 +784,7 @@ IonScript* IonScript::New(JSContext* cx, IonCompilationId compilationId,
 }
 
 void IonScript::trace(JSTracer* trc) {
-  if (method_) {
-    TraceEdge(trc, &method_, "method");
-  }
+  TraceEdge(trc, &method_, "method");
 
   for (size_t i = 0; i < numConstants(); i++) {
     TraceEdge(trc, &getConstant(i), "constant");
@@ -865,7 +865,7 @@ void IonScript::copyICEntries(const uint32_t* icEntries) {
 }
 
 const SafepointIndex* IonScript::getSafepointIndex(uint32_t disp) const {
-  MOZ_ASSERT(numSafepointIndices() > 0);
+  MOZ_RELEASE_ASSERT(numSafepointIndices() > 0);
 
   const SafepointIndex* table = safepointIndices();
   if (numSafepointIndices() == 1) {
@@ -879,7 +879,7 @@ const SafepointIndex* IonScript::getSafepointIndex(uint32_t disp) const {
   uint32_t max = table[maxEntry].displacement();
 
   // Raise if the element is not in the list.
-  MOZ_ASSERT(min <= disp && disp <= max);
+  MOZ_RELEASE_ASSERT(min <= disp && disp <= max);
 
   // Approximate the location of the FrameInfo.
   size_t guess = (disp - min) * (maxEntry - minEntry) / (max - min) + minEntry;
@@ -935,11 +935,14 @@ const OsiIndex* IonScript::getOsiIndex(uint8_t* retAddr) const {
 }
 
 void IonScript::Destroy(JS::GCContext* gcx, IonScript* script) {
+  // Trigger write barrier since we are destroying this outside GC.
+  script->method_ = nullptr;
+
   // Destroy the HeapPtrs to ensure there are no pointers into the IonScript's
   // nursery objects list or constants list in the store buffer. Because this
   // can be called during sweeping when discarding JIT code, we have to lock the
   // store buffer when we find a pointer that's (still) in the nursery.
-  mozilla::Maybe<gc::AutoLockStoreBuffer> lock;
+  mozilla::Maybe<gc::AutoLockSweepingLock> lock;
   for (size_t i = 0, len = script->numNurseryObjects(); i < len; i++) {
     JSObject* obj = script->nurseryObjects()[i];
     if (lock.isNothing() && IsInsideNursery(obj)) {
@@ -975,27 +978,27 @@ namespace jit {
 
 bool OptimizeMIR(MIRGenerator* mir) {
   MIRGraph& graph = mir->graph();
-  GraphSpewer& gs = mir->graphSpewer();
 
   if (mir->shouldCancel("Start")) {
     return false;
   }
 
-  gs.spewPass("BuildSSA");
+  mir->spewPass("BuildSSA");
   AssertBasicGraphCoherency(graph);
 
   if (JitSpewEnabled(JitSpew_MIRExpressions)) {
-    JitSpewCont(JitSpew_MIRExpressions, "\n");
-    DumpMIRExpressions(JitSpewPrinter(), graph, mir->outerInfo(),
+    JitSpew(JitSpew_MIRExpressions, "\n");
+    AutoJitSpewMessage msg(JitSpew_MIRExpressions);
+    DumpMIRExpressions(msg.printer(), graph, mir->outerInfo(),
                        "BuildSSA (== input to OptimizeMIR)");
   }
 
   if (!JitOptions.disablePruning && !mir->compilingWasm()) {
-    JitSpewCont(JitSpew_Prune, "\n");
+    JitSpew(JitSpew_Prune, "\n");
     if (!PruneUnusedBranches(mir, graph)) {
       return false;
     }
-    gs.spewPass("Prune Unused Branches");
+    mir->spewPass("Prune Unused Branches");
     AssertBasicGraphCoherency(graph);
 
     if (mir->shouldCancel("Prune Unused Branches")) {
@@ -1008,7 +1011,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!FoldEmptyBlocks(graph, &dummy)) {
       return false;
     }
-    gs.spewPass("Fold Empty Blocks");
+    mir->spewPass("Fold Empty Blocks");
     AssertBasicGraphCoherency(graph);
 
     if (mir->shouldCancel("Fold Empty Blocks")) {
@@ -1022,7 +1025,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!EliminateTriviallyDeadResumePointOperands(mir, graph)) {
       return false;
     }
-    gs.spewPass("Eliminate trivially dead resume point operands");
+    mir->spewPass("Eliminate trivially dead resume point operands");
     AssertBasicGraphCoherency(graph);
 
     if (mir->shouldCancel("Eliminate trivially dead resume point operands")) {
@@ -1034,7 +1037,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!FoldTests(graph)) {
       return false;
     }
-    gs.spewPass("Fold Tests");
+    mir->spewPass("Fold Tests");
     AssertBasicGraphCoherency(graph);
 
     if (mir->shouldCancel("Fold Tests")) {
@@ -1046,7 +1049,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!SplitCriticalEdges(graph)) {
       return false;
     }
-    gs.spewPass("Split Critical Edges");
+    mir->spewPass("Split Critical Edges");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("Split Critical Edges")) {
@@ -1056,7 +1059,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
 
   {
     RenumberBlocks(graph);
-    gs.spewPass("Renumber Blocks");
+    mir->spewPass("Renumber Blocks");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("Renumber Blocks")) {
@@ -1086,7 +1089,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!EliminatePhis(mir, graph, observability)) {
       return false;
     }
-    gs.spewPass("Eliminate phis");
+    mir->spewPass("Eliminate phis");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("Eliminate phis")) {
@@ -1104,11 +1107,26 @@ bool OptimizeMIR(MIRGenerator* mir) {
     }
   }
 
+  if (!JitOptions.disableRecoverIns &&
+      mir->optimizationInfo().scalarReplacementEnabled() &&
+      !JitOptions.disableObjectKeysScalarReplacement) {
+    JitSpew(JitSpew_Escape, "\n");
+    if (!ReplaceObjectKeys(mir, graph)) {
+      return false;
+    }
+    mir->spewPass("Replace ObjectKeys");
+    AssertGraphCoherency(graph);
+
+    if (mir->shouldCancel("Replace ObjectKeys")) {
+      return false;
+    }
+  }
+
   if (!mir->compilingWasm() && !JitOptions.disableIteratorIndices) {
     if (!OptimizeIteratorIndices(mir, graph)) {
       return false;
     }
-    gs.spewPass("Iterator Indices");
+    mir->spewPass("Iterator Indices");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("Iterator Indices")) {
@@ -1118,11 +1136,11 @@ bool OptimizeMIR(MIRGenerator* mir) {
 
   if (!JitOptions.disableRecoverIns &&
       mir->optimizationInfo().scalarReplacementEnabled()) {
-    JitSpewCont(JitSpew_Escape, "\n");
+    JitSpew(JitSpew_Escape, "\n");
     if (!ScalarReplacement(mir, graph)) {
       return false;
     }
-    gs.spewPass("Scalar Replacement");
+    mir->spewPass("Scalar Replacement");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("Scalar Replacement")) {
@@ -1134,7 +1152,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!ApplyTypeInformation(mir, graph)) {
       return false;
     }
-    gs.spewPass("Apply types");
+    mir->spewPass("Apply types");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("Apply types")) {
@@ -1146,23 +1164,10 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!TrackWasmRefTypes(graph)) {
       return false;
     }
-    gs.spewPass("Track Wasm ref types");
+    mir->spewPass("Track Wasm ref types");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("Track Wasm ref types")) {
-      return false;
-    }
-  }
-
-  if (mir->optimizationInfo().amaEnabled()) {
-    AlignmentMaskAnalysis ama(graph);
-    if (!ama.analyze()) {
-      return false;
-    }
-    gs.spewPass("Alignment Mask Analysis");
-    AssertExtendedGraphCoherency(graph);
-
-    if (mir->shouldCancel("Alignment Mask Analysis")) {
       return false;
     }
   }
@@ -1177,12 +1182,12 @@ bool OptimizeMIR(MIRGenerator* mir) {
       mir->optimizationInfo().eliminateRedundantShapeGuardsEnabled()) {
     {
       AliasAnalysis analysis(mir, graph);
-      JitSpewCont(JitSpew_Alias, "\n");
+      JitSpew(JitSpew_Alias, "\n");
       if (!analysis.analyze()) {
         return false;
       }
 
-      gs.spewPass("Alias analysis");
+      mir->spewPass("Alias analysis");
       AssertExtendedGraphCoherency(graph);
 
       if (mir->shouldCancel("Alias analysis")) {
@@ -1198,7 +1203,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
         return false;
       }
 
-      gs.spewPass("Eliminate dead resume point operands");
+      mir->spewPass("Eliminate dead resume point operands");
       AssertExtendedGraphCoherency(graph);
 
       if (mir->shouldCancel("Eliminate dead resume point operands")) {
@@ -1207,12 +1212,24 @@ bool OptimizeMIR(MIRGenerator* mir) {
     }
   }
 
+  if (mir->compilingWasm()) {
+    if (!OptimizeWasmCasts(graph)) {
+      return false;
+    }
+    mir->spewPass("Optimize Wasm tests and casts");
+    AssertExtendedGraphCoherency(graph);
+
+    if (mir->shouldCancel("Optimize Wasm tests and casts")) {
+      return false;
+    }
+  }
+
   if (mir->optimizationInfo().gvnEnabled()) {
-    JitSpewCont(JitSpew_GVN, "\n");
+    JitSpew(JitSpew_GVN, "\n");
     if (!gvn.run(ValueNumberer::UpdateAliasAnalysis)) {
       return false;
     }
-    gs.spewPass("GVN");
+    mir->spewPass("GVN");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("GVN")) {
@@ -1220,12 +1237,24 @@ bool OptimizeMIR(MIRGenerator* mir) {
     }
   }
 
+  if (!JitOptions.disableCanonicalizeNaNAtUses && !mir->compilingWasm()) {
+    if (!CanonicalizeNaNAtUses(mir, graph)) {
+      return false;
+    }
+    mir->spewPass("CanonicalizeNaN");
+    AssertExtendedGraphCoherency(graph);
+
+    if (mir->shouldCancel("CanonicalizeNaN")) {
+      return false;
+    }
+  }
+
   if (mir->branchHintingEnabled()) {
-    JitSpewCont(JitSpew_BranchHint, "\n");
+    JitSpew(JitSpew_BranchHint, "\n");
     if (!BranchHinting(mir, graph)) {
       return false;
     }
-    gs.spewPass("BranchHinting");
+    mir->spewPass("BranchHinting");
     AssertBasicGraphCoherency(graph);
 
     if (mir->shouldCancel("BranchHinting")) {
@@ -1237,11 +1266,11 @@ bool OptimizeMIR(MIRGenerator* mir) {
   // trigger bailouts. Disable it if bailing out of a hoisted
   // instruction has previously invalidated this script.
   if (mir->licmEnabled()) {
-    JitSpewCont(JitSpew_LICM, "\n");
+    JitSpew(JitSpew_LICM, "\n");
     if (!LICM(mir, graph)) {
       return false;
     }
-    gs.spewPass("LICM");
+    mir->spewPass("LICM");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("LICM")) {
@@ -1251,11 +1280,11 @@ bool OptimizeMIR(MIRGenerator* mir) {
 
   RangeAnalysis r(mir, graph);
   if (mir->optimizationInfo().rangeAnalysisEnabled()) {
-    JitSpewCont(JitSpew_Range, "\n");
+    JitSpew(JitSpew_Range, "\n");
     if (!r.addBetaNodes()) {
       return false;
     }
-    gs.spewPass("Beta");
+    mir->spewPass("Beta");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("RA Beta")) {
@@ -1265,7 +1294,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!r.analyze() || !r.addRangeAssertions()) {
       return false;
     }
-    gs.spewPass("Range Analysis");
+    mir->spewPass("Range Analysis");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("Range Analysis")) {
@@ -1275,7 +1304,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!r.removeBetaNodes()) {
       return false;
     }
-    gs.spewPass("De-Beta");
+    mir->spewPass("De-Beta");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("RA De-Beta")) {
@@ -1287,7 +1316,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
       if (!r.prepareForUCE(&shouldRunUCE)) {
         return false;
       }
-      gs.spewPass("RA check UCE");
+      mir->spewPass("RA check UCE");
       AssertExtendedGraphCoherency(graph);
 
       if (mir->shouldCancel("RA check UCE")) {
@@ -1298,7 +1327,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
         if (!gvn.run(ValueNumberer::DontUpdateAliasAnalysis)) {
           return false;
         }
-        gs.spewPass("UCE After RA");
+        mir->spewPass("UCE After RA");
         AssertExtendedGraphCoherency(graph);
 
         if (mir->shouldCancel("UCE After RA")) {
@@ -1311,7 +1340,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
       if (!r.truncate()) {
         return false;
       }
-      gs.spewPass("Truncate Doubles");
+      mir->spewPass("Truncate Doubles");
       AssertExtendedGraphCoherency(graph);
 
       if (mir->shouldCancel("Truncate Doubles")) {
@@ -1321,11 +1350,11 @@ bool OptimizeMIR(MIRGenerator* mir) {
   }
 
   if (!JitOptions.disableRecoverIns) {
-    JitSpewCont(JitSpew_Sink, "\n");
+    JitSpew(JitSpew_Sink, "\n");
     if (!Sink(mir, graph)) {
       return false;
     }
-    gs.spewPass("Sink");
+    mir->spewPass("Sink");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("Sink")) {
@@ -1335,11 +1364,11 @@ bool OptimizeMIR(MIRGenerator* mir) {
 
   if (!JitOptions.disableRecoverIns &&
       mir->optimizationInfo().rangeAnalysisEnabled()) {
-    JitSpewCont(JitSpew_Range, "\n");
+    JitSpew(JitSpew_Range, "\n");
     if (!r.removeUnnecessaryBitops()) {
       return false;
     }
-    gs.spewPass("Remove Unnecessary Bitops");
+    mir->spewPass("Remove Unnecessary Bitops");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("Remove Unnecessary Bitops")) {
@@ -1348,11 +1377,11 @@ bool OptimizeMIR(MIRGenerator* mir) {
   }
 
   {
-    JitSpewCont(JitSpew_FLAC, "\n");
+    JitSpew(JitSpew_FLAC, "\n");
     if (!FoldLinearArithConstants(mir, graph)) {
       return false;
     }
-    gs.spewPass("Fold Linear Arithmetic Constants");
+    mir->spewPass("Fold Linear Arithmetic Constants");
     AssertBasicGraphCoherency(graph);
 
     if (mir->shouldCancel("Fold Linear Arithmetic Constants")) {
@@ -1362,12 +1391,12 @@ bool OptimizeMIR(MIRGenerator* mir) {
 
   // EAA, but only for wasm; it appears to be of minimal benefit for JS inputs.
   if (mir->compilingWasm() && mir->optimizationInfo().eaaEnabled()) {
-    EffectiveAddressAnalysis eaa(mir, graph);
-    JitSpewCont(JitSpew_EAA, "\n");
+    EffectiveAddressAnalysis eaa(graph);
+    JitSpew(JitSpew_EAA, "\n");
     if (!eaa.analyze()) {
       return false;
     }
-    gs.spewPass("Effective Address Analysis");
+    mir->spewPass("Effective Address Analysis");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("Effective Address Analysis")) {
@@ -1377,11 +1406,11 @@ bool OptimizeMIR(MIRGenerator* mir) {
 
   // BCE marks bounds checks as dead, so do BCE before DCE.
   if (mir->compilingWasm()) {
-    JitSpewCont(JitSpew_WasmBCE, "\n");
+    JitSpew(JitSpew_WasmBCE, "\n");
     if (!EliminateBoundsChecks(mir, graph)) {
       return false;
     }
-    gs.spewPass("Redundant Bounds Check Elimination");
+    mir->spewPass("Redundant Bounds Check Elimination");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("BCE")) {
@@ -1393,7 +1422,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!EliminateDeadCode(mir, graph)) {
       return false;
     }
-    gs.spewPass("DCE");
+    mir->spewPass("DCE");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("DCE")) {
@@ -1402,7 +1431,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
   }
 
   if (!JitOptions.disableMarkLoadsUsedAsPropertyKeys && !mir->compilingWasm()) {
-    JitSpewCont(JitSpew_MarkLoadsUsedAsPropertyKeys, "\n");
+    JitSpew(JitSpew_MarkLoadsUsedAsPropertyKeys, "\n");
     if (!MarkLoadsUsedAsPropertyKeys(graph)) {
       return false;
     }
@@ -1416,7 +1445,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!ReorderInstructions(mir, graph)) {
       return false;
     }
-    gs.spewPass("Reordering");
+    mir->spewPass("Reordering");
 
     AssertExtendedGraphCoherency(graph);
 
@@ -1431,7 +1460,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!MakeLoopsContiguous(graph)) {
       return false;
     }
-    gs.spewPass("Make loops contiguous");
+    mir->spewPass("Make loops contiguous");
     AssertExtendedGraphCoherency(graph);
 
     if (mir->shouldCancel("Make loops contiguous")) {
@@ -1448,7 +1477,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
       return false;
     }
 
-    gs.spewPass("Unroll loops");
+    mir->spewPass("Unroll loops");
 
     AssertExtendedGraphCoherency(graph);
 
@@ -1462,6 +1491,13 @@ bool OptimizeMIR(MIRGenerator* mir) {
       if (!gvn.run(ValueNumberer::DontUpdateAliasAnalysis)) {
         return false;
       }
+
+      if (!EliminatePhis(mir, graph, ConservativeObservability)) {
+        return false;
+      }
+
+      AssertExtendedGraphCoherency(graph);
+
       // And tidy up any empty blocks.
       bool blocksFolded;
       if (!FoldEmptyBlocks(graph, &blocksFolded)) {
@@ -1489,7 +1525,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
   // dominator tree.
   if (!mir->compilingWasm() && graph.osrBlock()) {
     graph.removeFakeLoopPredecessors();
-    gs.spewPass("Remove fake loop predecessors");
+    mir->spewPass("Remove fake loop predecessors");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("Remove fake loop predecessors")) {
@@ -1505,7 +1541,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!edgeCaseAnalysis.analyzeLate()) {
       return false;
     }
-    gs.spewPass("Edge Case Analysis (Late)");
+    mir->spewPass("Edge Case Analysis (Late)");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("Edge Case Analysis (Late)")) {
@@ -1521,7 +1557,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!EliminateRedundantChecks(graph)) {
       return false;
     }
-    gs.spewPass("Bounds Check Elimination");
+    mir->spewPass("Bounds Check Elimination");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("Bounds Check Elimination")) {
@@ -1533,7 +1569,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!EliminateRedundantShapeGuards(graph)) {
       return false;
     }
-    gs.spewPass("Shape Guard Elimination");
+    mir->spewPass("Shape Guard Elimination");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("Shape Guard Elimination")) {
@@ -1548,7 +1584,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!EliminateRedundantGCBarriers(graph)) {
       return false;
     }
-    gs.spewPass("GC Barrier Elimination");
+    mir->spewPass("GC Barrier Elimination");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("GC Barrier Elimination")) {
@@ -1560,7 +1596,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!FoldLoadsWithUnbox(mir, graph)) {
       return false;
     }
-    gs.spewPass("FoldLoadsWithUnbox");
+    mir->spewPass("FoldLoadsWithUnbox");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("FoldLoadsWithUnbox")) {
@@ -1572,7 +1608,7 @@ bool OptimizeMIR(MIRGenerator* mir) {
     if (!AddKeepAliveInstructions(graph)) {
       return false;
     }
-    gs.spewPass("Add KeepAlive Instructions");
+    mir->spewPass("Add KeepAlive Instructions");
     AssertGraphCoherency(graph);
 
     if (mir->shouldCancel("Add KeepAlive Instructions")) {
@@ -1583,8 +1619,9 @@ bool OptimizeMIR(MIRGenerator* mir) {
   AssertGraphCoherency(graph, /* force = */ true);
 
   if (JitSpewEnabled(JitSpew_MIRExpressions)) {
-    JitSpewCont(JitSpew_MIRExpressions, "\n");
-    DumpMIRExpressions(JitSpewPrinter(), graph, mir->outerInfo(),
+    JitSpew(JitSpew_MIRExpressions, "\n");
+    AutoJitSpewMessage msg(JitSpew_MIRExpressions);
+    DumpMIRExpressions(msg.printer(), graph, mir->outerInfo(),
                        "BeforeLIR (== result of OptimizeMIR)");
   }
 
@@ -1593,7 +1630,6 @@ bool OptimizeMIR(MIRGenerator* mir) {
 
 LIRGraph* GenerateLIR(MIRGenerator* mir) {
   MIRGraph& graph = mir->graph();
-  GraphSpewer& gs = mir->graphSpewer();
 
   LIRGraph* lir = mir->alloc().lifoAlloc()->new_<LIRGraph>(&graph);
   if (!lir || !lir->init()) {
@@ -1605,7 +1641,7 @@ LIRGraph* GenerateLIR(MIRGenerator* mir) {
     if (!lirgen.generate()) {
       return nullptr;
     }
-    gs.spewPass("Generate LIR");
+    mir->spewPass("Generate LIR");
 
     if (mir->shouldCancel("Generate LIR")) {
       return nullptr;
@@ -1628,7 +1664,7 @@ LIRGraph* GenerateLIR(MIRGenerator* mir) {
       if (!regalloc.go()) {
         return nullptr;
       }
-      gs.spewPass("Allocate Registers [Backtracking]");
+      mir->spewPass("Allocate Registers [Backtracking]", &regalloc);
       break;
     }
     case RegisterAllocator_Simple: {
@@ -1636,7 +1672,7 @@ LIRGraph* GenerateLIR(MIRGenerator* mir) {
       if (!regalloc.go()) {
         return nullptr;
       }
-      gs.spewPass("Allocate Registers [Simple]");
+      mir->spewPass("Allocate Registers [Simple]");
       break;
     }
     default:
@@ -1708,7 +1744,7 @@ static AbortReasonOr<WarpSnapshot*> CreateWarpSnapshot(JSContext* cx,
   // Suppress GC during compilation.
   gc::AutoSuppressGC suppressGC(cx);
 
-  SpewBeginFunction(mirGen, script);
+  mirGen->spewBeginFunction(script);
 
   WarpOracle oracle(cx, *mirGen, script);
 
@@ -1809,7 +1845,7 @@ static AbortReason IonCompile(JSContext* cx, HandleScript script,
   }
 
   auto clearDependencies =
-      mozilla::MakeScopeExit([mirGen]() { mirGen->tracker.reset(); });
+      mozilla::MakeScopeExit([mirGen]() { mirGen->cleanup(); });
 
   MOZ_ASSERT(!script->baselineScript()->hasPendingIonCompileTask());
   MOZ_ASSERT(!script->hasIonScript());
@@ -1841,7 +1877,7 @@ static AbortReason IonCompile(JSContext* cx, HandleScript script,
     AutoLockHelperThreadState lock;
     if (!StartOffThreadIonCompile(task, lock)) {
       JitSpew(JitSpew_IonAbort, "Unable to start off-thread ion compilation.");
-      mirGen->graphSpewer().endFunction();
+      mirGen->spewEndFunction();
       return AbortReason::Alloc;
     }
 
@@ -1880,54 +1916,23 @@ static AbortReason IonCompile(JSContext* cx, HandleScript script,
   return AbortReason::Disable;
 }
 
-static bool CheckFrame(JSContext* cx, BaselineFrame* frame) {
-  MOZ_ASSERT(!frame->isDebuggerEvalFrame());
+static void AssertBaselineFrameCanEnterIon(JSContext* cx,
+                                           BaselineFrame* frame) {
+  MOZ_ASSERT(jit::IsIonEnabled(cx));
   MOZ_ASSERT(!frame->isEvalFrame());
+  MOZ_ASSERT(frame->script()->canIonCompile());
+  MOZ_ASSERT(!frame->script()->isIonCompilingOffThread());
 
-  // This check is to not overrun the stack.
-  if (frame->isFunctionFrame()) {
-    if (TooManyActualArguments(frame->numActualArgs())) {
-      JitSpew(JitSpew_IonAbort, "too many actual arguments");
-      return false;
-    }
+  // Baseline has the same limit for the number of actual arguments, so if we
+  // entered Baseline we can also enter Ion.
+  MOZ_ASSERT_IF(frame->isFunctionFrame(),
+                !TooManyActualArguments(frame->numActualArgs()));
 
-    if (TooManyFormalArguments(frame->numFormalArgs())) {
-      JitSpew(JitSpew_IonAbort, "too many arguments");
-      return false;
-    }
-  }
-
-  return true;
+  // The number of formal arguments is checked in CanIonCompileScript. The
+  // Baseline JIT shouldn't attempt to tier up if that returns false.
+  MOZ_ASSERT_IF(frame->isFunctionFrame(),
+                !TooManyFormalArguments(frame->numFormalArgs()));
 }
-
-static bool CanIonCompileOrInlineScript(JSScript* script, const char** reason) {
-  if (script->isForEval()) {
-    // Eval frames are not yet supported. Supporting this will require new
-    // logic in pushBailoutFrame to deal with linking prev.
-    // Additionally, JSOp::GlobalOrEvalDeclInstantiation support will require
-    // baking in isEvalFrame().
-    *reason = "eval script";
-    return false;
-  }
-
-  if (script->isAsync()) {
-    if (script->isModule()) {
-      *reason = "async module";
-      return false;
-    }
-  }
-
-  if (script->hasNonSyntacticScope() && !script->function()) {
-    // Support functions with a non-syntactic global scope but not other
-    // scripts. For global scripts, WarpBuilder currently uses the global
-    // object as scope chain, this is not valid when the script has a
-    // non-syntactic global scope.
-    *reason = "has non-syntactic global scope";
-    return false;
-  }
-
-  return true;
-}  // namespace jit
 
 static bool ScriptIsTooLarge(JSContext* cx, JSScript* script) {
   if (!JitOptions.limitScriptSize) {
@@ -1960,13 +1965,42 @@ bool CanIonCompileScript(JSContext* cx, JSScript* script) {
     return false;
   }
 
-  const char* reason = nullptr;
-  if (!CanIonCompileOrInlineScript(script, &reason)) {
-    JitSpew(JitSpew_IonAbort, "%s", reason);
+  if (script->isForEval()) {
+    // Eval frames are not yet supported. Fixing this will require adding
+    // support for the eval frame's environment chain, also for bailouts.
+    // Additionally, JSOp::GlobalOrEvalDeclInstantiation in WarpBuilder
+    // currently doesn't support eval scripts. See bug 1996190.
+    JitSpew(JitSpew_IonAbort, "eval script");
+    script->disableIon();
+    return false;
+  }
+
+  if (script->isAsync() && script->isModule()) {
+    // Async modules are not supported (bug 1996189).
+    JitSpew(JitSpew_IonAbort, "async module");
+    script->disableIon();
+    return false;
+  }
+
+  if (script->hasNonSyntacticScope() && !script->function()) {
+    // Support functions with a non-syntactic global scope but not other
+    // scripts. For global scripts, WarpBuilder currently uses the global
+    // object as scope chain, and this is not valid when the script has a
+    // non-syntactic global scope.
+    JitSpew(JitSpew_IonAbort, "has non-syntactic global scope");
+    script->disableIon();
+    return false;
+  }
+
+  if (script->function() &&
+      TooManyFormalArguments(script->function()->nargs())) {
+    JitSpew(JitSpew_IonAbort, "too many formal arguments");
+    script->disableIon();
     return false;
   }
 
   if (ScriptIsTooLarge(cx, script)) {
+    script->disableIon();
     return false;
   }
 
@@ -2073,13 +2107,6 @@ MethodStatus jit::CanEnterIon(JSContext* cx, RunState& state) {
       ForbidCompilation(cx, script);
       return Method_CantCompile;
     }
-
-    if (TooManyFormalArguments(
-            invoke.args().callee().as<JSFunction>().nargs())) {
-      JitSpew(JitSpew_IonAbort, "too many args");
-      ForbidCompilation(cx, script);
-      return Method_CantCompile;
-    }
   }
 
   // If --ion-eager is used, compile with Baseline first, so that we
@@ -2125,17 +2152,9 @@ MethodStatus jit::CanEnterIon(JSContext* cx, RunState& state) {
 
 static MethodStatus BaselineCanEnterAtEntry(JSContext* cx, HandleScript script,
                                             BaselineFrame* frame) {
-  MOZ_ASSERT(jit::IsIonEnabled(cx));
-  MOZ_ASSERT(script->canIonCompile());
-  MOZ_ASSERT(!script->isIonCompilingOffThread());
+  AssertBaselineFrameCanEnterIon(cx, frame);
   MOZ_ASSERT(!script->hasIonScript());
   MOZ_ASSERT(frame->isFunctionFrame());
-
-  // Mark as forbidden if frame can't be handled.
-  if (!CheckFrame(cx, frame)) {
-    ForbidCompilation(cx, script);
-    return Method_CantCompile;
-  }
 
   if (script->baselineScript()->hasPendingIonCompileTask()) {
     LinkIonScript(cx, script);
@@ -2161,28 +2180,12 @@ static MethodStatus BaselineCanEnterAtEntry(JSContext* cx, HandleScript script,
 static MethodStatus BaselineCanEnterAtBranch(JSContext* cx, HandleScript script,
                                              BaselineFrame* osrFrame,
                                              jsbytecode* pc) {
-  MOZ_ASSERT(jit::IsIonEnabled(cx));
+  AssertBaselineFrameCanEnterIon(cx, osrFrame);
   MOZ_ASSERT((JSOp)*pc == JSOp::LoopHead);
-
-  // Skip if the script has been disabled.
-  if (!script->canIonCompile()) {
-    return Method_Skipped;
-  }
-
-  // Skip if the script is being compiled off thread.
-  if (script->isIonCompilingOffThread()) {
-    return Method_Skipped;
-  }
 
   // Optionally ignore on user request.
   if (!JitOptions.osr) {
     return Method_Skipped;
-  }
-
-  // Mark as forbidden if frame can't be handled.
-  if (!CheckFrame(cx, osrFrame)) {
-    ForbidCompilation(cx, script);
-    return Method_CantCompile;
   }
 
   // Check if the jitcode still needs to get linked and do this
@@ -2205,7 +2208,7 @@ static MethodStatus BaselineCanEnterAtBranch(JSContext* cx, HandleScript script,
     }
 
     JitSpew(JitSpew_IonScripts, "Forcing OSR Mismatch Compilation");
-    Invalidate(cx, script);
+    Invalidate(cx, script, /* resetUses = */ false);
   }
 
   // Attempt compilation.
@@ -2375,6 +2378,7 @@ bool jit::IonCompileScriptForBaselineOSR(JSContext* cx, BaselineFrame* frame,
   MOZ_ASSERT(infoPtr);
   *infoPtr = nullptr;
 
+  MOZ_ASSERT(!frame->isResumingGenerator());
   MOZ_ASSERT(frame->debugFrameSize() == frameSize);
   MOZ_ASSERT(JSOp(*pc) == JSOp::LoopHead);
 
@@ -2461,10 +2465,6 @@ static void InvalidateActivation(JS::GCContext* gcx,
       case FrameType::BaselineInterpreterEntry:
         JitSpew(JitSpew_IonInvalidate,
                 "#%zu baseline interpreter entry frame @ %p", frameno,
-                frame.fp());
-        break;
-      case FrameType::Rectifier:
-        JitSpew(JitSpew_IonInvalidate, "#%zu rectifier frame @ %p", frameno,
                 frame.fp());
         break;
       case FrameType::TrampolineNative:

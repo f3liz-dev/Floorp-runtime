@@ -6,29 +6,9 @@ const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   NetworkUtils:
     "resource://devtools/shared/network-observer/NetworkUtils.sys.mjs",
-});
 
-/**
- * Forward the encodedResponseBody built by the NetworkResponse to devtools'
- * decodeResponseChunks helper.
- *
- * @param {object} encodedResponseBody
- *     A custom "encoded response body" object containing all the properties
- *     required to decode the body.
- * @returns {string}
- *     The decoded response body as a string (either text or base64).
- */
-async function decodeReponseBody(encodedResponseBody) {
-  return lazy.NetworkUtils.decodeResponseChunks(
-    encodedResponseBody.encodedData,
-    {
-      charset: encodedResponseBody.charset,
-      encoding: encodedResponseBody.encoding,
-      compressionEncodings: encodedResponseBody.compressionEncodings,
-      encodedBodySize: encodedResponseBody.encodedBodySize,
-    }
-  );
-}
+  NetworkDataBytes: "chrome://remote/content/shared/NetworkDataBytes.sys.mjs",
+});
 
 /**
  * The NetworkResponse class is a wrapper around the internal channel which
@@ -36,14 +16,16 @@ async function decodeReponseBody(encodedResponseBody) {
  * (https://fetch.spec.whatwg.org/#concept-response).
  */
 export class NetworkResponse {
+  #cachedResponseBody;
   #channel;
   #decodedBodySize;
   #encodedBodySize;
   #fromCache;
   #fromServiceWorker;
+  #hasCachedResponseBody;
+  #headersTransmittedSize;
   #isCachedResource;
   #isDataURL;
-  #headersTransmittedSize;
   #responseBodyReady;
   #status;
   #statusMessage;
@@ -59,8 +41,13 @@ export class NetworkResponse {
    *     Whether the response was read from the cache or not.
    * @param {boolean} params.fromServiceWorker
    *     Whether the response is coming from a service worker or not.
+   * @param {boolean} params.hasResponseCollector
+   *     Whether there is an active response collector for the context which
+   *     owns this request.
    * @param {boolean} params.isCachedResource
    *     Whether the response is served by the stencil (image/CSS/JS) cache.
+   * @param {string?} params.memoryCacheKey
+   *     The cache key of the in-memory cached response.
    * @param {string=} params.rawHeaders
    *     The response's raw (ie potentially compressed) headers
    */
@@ -69,7 +56,9 @@ export class NetworkResponse {
     const {
       fromCache,
       fromServiceWorker,
+      hasResponseCollector = false,
       isCachedResource,
+      memoryCacheKey = undefined,
       rawHeaders = "",
     } = params;
     this.#fromCache = fromCache;
@@ -83,6 +72,29 @@ export class NetworkResponse {
     this.#encodedBodySize = 0;
     this.#headersTransmittedSize = rawHeaders.length;
     this.#totalTransmittedSize = rawHeaders.length;
+
+    // We use two separate fields to distinguish the "no response body" vs
+    // "response is empty" in toJSON.
+    this.#hasCachedResponseBody = false;
+    this.#cachedResponseBody = "";
+
+    if (memoryCacheKey && hasResponseCollector) {
+      let charset = "";
+      const httpChannel = channel.QueryInterface(Ci.nsIHttpChannel);
+      if (httpChannel) {
+        charset = httpChannel.classicScriptHintCharset || "";
+      }
+
+      const text = ChromeUtils.getCachedJavaScriptSource(
+        memoryCacheKey,
+        channel.URI.spec,
+        charset
+      );
+      if (text !== undefined) {
+        this.#cachedResponseBody = text;
+        this.#hasCachedResponseBody = true;
+      }
+    }
 
     // See https://github.com/w3c/webdriver-bidi/issues/761
     // For 304 responses, the response will be replaced by the cached response
@@ -98,12 +110,20 @@ export class NetworkResponse {
         : this.#channel.responseStatusText;
   }
 
+  get cachedResponseBody() {
+    return this.#cachedResponseBody;
+  }
+
   get decodedBodySize() {
     return this.#decodedBodySize;
   }
 
   get encodedBodySize() {
     return this.#encodedBodySize;
+  }
+
+  get hasCachedResponseBody() {
+    return this.#hasCachedResponseBody;
   }
 
   get headers() {
@@ -120,6 +140,10 @@ export class NetworkResponse {
 
   get fromServiceWorker() {
     return this.#fromServiceWorker;
+  }
+
+  get isDataURL() {
+    return this.#isDataURL;
   }
 
   get mimeType() {
@@ -175,23 +199,37 @@ export class NetworkResponse {
     );
   }
 
-  async readResponseBody() {
-    return this.#responseBodyReady.promise;
-  }
+  /**
+   * Returns the NetworkDataBytes instance representing the response body for
+   * this response.
+   *
+   * @returns {NetworkDataBytes}
+   */
+  readAndProcessResponseBody = async () => {
+    const responseContent = await this.#responseBodyReady.promise;
+
+    return new lazy.NetworkDataBytes({
+      getBytesValue: async () => {
+        if (responseContent.isContentEncoded) {
+          return lazy.NetworkUtils.decodeResponseChunks(
+            responseContent.encodedData,
+            {
+              // Should always attempt to decode as UTF-8.
+              charset: "UTF-8",
+              compressionEncodings: responseContent.compressionEncodings,
+              encodedBodySize: responseContent.encodedBodySize,
+              encoding: responseContent.encoding,
+            }
+          );
+        }
+        return responseContent.text;
+      },
+      isBase64: responseContent.encoding === "base64",
+    });
+  };
 
   setResponseContent(responseContent) {
-    // Extract the properties necessary to decode the response body later on.
-    const encodedResponseBody = {
-      charset: responseContent.contentCharset,
-      compressionEncodings: responseContent.compressionEncodings,
-      encodedData: responseContent.encodedData,
-      encodedBodySize: responseContent.encodedBodySize,
-      encoding: responseContent.encoding,
-      getDecodedResponseBody: async () =>
-        decodeReponseBody(encodedResponseBody),
-    };
-
-    this.#responseBodyReady.resolve(encodedResponseBody);
+    this.#responseBodyReady.resolve(responseContent);
   }
 
   /**
@@ -257,11 +295,14 @@ export class NetworkResponse {
    */
   toJSON() {
     return {
+      cachedResponseBody: this.cachedResponseBody,
       decodedBodySize: this.decodedBodySize,
-      headers: this.headers,
-      headersTransmittedSize: this.headersTransmittedSize,
       encodedBodySize: this.encodedBodySize,
       fromCache: this.fromCache,
+      hasCachedResponseBody: this.hasCachedResponseBody,
+      headers: this.headers,
+      headersTransmittedSize: this.headersTransmittedSize,
+      isDataURL: this.isDataURL,
       mimeType: this.mimeType,
       protocol: this.protocol,
       serializedURL: this.serializedURL,

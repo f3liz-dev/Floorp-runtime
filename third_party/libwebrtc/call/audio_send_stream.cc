@@ -10,13 +10,12 @@
 
 #include "call/audio_send_stream.h"
 
-#include <stddef.h>
-
+#include <cstddef>
 #include <string>
 
+#include "absl/strings/str_cat.h"
 #include "api/audio_codecs/audio_format.h"
 #include "api/call/transport.h"
-#include "rtc_base/string_encode.h"
 #include "rtc_base/strings/string_builder.h"
 
 namespace webrtc {
@@ -50,8 +49,7 @@ AudioSendStream::Config::Rtp::Rtp() = default;
 AudioSendStream::Config::Rtp::~Rtp() = default;
 
 std::string AudioSendStream::Config::Rtp::ToString() const {
-  char buf[1024];
-  SimpleStringBuilder ss(buf);
+  StringBuilder ss;
   ss << "{ssrc: " << ssrc;
   if (!rid.empty()) {
     ss << ", rid: " << rid;
@@ -59,6 +57,14 @@ std::string AudioSendStream::Config::Rtp::ToString() const {
   if (!mid.empty()) {
     ss << ", mid: " << mid;
   }
+  ss << ", csrcs: [";
+  for (size_t i = 0; i < csrcs.size(); ++i) {
+    ss << csrcs[i];
+    if (i != csrcs.size() - 1) {
+      ss << ", ";
+    }
+  }
+  ss << ']';
   ss << ", extmap-allow-mixed: " << (extmap_allow_mixed ? "true" : "false");
   ss << ", extensions: [";
   for (size_t i = 0; i < extensions.size(); ++i) {
@@ -70,7 +76,7 @@ std::string AudioSendStream::Config::Rtp::ToString() const {
   ss << ']';
   ss << ", c_name: " << c_name;
   ss << '}';
-  return ss.str();
+  return ss.Release();
 }
 
 AudioSendStream::Config::SendCodecSpec::SendCodecSpec(
@@ -80,8 +86,7 @@ AudioSendStream::Config::SendCodecSpec::SendCodecSpec(
 AudioSendStream::Config::SendCodecSpec::~SendCodecSpec() = default;
 
 std::string AudioSendStream::Config::SendCodecSpec::ToString() const {
-  char buf[1024];
-  SimpleStringBuilder ss(buf);
+  StringBuilder ss;
   ss << "{nack_enabled: " << (nack_enabled ? "true" : "false");
   ss << ", enable_non_sender_rtt: "
      << (enable_non_sender_rtt ? "true" : "false");
@@ -92,7 +97,7 @@ std::string AudioSendStream::Config::SendCodecSpec::ToString() const {
   ss << ", payload_type: " << payload_type;
   ss << ", format: " << absl::StrCat(format);
   ss << '}';
-  return ss.str();
+  return ss.Release();
 }
 
 bool AudioSendStream::Config::SendCodecSpec::operator==(

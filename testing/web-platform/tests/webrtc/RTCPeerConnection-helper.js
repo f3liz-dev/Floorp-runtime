@@ -271,19 +271,19 @@ async function listenForSSRCs(t, receiver) {
 // It does the heavy lifting of performing signaling handshake,
 // ICE candidate exchange, and waiting for data channel at two
 // end points to open. Can do both negotiated and non-negotiated setup.
-async function createDataChannelPair(t, options,
+async function createDataChannelPairWithLabel(t, label, options,
                                      pc1 = createPeerConnectionWithCleanup(t),
                                      pc2 = createPeerConnectionWithCleanup(t)) {
   let pair = [], bothOpen;
   try {
     if (options.negotiated) {
-      pair = [pc1, pc2].map(pc => pc.createDataChannel('', options));
+      pair = [pc1, pc2].map(pc => pc.createDataChannel(label, options));
       bothOpen = Promise.all(pair.map(dc => new Promise((r, e) => {
         dc.onopen = r;
         dc.onerror = ({error}) => e(error);
       })));
     } else {
-      pair = [pc1.createDataChannel('', options)];
+      pair = [pc1.createDataChannel(label, options)];
       bothOpen = Promise.all([
         new Promise((r, e) => {
           pair[0].onopen = r;
@@ -305,6 +305,10 @@ async function createDataChannelPair(t, options,
        dc.onopen = dc.onerror = null;
     }
   }
+}
+
+async function createDataChannelPair(t, options, pc1, pc2) {
+  return createDataChannelPairWithLabel(t, '', options, pc1, pc2);
 }
 
 // Wait for RTP and RTCP stats to arrive
@@ -431,10 +435,10 @@ const trackFactories = {
       ctx.fillStyle = `rgb(${contrast%255}, ${contrast*contrast%255}, ${contrast%255})`;
       const xpos = count % (width - 20);
       const ypos = count % (height - 20);
-      ctx.fillRect(xpos, ypos, xpos + 20, ypos + 20);
+      ctx.fillRect(xpos, ypos, 20, 20);
       const xpos2 = (count + width / 2) % (width - 20);
       const ypos2 = (count + height / 2) % (height - 20);
-      ctx.fillRect(xpos2, ypos2, xpos2 + 20, ypos2 + 20);
+      ctx.fillRect(xpos2, ypos2, 20, 20);
       // If signal is set (0-255), add a constant-color box of that luminance to
       // the video frame at coordinates 20 to 60 in both X and Y direction.
       // (big enough to avoid color bleed from surrounding video in some codecs,

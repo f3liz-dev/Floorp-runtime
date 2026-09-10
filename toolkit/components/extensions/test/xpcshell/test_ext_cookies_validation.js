@@ -1,20 +1,6 @@
 "use strict";
 
-add_task(
-  { pref_set: [["extensions.cookie.rejectWhenInvalid", true]] },
-  async function test_no_reject_invalid_cookies() {
-    await do_test_invalid_cookies({ failure: true });
-  }
-);
-
-add_task(
-  { pref_set: [["extensions.cookie.rejectWhenInvalid", false]] },
-  async function test_warn_on_invalid_cookies() {
-    await do_test_invalid_cookies({ failure: false });
-  }
-);
-
-async function do_test_invalid_cookies(options) {
+add_task(async function do_test_invalid_cookies() {
   async function backgroundScript() {
     browser.test.onMessage.addListener(async message => {
       let failure = true;
@@ -31,7 +17,7 @@ async function do_test_invalid_cookies(options) {
           `${message.title} - correct exception`
         );
       } finally {
-        browser.test.assertEq(failure, message.failure, message.title);
+        browser.test.assertTrue(failure, message.title);
         browser.test.sendMessage("completed");
       }
     });
@@ -53,6 +39,13 @@ async function do_test_invalid_cookies(options) {
   let readyPromise = extension.awaitMessage("ready");
   await extension.startup();
   await readyPromise;
+
+  // the nameless cookie tests get different errors depending on the pref
+  let namelessError = "Cookie “” has been rejected for invalid prefix.";
+  if (Services.prefs.getBoolPref("network.cookie.valueless_cookie")) {
+    namelessError =
+      "Cookie “” has been rejected for invalid characters in the name.";
+  }
 
   const tests = [
     {
@@ -111,12 +104,12 @@ async function do_test_invalid_cookies(options) {
     {
       cookie: { name: "", value: "__Secure-wow" },
       title: "Invalid prefix (__Secure)",
-      errorString: "Cookie “” has been rejected for invalid prefix.",
+      errorString: namelessError,
     },
     {
       cookie: { name: "", value: "__Host-wow" },
       title: "Invalid prefix (__Host)",
-      errorString: "Cookie “” has been rejected for invalid prefix.",
+      errorString: namelessError,
     },
     {
       cookie: { name: "a", value: "b", sameSite: "no_restriction" },
@@ -152,10 +145,71 @@ async function do_test_invalid_cookies(options) {
   ];
 
   for (const test of tests) {
-    extension.sendMessage({ ...options, ...test });
+    extension.sendMessage(test);
 
     await extension.awaitMessage("completed");
   }
 
   await extension.unload();
-}
+});
+
+add_task(async function test_nameless_cookie_rejected_with_valueless_pref_on() {
+  Services.prefs.setBoolPref("network.cookie.valueless_cookie", true);
+
+  async function backgroundScript() {
+    await browser.test.assertRejects(
+      browser.cookies.set({ value: "dummy", url: "https://example.com" }),
+      /rejected for invalid characters in the name/,
+      "nameless cookie is rejected when valueless_cookie pref is on"
+    );
+    browser.test.sendMessage("done");
+  }
+
+  const extension = ExtensionTestUtils.loadExtension({
+    background: backgroundScript,
+    manifest: {
+      permissions: ["cookies", "https://example.com/*"],
+    },
+  });
+
+  await extension.startup();
+  await extension.awaitMessage("done");
+  await extension.unload();
+
+  Services.prefs.clearUserPref("network.cookie.valueless_cookie");
+});
+
+add_task(async function test_nameless_cookie_with_valueless_pref_off() {
+  Services.prefs.setBoolPref("network.cookie.valueless_cookie", false);
+
+  async function backgroundScript() {
+    const TEST_URL = "https://example.com";
+    let cookie = await browser.cookies.set({ value: "dummy", url: TEST_URL });
+    browser.test.assertEq("", cookie.name, "default name set");
+    browser.test.assertEq("dummy", cookie.value, "dummy value set");
+    browser.test.assertEq(
+      true,
+      cookie.session,
+      "no expiry date created session cookie"
+    );
+
+    const details = await browser.cookies.remove({ url: TEST_URL, name: "" });
+    browser.test.assertEq(TEST_URL, details.url, "removed cookie url");
+    browser.test.assertEq("", details.name, "removed cookie name");
+
+    browser.test.sendMessage("done");
+  }
+
+  const extension = ExtensionTestUtils.loadExtension({
+    background: backgroundScript,
+    manifest: {
+      permissions: ["cookies", "https://example.com/*"],
+    },
+  });
+
+  await extension.startup();
+  await extension.awaitMessage("done");
+  await extension.unload();
+
+  Services.prefs.clearUserPref("network.cookie.valueless_cookie");
+});

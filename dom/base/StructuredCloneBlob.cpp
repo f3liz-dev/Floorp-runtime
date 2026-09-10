@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,9 +13,9 @@
 #include "js/Value.h"
 #include "js/Wrapper.h"
 #include "jsapi.h"
-#include "mozilla/Assertions.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/Span.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BindingDeclarations.h"
 #include "mozilla/dom/BlobImpl.h"
@@ -111,7 +109,7 @@ void StructuredCloneBlob::Deserialize(JSContext* aCx,
   {
     JSAutoRealm ar(aCx, scope);
 
-    mHolder->Read(xpc::NativeGlobal(scope), aCx, aResult, aRv);
+    mHolder->Read(aCx, aResult, aRv);
     if (aRv.Failed()) {
       return;
     }
@@ -122,7 +120,7 @@ void StructuredCloneBlob::Deserialize(JSContext* aCx,
   }
 
   if (!JS_WrapValue(aCx, aResult)) {
-    aResult.set(JS::UndefinedValue());
+    aResult.setUndefined();
     aRv.NoteJSContextException(aCx);
   }
 }
@@ -174,7 +172,8 @@ bool StructuredCloneBlob::Holder::ReadStructuredCloneInternal(
       return false;
     }
 #endif
-    BlobImpls().AppendElements(&aHolder->BlobImpls()[blobOffset], blobCount);
+    BlobImpls().AppendElements(
+        Span(aHolder->BlobImpls()).Subspan(blobOffset, blobCount));
   }
 
   JSStructuredCloneData data(mStructuredCloneScope);

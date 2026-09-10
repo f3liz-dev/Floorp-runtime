@@ -9,6 +9,9 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
+import java.util.Calendar
+import java.util.TimeZone
+import java.util.UUID
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
@@ -22,13 +25,9 @@ import mozilla.components.lib.fetch.httpurlconnection.HttpURLConnectionClient
 import mozilla.components.service.glean.net.ConceptFetchHttpUploader
 import mozilla.components.support.base.log.Log
 import mozilla.components.support.base.log.sink.AndroidLogSink
-import mozilla.components.support.utils.PendingIntentUtils
 import mozilla.telemetry.glean.BuildInfo
 import mozilla.telemetry.glean.Glean
 import mozilla.telemetry.glean.config.Configuration
-import java.util.Calendar
-import java.util.TimeZone
-import java.util.UUID
 
 @Suppress("MagicNumber")
 internal object GleanBuildInfo {
@@ -36,9 +35,8 @@ internal object GleanBuildInfo {
         BuildInfo(
             versionCode = "0.0.1",
             versionName = "0.0.1",
-            buildDate = Calendar.getInstance(
-                TimeZone.getTimeZone("GMT+0"),
-            ).also { cal -> cal.set(2019, 9, 23, 12, 52, 8) },
+            buildDate =
+                Calendar.getInstance(TimeZone.getTimeZone("GMT+0")).also { cal -> cal.set(2019, 9, 23, 12, 52, 8) },
         )
     }
 }
@@ -52,22 +50,24 @@ class CrashApplication : Application() {
         // We want the log messages of all builds to go to Android logcat
         Log.addSink(AndroidLogSink())
 
-        crashReporter = CrashReporter(
-            context = this,
-            services = listOf(
-                createDummyCrashService(this),
-            ),
-            telemetryServices = listOf(GleanCrashReporterService(applicationContext)),
-            shouldPrompt = CrashReporter.Prompt.ALWAYS,
-            promptConfiguration = CrashReporter.PromptConfiguration(
-                appName = "Sample App",
-                organizationName = "Mozilla",
-                message = "As a private browser, we never save and cannot restore your last browsing session.",
-                theme = R.style.CrashDialogTheme,
-            ),
-            nonFatalCrashIntent = createNonFatalPendingIntent(this),
-            enabled = true,
-        ).install(this)
+        crashReporter =
+            CrashReporter(
+                    context = this,
+                    services = listOf(createDummyCrashService(this)),
+                    telemetryServices = listOf(GleanCrashReporterService(applicationContext)),
+                    shouldPrompt = CrashReporter.Prompt.ALWAYS,
+                    promptConfiguration =
+                        CrashReporter.PromptConfiguration(
+                            appName = "Sample App",
+                            organizationName = "Mozilla",
+                            message =
+                                "As a private browser, we never save and cannot restore your last browsing session.",
+                            theme = R.style.CrashDialogTheme,
+                        ),
+                    nonFatalCrashIntent = createNonFatalPendingIntent(this),
+                    enabled = true,
+                )
+                .install(this)
 
         // Initialize Glean for recording by the GleanCrashReporterService
         val httpClient = ConceptFetchHttpUploader(lazy { HttpURLConnectionClient() })
@@ -133,7 +133,7 @@ private fun createNonFatalPendingIntent(context: Context): PendingIntent {
         context,
         0,
         Intent(CrashApplication.NON_FATAL_CRASH_BROADCAST),
-        PendingIntentUtils.defaultFlags,
+        PendingIntent.FLAG_IMMUTABLE,
     )
 }
 

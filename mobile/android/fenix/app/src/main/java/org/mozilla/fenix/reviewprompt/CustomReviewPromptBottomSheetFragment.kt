@@ -11,15 +11,19 @@ import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.fragment.compose.content
 import androidx.lifecycle.lifecycleScope
-import androidx.navigation.fragment.findNavController
+import androidx.lifecycle.viewModelScope
+import com.google.android.material.R as materialR
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import kotlinx.coroutines.launch
-import mozilla.components.lib.state.ext.observeAsState
-import org.mozilla.fenix.R
-import org.mozilla.fenix.components.lazyStore
+import mozilla.components.lib.state.helpers.StoreProvider.Companion.fragmentStore
+import mozilla.components.lib.state.helpers.StoreProvider.Companion.storeProvider
+import org.mozilla.fenix.components.ReviewPromptAttemptResult.Error
+import org.mozilla.fenix.components.ReviewPromptAttemptResult.NotDisplayed
+import org.mozilla.fenix.ext.openInNewTab
 import org.mozilla.fenix.ext.requireComponents
 import org.mozilla.fenix.reviewprompt.CustomReviewPromptAction.LeaveFeedbackButtonClicked
 import org.mozilla.fenix.reviewprompt.CustomReviewPromptAction.NegativePrePromptButtonClicked
@@ -30,20 +34,22 @@ import org.mozilla.fenix.theme.FirefoxTheme
 
 /** A bottom sheet fragment for displaying [CustomReviewPrompt]. */
 class CustomReviewPromptBottomSheetFragment : BottomSheetDialogFragment() {
-    private val store by lazyStore { viewModelScope ->
-        CustomReviewPromptStore(
-            initialState = CustomReviewPromptState.PrePrompt,
-            middleware = listOf(
-                CustomReviewPromptNavigationMiddleware(viewModelScope),
-                CustomReviewPromptTelemetryMiddleware(),
-            ),
-        )
-    }
+    private val store by
+        fragmentStore(CustomReviewPromptState.PrePrompt) {
+            CustomReviewPromptStore(
+                initialState = it,
+                middleware =
+                    listOf(
+                        CustomReviewPromptNavigationMiddleware(storeProvider.viewModelScope),
+                        CustomReviewPromptTelemetryMiddleware(),
+                    ),
+            )
+        }
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
         return super.onCreateDialog(savedInstanceState).apply {
             setOnShowListener {
-                val bottomSheet = findViewById<View?>(R.id.design_bottom_sheet)
+                val bottomSheet = findViewById<View?>(materialR.id.design_bottom_sheet)
                 bottomSheet?.setBackgroundResource(android.R.color.transparent)
             }
         }
@@ -54,7 +60,7 @@ class CustomReviewPromptBottomSheetFragment : BottomSheetDialogFragment() {
         container: ViewGroup?,
         savedInstanceState: Bundle?,
     ) = content {
-        val state by store.observeAsState(CustomReviewPromptState.PrePrompt) { it }
+        val state by store.stateFlow.collectAsState(initial = CustomReviewPromptState.PrePrompt)
 
         LaunchedEffect(Unit) {
             store.dispatch(CustomReviewPromptAction.Displayed)
@@ -81,13 +87,17 @@ class CustomReviewPromptBottomSheetFragment : BottomSheetDialogFragment() {
 
                     CustomReviewPromptNavigationEvent.OpenPlayStoreReviewPrompt -> {
                         val activity = activity ?: return@collect
-                        requireComponents.playStoreReviewPromptController.tryPromptReview(activity)
+                        with(requireComponents.playStoreReviewPromptController) {
+                            val result = tryPromptReview(activity)
+                            when (result) {
+                                NotDisplayed,
+                                is Error -> tryLaunchPlayStoreReview(activity, ::openInNewTab)
+                                else -> {}
+                            }
+                        }
                     }
 
-                    is CustomReviewPromptNavigationEvent.OpenNewTab -> {
-                        requireComponents.useCases.tabsUseCases.addTab(event.url)
-                        findNavController().navigate(R.id.browserFragment)
-                    }
+                    is CustomReviewPromptNavigationEvent.OpenInNewTab -> openInNewTab(event.url)
                 }
             }
         }

@@ -12,13 +12,13 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.os.Build
+import android.os.Bundle
 import android.provider.Settings
 import android.view.Window
-import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
-import androidx.core.os.bundleOf
 import mozilla.components.support.base.log.logger.Logger
 import mozilla.components.support.utils.BuildManufacturerChecker
 
@@ -28,24 +28,34 @@ const val DEFAULT_BROWSER_APP_OPTION = "default_browser"
 const val ACTION_MANAGE_DEFAULT_APPS_SETTINGS_HUAWEI = "com.android.settings.PREFERRED_SETTINGS"
 private val logger = Logger("navigateToDefaultBrowserAppsSettings")
 
+val Context.packageManagerWrapper: PackageManagerWrapper
+    get() = DefaultPackageManagerWrapper(packageManager)
+
 /**
- * Open OS settings for default browser.
+ * The default [PackageManagerCompatHelper] for this [Context].
+ *
+ * @returns a [DefaultPackageManagerCompatHelper] created with the context's [PackageManager].
  */
-@RequiresApi(Build.VERSION_CODES.N)
+val Context.packageManagerCompatHelper: PackageManagerCompatHelper
+    get() = DefaultPackageManagerCompatHelper(DefaultPackageManagerWrapper(packageManager))
+
+/** Open OS settings for default browser. */
 fun Context.navigateToDefaultBrowserAppsSettings(buildManufacturerChecker: BuildManufacturerChecker) {
-    val intent = when {
-        buildManufacturerChecker.isHuawei() -> Intent(ACTION_MANAGE_DEFAULT_APPS_SETTINGS_HUAWEI)
-        else -> Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).apply {
-            putExtra(
-                SETTINGS_SELECT_OPTION_KEY,
-                DEFAULT_BROWSER_APP_OPTION,
-            )
-            putExtra(
-                SETTINGS_SHOW_FRAGMENT_ARGS,
-                bundleOf(SETTINGS_SELECT_OPTION_KEY to DEFAULT_BROWSER_APP_OPTION),
-            )
+    val intent =
+        when {
+            buildManufacturerChecker.isHuawei() -> Intent(ACTION_MANAGE_DEFAULT_APPS_SETTINGS_HUAWEI)
+            else ->
+                Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS).apply {
+                    putExtra(
+                        SETTINGS_SELECT_OPTION_KEY,
+                        DEFAULT_BROWSER_APP_OPTION,
+                    )
+                    putExtra(
+                        SETTINGS_SHOW_FRAGMENT_ARGS,
+                        Bundle().apply { putString(SETTINGS_SELECT_OPTION_KEY, DEFAULT_BROWSER_APP_OPTION) },
+                    )
+                }
         }
-    }
 
     try {
         startActivity(intent)
@@ -55,16 +65,14 @@ fun Context.navigateToDefaultBrowserAppsSettings(buildManufacturerChecker: Build
 }
 
 /**
- * Context  Context to retrieve service from.
- * @param broadcastReceiver The BroadcastReceiver to handle the broadcast.
- * @param filter   Selects the Intent broadcasts to be received.
- * @param exportedFlag [ContextCompat.RECEIVER_EXPORTED], if the receiver
- * should be able to receiver broadcasts from other applications, or
- * [ContextCompat.RECEIVER_NOT_EXPORTED] if the receiver should be able
- * to receive broadcasts only from the system or from within the app.
+ * Context Context to retrieve service from.
  *
- * @return The first sticky intent found that matches [filter],
- * or null if there are none.
+ * @param broadcastReceiver The BroadcastReceiver to handle the broadcast.
+ * @param filter Selects the Intent broadcasts to be received.
+ * @param exportedFlag [ContextCompat.RECEIVER_EXPORTED], if the receiver should be able to receiver broadcasts from
+ *   other applications, or [ContextCompat.RECEIVER_NOT_EXPORTED] if the receiver should be able to receive broadcasts
+ *   only from the system or from within the app.
+ * @return The first sticky intent found that matches [filter], or null if there are none.
  */
 @SuppressLint("UnspecifiedRegisterReceiverFlag")
 fun Context.registerReceiverCompat(
@@ -84,9 +92,7 @@ fun Context.registerReceiverCompat(
     }
 }
 
-/**
- * @return True if the orientation is landscape,or false if it's not.
- */
+/** @return True if the orientation is landscape,or false if it's not. */
 fun Context.isLandscape(): Boolean {
     return resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 }

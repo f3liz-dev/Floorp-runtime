@@ -4,11 +4,7 @@
 
 package org.mozilla.fenix.benchmark
 
-import android.content.Intent
-import android.net.Uri
-import android.os.Build
 import android.os.SystemClock
-import androidx.annotation.RequiresApi
 import androidx.benchmark.macro.BaselineProfileMode
 import androidx.benchmark.macro.CompilationMode
 import androidx.benchmark.macro.StartupMode
@@ -16,26 +12,18 @@ import androidx.benchmark.macro.StartupTimingMetric
 import androidx.benchmark.macro.junit4.MacrobenchmarkRule
 import org.junit.Rule
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.junit.runners.Parameterized
-import org.mozilla.fenix.benchmark.utils.EXTRA_COMPOSABLE_TOOLBAR
-import org.mozilla.fenix.benchmark.utils.ParameterizedToolbarsTest
+import org.mozilla.fenix.benchmark.utils.HtmlAsset
+import org.mozilla.fenix.benchmark.utils.MockWebServerRule
 import org.mozilla.fenix.benchmark.utils.TARGET_PACKAGE
-import org.mozilla.fenix.benchmark.utils.closeAllTabs
-import org.mozilla.fenix.benchmark.utils.enterSearchMode
-import org.mozilla.fenix.benchmark.utils.loadSite
 import org.mozilla.fenix.benchmark.utils.measureRepeatedDefault
-import org.mozilla.fenix.benchmark.utils.openNewTabOnTabsTray
-import org.mozilla.fenix.benchmark.utils.openTabsTray
-import org.mozilla.fenix.benchmark.utils.switchTabs
+import org.mozilla.fenix.benchmark.utils.switchTabsJourney
+import org.mozilla.fenix.benchmark.utils.url
 
 /**
  * This test class benchmarks the speed of opening 2 new tabs and switching between them. Run this
  * benchmark to verify how effective a Baseline Profile is. It does this by comparing
  * [CompilationMode.None], which represents the app with no Baseline Profiles optimizations, and
  * [CompilationMode.Partial], which uses Baseline Profiles.
- *
- * Before running make sure `autosignReleaseWithDebugKey=true` is present in local.properties.
  *
  * Run this benchmark to see startup measurements and captured system traces for verifying
  * the effectiveness of your Baseline Profiles. You can run it directly from Android
@@ -55,14 +43,13 @@ import org.mozilla.fenix.benchmark.utils.switchTabs
  * For more information, see the [Macrobenchmark documentation](https://d.android.com/macrobenchmark#create-macrobenchmark)
  * and the [instrumentation arguments documentation](https://d.android.com/topic/performance/benchmarking/macrobenchmark-instrumentation-args).
  **/
-@RunWith(Parameterized::class)
-@RequiresApi(Build.VERSION_CODES.N)
 @BaselineProfileMacrobenchmark
-class BaselineProfilesSwitchTabsBenchmark(
-    private val useComposableToolbar: Boolean,
-): ParameterizedToolbarsTest() {
+class BaselineProfilesSwitchTabsBenchmark {
     @get:Rule
     val benchmarkRule = MacrobenchmarkRule()
+
+    @get:Rule
+    val mockRule = MockWebServerRule()
 
     @Test
     fun switchTabsNone() = switchTabsBenchmark(CompilationMode.None())
@@ -83,26 +70,10 @@ class BaselineProfilesSwitchTabsBenchmark(
                 pressHome()
             },
         ) {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse("fenix-nightly://home"))
-                .putExtra(EXTRA_COMPOSABLE_TOOLBAR, useComposableToolbar)
-
-            intent.setPackage(packageName)
-
-            startActivityAndWait(intent = intent)
-
-            device.enterSearchMode(useComposableToolbar)
-            device.loadSite(url = "example.com", useComposableToolbar)
-
-            device.openTabsTray(useComposableToolbar)
-            device.openNewTabOnTabsTray()
-            device.loadSite(url = "https://www.mozilla.org/credits/", useComposableToolbar)
-
-            device.openTabsTray(useComposableToolbar)
-            device.switchTabs(siteName = "Example Domain", newTabUrl = "http://example.com")
-
-            device.openTabsTray(useComposableToolbar)
-            device.closeAllTabs()
-
+            switchTabsJourney(
+                simpleHtmlUrl = mockRule.url(HtmlAsset.SIMPLE),
+                longHtmlUrl = mockRule.url(HtmlAsset.LONG),
+            )
             SystemClock.sleep(1000)
             killProcess()
         }

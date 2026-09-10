@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -25,6 +23,8 @@ class TrackMetadataHolder;
 
 DDLoggedTypeDeclName(MediaDataDemuxer);
 DDLoggedTypeName(MediaTrackDemuxer);
+
+inline mozilla::LazyLogModule gMediaDemuxerLog("MediaDemuxer");
 
 // Allows reading the media data: to retrieve the metadata and demux samples.
 // MediaDataDemuxer isn't designed to be thread safe.
@@ -151,6 +151,11 @@ class MediaTrackDemuxer : public DecoderDoctorLifeLogger<MediaTrackDemuxer> {
   // If only a lesser amount of samples is available, only those will be
   // returned.
   // A aNumSamples value of -1 indicates to return all remaining samples.
+  // NS_ERROR_DOM_MEDIA_END_OF_STREAM and NS_ERROR_DOM_MEDIA_WAITING_FOR_DATA
+  // are returned only if no more samples can be returned.
+  // Other errors encountered while parsing the requested number of samples
+  // are reported immediately without returning any samples, even if a smaller
+  // number of samples could be parsed successfully.
   // A video sample is typically made of a single video frame while an audio
   // sample will contains multiple audio frames.
   virtual RefPtr<SamplesPromise> GetSamples(int32_t aNumSamples = 1) = 0;

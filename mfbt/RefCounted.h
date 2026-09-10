@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,12 +7,9 @@
 #ifndef mozilla_RefCounted_h
 #define mozilla_RefCounted_h
 
-#include <utility>
 #include <type_traits>
 
-#include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/RefCountType.h"
 
@@ -198,7 +193,7 @@ class RC<T, AtomicRefCount> {
       // TSan doesn't understand std::atomic_thread_fence, so in order
       // to avoid a false positive for every time a refcounted object
       // is deleted, we replace the fence with an atomic operation.
-      mValue.load(std::memory_order_acquire);
+      (void)mValue.load(std::memory_order_acquire);
 #else
       std::atomic_thread_fence(std::memory_order_acquire);
 #endif

@@ -14,13 +14,13 @@ XPCOMUtils.defineLazyServiceGetter(
   this,
   "sas",
   "@mozilla.org/storage/activity-service;1",
-  "nsIStorageActivityService"
+  Ci.nsIStorageActivityService
 );
 XPCOMUtils.defineLazyServiceGetter(
   this,
   "swm",
   "@mozilla.org/serviceworkers/manager;1",
-  "nsIServiceWorkerManager"
+  Ci.nsIServiceWorkerManager
 );
 
 const oneHour = 3600000000;
@@ -192,8 +192,8 @@ for (let itemsToClear of prefs) {
     let originALLOW = "https://example.org";
     PermissionTestUtils.add(
       originALLOW,
-      "cookie",
-      Ci.nsICookiePermission.ACCESS_ALLOW
+      "persist-data-on-shutdown",
+      Services.perms.ALLOW_ACTION
     );
 
     ok(

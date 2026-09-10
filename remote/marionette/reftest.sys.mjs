@@ -15,7 +15,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   Log: "chrome://remote/content/shared/Log.sys.mjs",
   navigate: "chrome://remote/content/marionette/navigate.sys.mjs",
   print: "chrome://remote/content/shared/PDF.sys.mjs",
-  windowManager: "chrome://remote/content/shared/WindowManager.sys.mjs",
 });
 
 ChromeUtils.defineLazyGetter(lazy, "logger", () =>
@@ -70,8 +69,11 @@ reftest.Runner = class {
     this.windowUtils = null;
     this.lastURL = null;
     this.useRemoteTabs = lazy.AppInfo.browserTabsRemoteAutostart;
-    this.useRemoteSubframes = lazy.AppInfo.fissionAutostart;
     this.cacheScreenshots = true;
+    this.useDrawSnapshot = Services.prefs.getBoolPref(
+      "reftest.use-draw-snapshot",
+      false
+    );
   }
 
   /**
@@ -108,7 +110,6 @@ reftest.Runner = class {
     this.cacheScreenshots = cacheScreenshots;
 
     ChromeUtils.registerWindowActor("MarionetteReftest", {
-      kind: "JSWindowActor",
       parent: {
         esModuleURI:
           "chrome://remote/content/marionette/actors/MarionetteReftestParent.sys.mjs",
@@ -121,6 +122,7 @@ reftest.Runner = class {
         },
       },
       allFrames: true,
+      safeForUntrustedWebProcess: true,
     });
   }
 
@@ -152,7 +154,7 @@ reftest.Runner = class {
       reftestWin = this.parentWindow;
       await lazy.navigate.waitForNavigationCompleted(this.driver, () => {
         const browsingContext = this.driver.getBrowsingContext();
-        lazy.navigate.navigateTo(browsingContext, "about:blank");
+        lazy.navigate.navigateTo(browsingContext, URL.parse("about:blank"));
       });
     } else {
       lazy.logger.debug("Using separate window");
@@ -166,7 +168,7 @@ reftest.Runner = class {
     this.windowUtils = reftestWin.windowUtils;
     this.reftestWin = reftestWin;
 
-    let windowHandle = lazy.windowManager.getWindowProperties(reftestWin);
+    let windowHandle = this.driver.getWindowProperties(reftestWin);
     await this.driver.setWindowHandle(windowHandle, true);
 
     const url = await this.driver._getCurrentURL();
@@ -199,14 +201,14 @@ reftest.Runner = class {
     let browser;
     if (lazy.AppInfo.isAndroid) {
       browser = reftestWin.document.getElementsByTagName("browser")[0];
-      browser.setAttribute("remote", "false");
+      browser.removeAttribute("remote");
     } else {
       browser = reftestWin.document.createElementNS(XUL_NS, "xul:browser");
       browser.permanentKey = {};
       browser.setAttribute("id", "browser");
       browser.setAttribute("type", "content");
       browser.setAttribute("primary", "true");
-      browser.setAttribute("remote", this.useRemoteTabs ? "true" : "false");
+      browser.toggleAttribute("remote", this.useRemoteTabs);
     }
     // Make sure the browser element is exactly the right size, no matter
     // what size our window is
@@ -239,9 +241,7 @@ reftest.Runner = class {
   async abort() {
     if (this.reftestWin && this.reftestWin != this.parentWindow) {
       await this.driver.closeChromeWindow();
-      let parentHandle = lazy.windowManager.getWindowProperties(
-        this.parentWindow
-      );
+      let parentHandle = this.driver.getWindowProperties(this.parentWindow);
       await this.driver.setWindowHandle(parentHandle);
     }
     this.reftestWin = null;
@@ -632,15 +632,9 @@ reftest.Runner = class {
     if (lazy.AppInfo.isAndroid) {
       return;
     }
-    let oa = lazy.E10SUtils.predictOriginAttributes({ browser });
-    let remoteType = lazy.E10SUtils.getRemoteTypeForURI(
-      url,
-      this.useRemoteTabs,
-      this.useRemoteSubframes,
-      lazy.E10SUtils.DEFAULT_REMOTE_TYPE,
-      null,
-      oa
-    );
+    let remoteType = ChromeUtils.predictRemoteTypeForURI(url, {
+      window: browser.documentGlobal,
+    });
 
     // Only re-construct the browser if its remote type needs to change.
     if (browser.remoteType !== remoteType) {
@@ -675,7 +669,7 @@ reftest.Runner = class {
       //
       // See bug 1636169.
       this.updateBrowserRemotenessByURL(win.gBrowser, url);
-      lazy.navigate.navigateTo(browsingContext, url);
+      lazy.navigate.navigateTo(browsingContext, URL.parse(url));
 
       this.lastURL = url;
     }
@@ -766,7 +760,13 @@ reftest.Runner = class {
         0, // top
         browserRect.width,
         browserRect.height,
-        { canvas, flags, readback: true }
+        {
+          canvas,
+          flags,
+          readback: !this.useDrawSnapshot,
+          // Match the DRAWWINDOW_DRAW_VIEW readback path above.
+          drawView: true,
+        }
       );
     }
     if (

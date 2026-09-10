@@ -5,6 +5,7 @@
 //! Code for invalidations due to state or attribute changes.
 
 use crate::context::QuirksMode;
+use crate::derives::*;
 use crate::selector_map::{
     MaybeCaseInsensitiveHashMap, PrecomputedHashMap, SelectorMap, SelectorMapEntry,
 };
@@ -76,7 +77,7 @@ pub struct Dependency {
 }
 
 impl SelectorMapEntry for Dependency {
-    fn selector(&self) -> SelectorIter<SelectorImpl> {
+    fn selector(&self) -> SelectorIter<'_, SelectorImpl> {
         self.selector.iter_from(self.selector_offset)
     }
 }
@@ -121,6 +122,17 @@ pub enum RelativeDependencyInvalidationKind {
     AncestorEarlierSibling,
 }
 
+/// The kind of invalidation the subject of this dependency triggers.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, MallocSizeOf)]
+pub enum ScopeDependencyInvalidationKind {
+    /// This dependency's subject is an explicit scope root
+    ExplicitScope,
+    /// This dependency's subject is an implicit scope root
+    ImplicitScope,
+    /// This dependency's subject is an end scope condition
+    ScopeEnd,
+}
+
 /// Invalidation kind merging normal and relative dependencies.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, MallocSizeOf)]
 pub enum DependencyInvalidationKind {
@@ -131,48 +143,59 @@ pub enum DependencyInvalidationKind {
     Normal(NormalDependencyInvalidationKind),
     /// This dependency is a relative dependency.
     Relative(RelativeDependencyInvalidationKind),
+    /// This dependency is a scope dependency.
+    Scope(ScopeDependencyInvalidationKind),
+}
+
+/// The type of invalidation a non-relative selector can generate.
+#[derive(Clone, Copy, Debug, MallocSizeOf)]
+pub enum GeneratedInvalidation<'a> {
+    /// Generates a normal invalidation.
+    Normal,
+    /// Generates a scope invalidation.
+    Scope(Option<&'a ThinArc<(), Dependency>>),
 }
 
 /// Return the type of normal invalidation given a selector & an offset.
-fn get_normal_invalidation_kind(
+#[inline(always)]
+fn get_non_relative_invalidation_kind(
     selector: &Selector<SelectorImpl>,
     selector_offset: usize,
+    scope_kind: Option<ScopeDependencyInvalidationKind>,
 ) -> DependencyInvalidationKind {
-    if selector_offset == 0 || selector.len() <= selector_offset {
+    if let Some(kind) = scope_kind {
+        return DependencyInvalidationKind::Scope(kind);
+    }
+    if selector_offset == 0 {
         return DependencyInvalidationKind::Normal(NormalDependencyInvalidationKind::Element);
     }
-    let combinator = Some(selector.combinator_at_match_order(selector_offset - 1));
+    let combinator = selector.combinator_at_match_order(selector_offset - 1);
     DependencyInvalidationKind::Normal(match combinator {
-        None => NormalDependencyInvalidationKind::Element,
-        Some(Combinator::Child) | Some(Combinator::Descendant) => {
-            NormalDependencyInvalidationKind::Descendants
-        },
-        Some(Combinator::LaterSibling) | Some(Combinator::NextSibling) => {
+        Combinator::Child | Combinator::Descendant => NormalDependencyInvalidationKind::Descendants,
+        Combinator::LaterSibling | Combinator::NextSibling => {
             NormalDependencyInvalidationKind::Siblings
         },
-        Some(Combinator::PseudoElement) => NormalDependencyInvalidationKind::ElementAndDescendants,
-        Some(Combinator::SlotAssignment) => NormalDependencyInvalidationKind::SlottedElements,
-        Some(Combinator::Part) => NormalDependencyInvalidationKind::Parts,
+        Combinator::PseudoElement => NormalDependencyInvalidationKind::ElementAndDescendants,
+        Combinator::SlotAssignment => NormalDependencyInvalidationKind::SlottedElements,
+        Combinator::Part => NormalDependencyInvalidationKind::Parts,
     })
 }
 
-/// Return the relative invalidation kind given a match hint
-fn get_relative_kind(match_hint: RelativeSelectorMatchHint) -> RelativeDependencyInvalidationKind {
-    match match_hint {
-        RelativeSelectorMatchHint::InChild => RelativeDependencyInvalidationKind::Parent,
-        RelativeSelectorMatchHint::InSubtree => RelativeDependencyInvalidationKind::Ancestors,
-        RelativeSelectorMatchHint::InNextSibling => RelativeDependencyInvalidationKind::PrevSibling,
-        RelativeSelectorMatchHint::InSibling => RelativeDependencyInvalidationKind::EarlierSibling,
-        RelativeSelectorMatchHint::InNextSiblingSubtree => {
-            RelativeDependencyInvalidationKind::AncestorPrevSibling
-        },
-        RelativeSelectorMatchHint::InSiblingSubtree => {
-            RelativeDependencyInvalidationKind::AncestorEarlierSibling
-        },
-    }
-}
-
 impl Dependency {
+    /// Generate a new dependency
+    pub fn new(
+        selector: Selector<SelectorImpl>,
+        selector_offset: usize,
+        next: Option<ThinArc<(), Dependency>>,
+        kind: DependencyInvalidationKind,
+    ) -> Self {
+        Self {
+            selector,
+            selector_offset,
+            next,
+            kind,
+        }
+    }
     /// Creates a dummy dependency to invalidate the whole selector.
     ///
     /// This is necessary because document state invalidation wants to
@@ -197,6 +220,16 @@ impl Dependency {
             return kind;
         }
         unreachable!("Querying normal invalidation kind on non-normal dependency.");
+    }
+
+    /// The kind of relative invalidation that this would generate. The dependency
+    /// in question must be a relative dependency.
+    #[inline(always)]
+    pub fn relative_invalidation_kind(&self) -> RelativeDependencyInvalidationKind {
+        if let DependencyInvalidationKind::Relative(kind) = self.kind {
+            return kind;
+        }
+        unreachable!("Querying relative invalidation kind on non-relative dependency.");
     }
 
     /// The kind of invalidation that this would generate.
@@ -244,7 +277,7 @@ pub struct StateDependency {
 }
 
 impl SelectorMapEntry for StateDependency {
-    fn selector(&self) -> SelectorIter<SelectorImpl> {
+    fn selector(&self) -> SelectorIter<'_, SelectorImpl> {
         self.dep.selector()
     }
 }
@@ -341,7 +374,7 @@ pub struct TSStateDependency {
 }
 
 impl SelectorMapEntry for TSStateDependency {
-    fn selector(&self) -> SelectorIter<SelectorImpl> {
+    fn selector(&self) -> SelectorIter<'_, SelectorImpl> {
         self.dep.selector()
     }
 }
@@ -409,18 +442,22 @@ impl InvalidationMap {
 
     /// Returns the number of dependencies stored in the invalidation map.
     pub fn len(&self) -> usize {
-        self.state_affecting_selectors.len() +
-            self.document_state_selectors.len() +
-            self.other_attribute_affecting_selectors
+        self.state_affecting_selectors.len()
+            + self.document_state_selectors.len()
+            + self
+                .other_attribute_affecting_selectors
                 .iter()
-                .fold(0, |accum, (_, ref v)| accum + v.len()) +
-            self.id_to_selector
+                .fold(0, |accum, (_, ref v)| accum + v.len())
+            + self
+                .id_to_selector
                 .iter()
-                .fold(0, |accum, (_, ref v)| accum + v.len()) +
-            self.class_to_selector
+                .fold(0, |accum, (_, ref v)| accum + v.len())
+            + self
+                .class_to_selector
                 .iter()
-                .fold(0, |accum, (_, ref v)| accum + v.len()) +
-            self.custom_state_affecting_selectors
+                .fold(0, |accum, (_, ref v)| accum + v.len())
+            + self
+                .custom_state_affecting_selectors
                 .iter()
                 .fold(0, |accum, (_, ref v)| accum + v.len())
     }
@@ -453,12 +490,14 @@ pub fn note_selector_for_invalidation(
     relative_selector_invalidation_map: &mut InvalidationMap,
     additional_relative_selector_invalidation_map: &mut AdditionalRelativeSelectorInvalidationMap,
     inner_scope_dependencies: Option<&ThinArc<(), Dependency>>,
+    scope_kind: Option<ScopeDependencyInvalidationKind>,
 ) -> Result<Option<Vec<Dependency>>, AllocErr> {
     let next_dependency = Dependency::for_full_selector_invalidation(selector.clone());
     let mut document_state = DocumentState::empty();
     let mut scope_dependencies = ScopeSelectorCollectorState {
         inner_dependencies: &inner_scope_dependencies.cloned(),
         this_dependencies: None,
+        scope_kind,
     };
 
     {
@@ -529,6 +568,8 @@ struct ScopeSelectorCollectorState<'a> {
     inner_dependencies: &'a Option<ThinArc<(), Dependency>>,
     // Scope dependencies added by this scope selector
     this_dependencies: Option<Vec<Dependency>>,
+    // Whether this dependency is scope start, end, or other.
+    scope_kind: Option<ScopeDependencyInvalidationKind>,
 }
 
 trait Collector {
@@ -743,6 +784,7 @@ fn next_dependency(
     next_selector: &mut NextSelectors,
     next_outer_dependency: Option<&ThinArc<(), Dependency>>,
     next_scope_dependencies: Option<&ThinArc<(), Dependency>>,
+    scope_kind: Option<ScopeDependencyInvalidationKind>,
 ) -> Option<ThinArc<(), Dependency>> {
     if next_selector.is_empty() {
         return match next_outer_dependency {
@@ -755,6 +797,7 @@ fn next_dependency(
         entries: &mut [NextDependencyEntry],
         next_outer_dependency: &Option<&ThinArc<(), Dependency>>,
         next_scope_dependencies: &Option<&ThinArc<(), Dependency>>,
+        scope_kind: Option<ScopeDependencyInvalidationKind>,
     ) -> Option<ThinArc<(), Dependency>> {
         if entries.is_empty() {
             return next_scope_dependencies.cloned();
@@ -769,8 +812,20 @@ fn next_dependency(
         let dependency = Dependency {
             selector: selector.clone(),
             selector_offset,
-            next: dependencies_from(previous, next_outer_dependency, next_scope_dependencies),
-            kind: get_normal_invalidation_kind(selector, selector_offset),
+            next: dependencies_from(
+                previous,
+                next_outer_dependency,
+                next_scope_dependencies,
+                scope_kind,
+            ),
+            kind: get_non_relative_invalidation_kind(
+                selector,
+                selector_offset,
+                next_scope_dependencies
+                    .is_some()
+                    .then(|| scope_kind)
+                    .flatten(),
+            ),
         };
 
         Some(
@@ -784,6 +839,7 @@ fn next_dependency(
         next_selector,
         &next_outer_dependency,
         &next_scope_dependencies,
+        scope_kind,
     )
 }
 
@@ -796,17 +852,27 @@ impl<'a, 'b, 'c> Collector for SelectorDependencyCollector<'a, 'b, 'c> {
 
         let offset = self.compound_state.offset;
 
+        let scope_dependencies = self.inner_scope_dependencies();
+
         let next = next_dependency(
             self.next_selectors,
             optional_dependency,
-            self.inner_scope_dependencies().as_ref(),
+            scope_dependencies.as_ref(),
+            self.scope_dependencies.scope_kind,
         );
 
         Dependency {
             selector: self.selector.clone(),
             selector_offset: offset,
             next: next,
-            kind: get_normal_invalidation_kind(self.selector, offset),
+            kind: get_non_relative_invalidation_kind(
+                self.selector,
+                offset,
+                scope_dependencies
+                    .is_some()
+                    .then(|| self.scope_dependencies.scope_kind)
+                    .flatten(),
+            ),
         }
     }
 
@@ -1238,9 +1304,9 @@ impl<'a, 'b> RelativeSelectorDependencyCollector<'a, 'b> {
 
         self.additional_relative_selector_invalidation_map
             .needs_ancestors_traversal |= match self.selector.match_hint {
-            RelativeSelectorMatchHint::InNextSiblingSubtree |
-            RelativeSelectorMatchHint::InSiblingSubtree |
-            RelativeSelectorMatchHint::InSubtree => true,
+            RelativeSelectorMatchHint::InNextSiblingSubtree
+            | RelativeSelectorMatchHint::InSiblingSubtree
+            | RelativeSelectorMatchHint::InSubtree => true,
             _ => false,
         };
         loop {
@@ -1304,10 +1370,14 @@ impl<'a, 'b> RelativeSelectorDependencyCollector<'a, 'b> {
 
 impl<'a, 'b> Collector for RelativeSelectorDependencyCollector<'a, 'b> {
     fn dependency(&mut self) -> Dependency {
+        let scope_dependencies = self.inner_scope_dependencies();
+        let scope_kind = self.scope_dependencies.scope_kind;
+
         let next = next_dependency(
             self.next_selectors,
             None,
-            self.inner_scope_dependencies().as_ref(),
+            scope_dependencies.as_ref(),
+            scope_kind,
         );
         debug_assert!(
             next.as_ref().is_some_and(|d| !matches!(
@@ -1324,9 +1394,28 @@ impl<'a, 'b> Collector for RelativeSelectorDependencyCollector<'a, 'b> {
         Dependency {
             selector: self.selector.selector.clone(),
             selector_offset: self.compound_state.offset,
-            kind: DependencyInvalidationKind::Relative(get_relative_kind(
-                self.combinator_count.get_match_hint(),
-            )),
+            kind: DependencyInvalidationKind::Relative(
+                match self.combinator_count.get_match_hint() {
+                    RelativeSelectorMatchHint::InChild => {
+                        RelativeDependencyInvalidationKind::Parent
+                    },
+                    RelativeSelectorMatchHint::InSubtree => {
+                        RelativeDependencyInvalidationKind::Ancestors
+                    },
+                    RelativeSelectorMatchHint::InNextSibling => {
+                        RelativeDependencyInvalidationKind::PrevSibling
+                    },
+                    RelativeSelectorMatchHint::InSibling => {
+                        RelativeDependencyInvalidationKind::EarlierSibling
+                    },
+                    RelativeSelectorMatchHint::InNextSiblingSubtree => {
+                        RelativeDependencyInvalidationKind::AncestorPrevSibling
+                    },
+                    RelativeSelectorMatchHint::InSiblingSubtree => {
+                        RelativeDependencyInvalidationKind::AncestorEarlierSibling
+                    },
+                },
+            ),
             next: next,
         }
     }

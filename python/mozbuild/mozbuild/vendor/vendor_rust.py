@@ -2,6 +2,7 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, # You can obtain one at http://mozilla.org/MPL/2.0/.
 
+import copy
 import errno
 import hashlib
 import json
@@ -16,6 +17,7 @@ from pathlib import Path
 
 import mozpack.path as mozpath
 import toml
+import tomlkit
 from looseversion import LooseVersion
 from mozboot.util import MINIMUM_RUST_VERSION
 
@@ -27,8 +29,8 @@ if typing.TYPE_CHECKING:
 # Type of a TOML value.
 TomlItem = typing.Union[
     str,
-    typing.List["TomlItem"],
-    typing.Dict[str, "TomlItem"],
+    list["TomlItem"],
+    dict[str, "TomlItem"],
     bool,
     int,
     float,
@@ -74,8 +76,66 @@ Cargo.lock to the HEAD version, run `git checkout -- Cargo.lock` or
 `hg revert Cargo.lock`.
 """
 
+# Some crates here would also be caught by the name prefix check,
+# but putting specific crates here allows for more granular advice
+# for what to use instead. Even more crates could have granular
+# advice here, but it's probably not worthwhile to provide granular
+# advice about crates whose vendoring is unlikely to be attempted,
+# such as the `rust_icu_` crates.
+PACKAGES_WE_DONT_WANT = {
+    "icu": "Use the specific ICU4X crate (crates whose name starts with icu_) instead of the metacrate.",
+    "rust_icu": "Use ICU4X (crates whose name starts with icu_) instead",
+    "unic": "Use ICU4X (crates whose name starts with icu_) instead",
+    "unicode-canonical-combining-class": "Use icu_normalizer instead",
+    "unicode-case-mapping": "Use icu_casemap instead",
+    "unicode-bidi-mirroring": "Use icu_properties instead",
+    "unicode-ccc": "Use icu_normalizer instead",
+    "unicode-general-category": "Use icu_properties instead",
+    "unicode-id": "Use icu_properties instead",
+    "unicode-id-start": "Use icu_properties instead",
+    # Impractical to require icu_properties instead of unicode-ident at this time.
+    #    "unicode-ident": "Use icu_properties instead",
+    "unicode-joining-type": "Use icu_properties instead",
+    "unicode-linebreak": "Use icu_segmenter instead",
+    "unicode-normalization": "Use icu_normalizer instead",
+    "unicode-properties": "Use icu_properties instead",
+    "unicode-script": "Use icu_properties instead",
+    "unicode-segmentation": "Use icu_segmenter instead",
+    "unicode-xid": "Use icu_properties instead",
+    "unicode_categories": "Use icu_properties instead",
+    "unicode_names": "Avoid including data for Unicode character names",
+    "unicode_names2": "Avoid including data for Unicode character names",
+    "feruca": "Use icu_collator instead",
+    "idna_mapping": "Make sure to use a version of idna_adapter that uses ICU4X",
+    "unic-bidi": "Use unicode-bidi instead",
+    "unic-idna": "Use idna instead",
+    "unic-normal": "Use icu_normalizer instead",
+    "unic-segment": "Use icu_segmenter instead",
+    "unic-ucd": "Use icu_properties instead",
+    "num-format": "Use icu_decimal instead",
+    "encoding": "Use encoding_rs instead",
+    # Impractical to require icu_casemap instead of unicase at this time.
+    #    "unicase": "Use icu_casemap instead",
+}
 
-PACKAGES_WE_DONT_WANT = {}
+PREFIXES_WE_DONT_WANT = {
+    "unicode-": "Use ICU4X (crates whose name starts with icu_) instead",
+    "unic-": "Use ICU4X (crates whose name starts with icu_) instead",
+    "rust_icu_": "Use ICU4X (crates whose name starts with icu_) instead",
+    "unicode_": "Use ICU4X (crates whose name starts with icu_) instead",
+}
+
+ALLOWED_DESPITE_PREFIX = {
+    "unicode-bidi",  # Out of scope for ICU4X; used with ICU4X data
+    "unicode-bidi-ffi",  # FFI for previous
+    "unicode-ident",  # Impractical to require icu_properties at this time
+    "unicode-width",  # icu_properties has the raw data but not the algorithm
+    "unic-langid",  # We want to migrate to icu_locale eventually
+    "unic-langid-ffi",  # FFI for previous
+    "unic-langid-impl",  # Implementation detail of unic-langid
+}
+
+SEEN_ALLOWED_DESPITE_PREFIX = set()
 
 PACKAGES_WE_ALWAYS_WANT_AN_OVERRIDE_OF = [
     "autocfg",
@@ -86,26 +146,38 @@ PACKAGES_WE_ALWAYS_WANT_AN_OVERRIDE_OF = [
 ]
 
 
+def dont_want_package(name):
+    if reason := PACKAGES_WE_DONT_WANT.get(name):
+        return reason
+    if name in ALLOWED_DESPITE_PREFIX:
+        SEEN_ALLOWED_DESPITE_PREFIX.add(name)
+        return None
+    for prefix, reason in PREFIXES_WE_DONT_WANT.items():
+        if name.startswith(prefix):
+            return reason
+
+
 class VendorRust(MozbuildObject):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._issues = []
 
     def serialize_issues_json(self):
-        return json.dumps(
-            {
-                "Cargo.lock": [
-                    {
-                        "path": "Cargo.lock",
-                        "column": None,
-                        "line": None,
-                        "level": "error" if level == logging.ERROR else "warning",
-                        "message": msg,
-                    }
-                    for (level, msg) in self._issues
-                ]
-            }
-        )
+        return json.dumps({
+            "Cargo.lock": [
+                {
+                    "path": "Cargo.lock",
+                    "column": None,
+                    "line": None,
+                    "level": "error" if level == logging.ERROR else "warning",
+                    "message": msg,
+                }
+                for (level, msg) in self._issues
+            ]
+        })
+
+    def generate_diff_stream(self):
+        return self.repository.diff_stream()
 
     def log(self, level, action, params, format_str):
         if level >= logging.WARNING:
@@ -138,7 +210,8 @@ class VendorRust(MozbuildObject):
 
     def cargo_version(self, cargo):
         out = (
-            subprocess.check_output([cargo, "--version"])
+            subprocess
+            .check_output([cargo, "--version"])
             .splitlines()[0]
             .decode("UTF-8")
         )
@@ -154,12 +227,12 @@ class VendorRust(MozbuildObject):
             version = self.cargo_version(cargo)
         except RuntimeError:
             return False
-        # Cargo 1.85.0 changed vendoring in a way that creates a lot of noise
+        # Cargo 1.90.0 changed vendoring in a way that creates a lot of noise
         # if we go back and forth between vendoring with an older version and
         # a newer version. Only allow the newer versions.
         minimum_rust_version = MINIMUM_RUST_VERSION
-        if LooseVersion("1.85.0") >= MINIMUM_RUST_VERSION:
-            minimum_rust_version = "1.85.0"
+        if LooseVersion("1.90.0") >= MINIMUM_RUST_VERSION:
+            minimum_rust_version = "1.90.0"
         if version < minimum_rust_version:
             self.log(
                 logging.ERROR,
@@ -194,9 +267,7 @@ class VendorRust(MozbuildObject):
 {files}
 
 Please commit or stash these changes before vendoring, or re-run with `--ignore-modified`.
-""".format(
-                    files="\n".join(sorted(modified))
-                ),
+""".format(files="\n".join(sorted(modified))),
             )
         return modified
 
@@ -226,6 +297,7 @@ Please commit or stash these changes before vendoring, or re-run with `--ignore-
     # Licenses for code used at runtime. Please see the above comment before
     # adding anything to this list.
     RUNTIME_LICENSE_WHITELIST = [
+        "0BSD",
         "Apache-2.0",
         "Apache-2.0 WITH LLVM-exception",
         # BSD-2-Clause and BSD-3-Clause are ok, but packages using them
@@ -265,7 +337,12 @@ Please commit or stash these changes before vendoring, or re-run with `--ignore-
             "qlog",
         ],
         "BSD-3-Clause": [
+            "jxl",
+            "jxl_macros",
+            "jxl_simd",
+            "jxl_transforms",
             "subtle",
+            "uritemplate-next",
         ],
     }
 
@@ -405,7 +482,7 @@ Please commit or stash these changes before vendoring, or re-run with `--ignore-
             with open(toml_file, encoding="utf-8") as fh:
                 toml_data = toml.load(fh)
 
-            package_entry: typing.Dict[str, TomlItem] = toml_data["package"]
+            package_entry: dict[str, TomlItem] = toml_data["package"]
             license = package_entry.get("license", None)
             license_file = package_entry.get("license-file", None)
 
@@ -564,7 +641,9 @@ license file's hash.
         # We use check_call instead of mozprocess to ensure errors are displayed.
         # We do an |update -p| here to regenerate the Cargo.lock file with minimal
         # changes. See bug 1324462
-        res = subprocess.run([cargo, "update", "-p", "gkrust"], cwd=self.topsrcdir)
+        res = subprocess.run(
+            [cargo, "update", "-p", "gkrust"], cwd=self.topsrcdir, check=False
+        )
         if res.returncode:
             self.log(logging.ERROR, "cargo_update_failed", {}, "Cargo update failed.")
             return False
@@ -602,29 +681,38 @@ license file's hash.
                             "and comes from {source}.",
                         )
                         failed = True
-                elif package["name"] in PACKAGES_WE_DONT_WANT:
+                elif reason := dont_want_package(package["name"]):
                     self.log(
                         logging.ERROR,
                         "undesirable",
                         {
                             "crate": package["name"],
                             "version": package["version"],
-                            "reason": PACKAGES_WE_DONT_WANT[package["name"]],
+                            "reason": reason,
                         },
                         "Crate {crate} is not desirable: {reason}",
                     )
                     failed = True
                 grouped[package["name"]].append(package)
 
+            for name in ALLOWED_DESPITE_PREFIX:
+                if name not in SEEN_ALLOWED_DESPITE_PREFIX:
+                    self.log(
+                        logging.ERROR,
+                        "unused_allowed_despite_prefix",
+                        {"crate": name},
+                        "ALLOWED_DESPITE_PREFIX contains {crate}, "
+                        "but that crate is not actually used (anymore?).",
+                    )
+                    failed = True
+
             for name, packages in grouped.items():
                 # Allow to have crates of the same name when one depends on the other.
-                num = len(
-                    [
-                        p
-                        for p in packages
-                        if all(d.split()[0] != name for d in p.get("dependencies", []))
-                    ]
-                )
+                num = len([
+                    p
+                    for p in packages
+                    if all(d.split()[0] != name for d in p.get("dependencies", []))
+                ])
                 if num > 1:
                     self.log(
                         logging.ERROR,
@@ -640,12 +728,10 @@ license file's hash.
 
         # Only emit warnings for cargo-vet for now.
         env = os.environ.copy()
-        env["PATH"] = os.pathsep.join(
-            (
-                str(Path(cargo).parent),
-                os.environ["PATH"],
-            )
-        )
+        env["PATH"] = os.pathsep.join((
+            str(Path(cargo).parent),
+            os.environ["PATH"],
+        ))
         flags = ["--output-format=json"]
         if "MOZ_AUTOMATION" in os.environ:
             flags.append("--locked")
@@ -737,7 +823,10 @@ license file's hash.
             return False
 
         res = subprocess.run(
-            [cargo, "vendor", vendor_dir], cwd=self.topsrcdir, stdout=subprocess.PIPE
+            [cargo, "vendor", vendor_dir],
+            cwd=self.topsrcdir,
+            stdout=subprocess.PIPE,
+            check=False,
         )
         if res.returncode:
             self.log(logging.ERROR, "cargo_vendor_failed", {}, "Cargo vendor failed.")
@@ -766,9 +855,8 @@ license file's hash.
             self.log(
                 logging.ERROR,
                 "vendor_failed",
-                {},
-                """cargo vendor didn't output a unique replace-with. Found: %s."""
-                % replaces,
+                dict(replaces=replaces),
+                """cargo vendor didn't output a unique replace-with. Found: {replaces}.""",
             )
             return False
 
@@ -789,44 +877,51 @@ license file's hash.
                 )
             )
 
-        # cargo 1.89 started adding things that older versions didn't add, but
-        # it's a tough sell to bump the vendoring requirement to 1.89 when we're
-        # still using 1.86 on CI.
-        if self.cargo_version(cargo) >= "1.89":
-            for package in cargo_lock["package"]:
-                # Crates vendored from crates.io are affected by changes, but not
-                # those vendored from git.
-                if not package.get("source", "").startswith("registry+"):
-                    continue
-                package_dir = Path(vendor_dir) / package["name"]
-                # Cargo.toml.orig was not included before but now is.
-                unlinked = ["Cargo.toml.orig"]
-                with (package_dir / "Cargo.toml").open(encoding="utf-8") as fh:
-                    toml_data = toml.load(fh)
-                    cargo_package = toml_data.get("package", {})
-                    # A readme explicitly listed in package.readme is now included
-                    # even when it's not in package.include.
-                    if readme := cargo_package.get("readme"):
-                        if includes := cargo_package.get("include"):
-                            if not any(
-                                mozpath.match(readme, include.removeprefix("/"))
-                                for include in includes
-                            ):
-                                try:
-                                    (package_dir / readme).unlink()
-                                    unlinked.append(readme)
-                                except FileNotFoundError:
-                                    pass
+        def recursive_sort(obj):
+            if isinstance(obj, tomlkit.items.Table):
+                new_obj = obj.copy()
+                body = [(k, recursive_sort(v)) for k, v in new_obj.value.body]
+                # Only order the direct elements in the Table. Anything after
+                # the first whitespace (key is None) or AoT is not expected to
+                # be a direct element. This is a more or less assumption based
+                # on the original order cargo will have written out.
+                for n, (k, v) in enumerate(body):
+                    if k is None or v.is_aot():
+                        break
+                else:
+                    n = len(body)
+                body[:n] = sorted(body[:n], key=lambda x: str(x[0]))
+                new_obj.value.body[:] = body
+                return new_obj
+            if isinstance(obj, tomlkit.items.AoT):
+                # Somehow obj.copy() yields a list instead of a AoT
+                new_obj = copy.copy(obj)
+                body = [recursive_sort(v) for v in new_obj.body]
+                new_obj.body[:] = body
+                return new_obj
+            return obj
 
-                # dotfiles weren't included before, but now are.
-                for path in package_dir.glob("**/.*"):
-                    # The checksum file is handled separately because it needs to
-                    # be updated.
-                    if path.name == ".cargo-checksum.json":
-                        continue
+        # cargo 1.94 started removing .gitattributes and .gitignore files, as well
+        # as vendoring files older versions didn't. It's a tough sell to bump the vendoring
+        # requirement to 1.94 when we're still using 1.90 on CI, so adjust the tree for the
+        # common denominator.
+        for package in cargo_lock["package"]:
+            source = package.get("source")
+            if not source:
+                continue
+            unlinked = []
+            package_dir = Path(vendor_dir) / package["name"]
+            # All differing files are dotfiles.
+            for path in package_dir.glob("**/.*"):
+                if path.name in (
+                    ".gitattributes",
+                    ".gitignore",
+                    ".vscode",
+                    ".cargo-ok",
+                ):
                     if path.is_dir():
-                        for root, dirs, files in os.walk(path, topdown=False):
-                            root = Path(root)
+                        for root_path, dirs, files in os.walk(path, topdown=False):
+                            root = Path(root_path)
                             for name in files:
                                 to_unlink = root / name
                                 try:
@@ -851,18 +946,20 @@ license file's hash.
                             )
                         except FileNotFoundError:
                             pass
-
-                # Update the checksums with the changes we made.
-                checksum_json = package_dir / ".cargo-checksum.json"
-                with checksum_json.open(encoding="utf-8") as fh:
-                    checksum_data = json.load(fh)
-                for path in unlinked:
-                    try:
-                        del checksum_data["files"][path]
-                    except KeyError:
-                        pass
-                with checksum_json.open(mode="w", encoding="utf-8") as fh:
-                    json.dump(checksum_data, fh, separators=(",", ":"))
+            # Update the checksums with the changes we made.
+            checksum_json = package_dir / ".cargo-checksum.json"
+            with checksum_json.open(encoding="utf-8") as fh:
+                checksum_data = json.load(fh)
+            # cargo 1.97 additionally started adding a "$comment" field to those
+            # files. Remove it for consistency across versions.
+            checksum_data.pop("$comment", None)
+            for path in unlinked:
+                try:
+                    del checksum_data["files"][path]
+                except KeyError:
+                    pass
+            with checksum_json.open(mode="w", encoding="utf-8") as fh:
+                json.dump(checksum_data, fh, separators=(",", ":"))
 
         if not self._check_licenses(vendor_dir) and not force:
             self.log(
@@ -877,6 +974,13 @@ license file's hash.
             return False
 
         self.repository.add_remove_files(vendor_dir)
+        # explicitly add the content of the Cargo.toml.orig files as they are
+        # covered by the hgignore pattern "*.orig".
+        vendor_path = Path(vendor_dir)
+        extra_files = list(vendor_path.glob("**/Cargo.toml.orig"))
+        extra_files += list(vendor_path.glob("**/.*"))
+        if extra_files:
+            self.repository.add_remove_files(*extra_files, force=True)
 
         # 100k is a reasonable upper bound on source file size.
         FILESIZE_LIMIT = 100 * 1024
@@ -912,9 +1016,9 @@ The changes from `mach vendor rust` will NOT be added to version control.
                     notice=CARGO_LOCK_NOTICE,
                 ),
             )
-            self.repository.forget_add_remove_files(vendor_dir)
-            self.repository.clean_directory(vendor_dir)
             if not force:
+                self.repository.forget_add_remove_files(vendor_dir)
+                self.repository.clean_directory(vendor_dir)
                 return False
 
         # Only warn for large imports, since we may just have large code

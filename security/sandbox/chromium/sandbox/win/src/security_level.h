@@ -43,6 +43,8 @@ enum IntegrityLevel {
 // ----------------------------|--------------|----------------|----------|
 // USER_LOCKDOWN               | Null Sid     | All            | None     |
 // ----------------------------|--------------|----------------|----------|
+// USER_LOCKDOWN_WITH_TRAVERSE | Null Sid     | All            | Traverse |
+// ----------------------------|--------------|----------------|----------|
 // USER_RESTRICTED             | RESTRICTED   | All            | Traverse |
 // ----------------------------|--------------|----------------|----------|
 // USER_LIMITED                | Users        | All except:    | Traverse |
@@ -82,6 +84,7 @@ enum IntegrityLevel {
 // started by a user that belongs to the Admins or power users groups.
 enum TokenLevel {
   USER_LOCKDOWN = 0,
+  USER_LOCKDOWN_WITH_TRAVERSE,
   USER_RESTRICTED,
   USER_LIMITED,
   USER_INTERACTIVE,
@@ -284,6 +287,11 @@ const MitigationFlags MITIGATION_CET_STRICT_MODE = 0x02000000;
 // with a few exceptions for named pipes as documented on MSDN. Corresponds to
 // PROCESS_CREATION_MITIGATION_POLICY2_FSCTL_SYSTEM_CALL_DISABLE_ALWAYS_ON.
 const MitigationFlags MITIGATION_FSCTL_DISABLED = 0x04000000;
+
+// Restrict a process thread to never share a CPU core with another process
+// thread outside of its security domain. Corresponds to
+// PROCESS_CREATION_MITIGATION_POLICY2_RESTRICT_CORE_SHARING_ALWAYS_ON.
+const MitigationFlags MITIGATION_RESTRICT_CORE_SHARING = 0x08000000;
 
 // Begin Mozilla-added flags.
 // Working down from the high bit to avoid conflict with new upstream flags.

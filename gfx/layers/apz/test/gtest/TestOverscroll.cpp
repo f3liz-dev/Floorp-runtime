@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,11 +5,13 @@
 #include "APZCBasicTester.h"
 #include "APZCTreeManagerTester.h"
 #include "APZTestCommon.h"
+#include "InputUtils.h"
+#include "mozilla/RelativeTo.h"
 #include "mozilla/ScrollPositionUpdate.h"
 #include "mozilla/layers/ScrollableLayerGuid.h"
 #include "mozilla/layers/WebRenderScrollDataWrapper.h"
 
-#include "InputUtils.h"
+using LayersUpdateFlags = AsyncPanZoomController::LayersUpdateFlags;
 
 class APZCOverscrollTester : public APZCBasicTester {
  public:
@@ -70,7 +70,7 @@ class APZCOverscrollTester : public APZCBasicTester {
 
   ScrollableLayerGuid CreateSimpleRootScrollableForWebRender() {
     ScrollableLayerGuid guid;
-    guid.mScrollId = ScrollableLayerGuid::START_SCROLL_ID;
+    guid.mScrollId = START_SCROLL_ID;
     guid.mLayersId = LayersId{0};
 
     ScrollMetadata metadata;
@@ -671,8 +671,9 @@ TEST_F(APZCOverscrollTester, DisallowOverscrollInSingleLineTextControl) {
   metrics.SetScrollableRect(CSSRect(0, 0, 1000, 10));
   apzc->SetFrameMetrics(metrics);
   metadata.SetDisregardedDirection(Some(ScrollDirection::eVertical));
-  apzc->NotifyLayersUpdated(metadata, /*aIsFirstPaint=*/false,
-                            /*aThisLayerTreeUpdated=*/true);
+  apzc->NotifyMainThreadTransaction(
+      metadata,
+      LayersUpdateFlags{.mIsFirstPaint = false, .mThisLayerTreeUpdated = true});
 
   // Try to overscroll up and left with pan gestures.
   PanGesture(PanGestureInput::PANGESTURE_START, apzc, ScreenIntPoint(50, 5),
@@ -1513,7 +1514,9 @@ TEST_F(APZCOverscrollTester, DynamicallyLoadingContent) {
   CSSRect scrollableRect = metrics.GetScrollableRect();
   scrollableRect.height += 500;
   metrics.SetScrollableRect(scrollableRect);
-  apzc->NotifyLayersUpdated(metadata, false, true);
+  apzc->NotifyMainThreadTransaction(
+      metadata,
+      LayersUpdateFlags{.mIsFirstPaint = false, .mThisLayerTreeUpdated = true});
 
   // Check that the modified scrollable rect cleared the overscroll.
   EXPECT_FALSE(apzc->IsOverscrolled());
@@ -1534,7 +1537,9 @@ TEST_F(APZCOverscrollTester, DynamicallyLoadingContent) {
   scrollableRect = metrics.GetScrollableRect();
   scrollableRect.height += 500;
   metrics.SetScrollableRect(scrollableRect);
-  apzc->NotifyLayersUpdated(metadata, false, true);
+  apzc->NotifyMainThreadTransaction(
+      metadata,
+      LayersUpdateFlags{.mIsFirstPaint = false, .mThisLayerTreeUpdated = true});
 
   // Check that the modified scrollable rect did NOT clear overscroll at the
   // top.
@@ -1693,9 +1698,8 @@ TEST_F(APZCOverscrollTesterMock, OverscrollHandoff) {
   LayerIntRect layerVisibleRect[] = {LayerIntRect(0, 0, 100, 100),
                                      LayerIntRect(0, 0, 100, 50)};
   CreateScrollData(treeShape, layerVisibleRect);
-  SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
-                            CSSRect(0, 0, 200, 200));
-  SetScrollableFrameMetrics(layers[1], ScrollableLayerGuid::START_SCROLL_ID + 1,
+  SetScrollableFrameMetrics(root, START_SCROLL_ID, CSSRect(0, 0, 200, 200));
+  SetScrollableFrameMetrics(layers[1], START_SCROLL_ID + 1,
                             // same size as the visible region so that
                             // the container is not scrollable in any directions
                             // actually. This is simulating overflow: hidden
@@ -1711,7 +1715,7 @@ TEST_F(APZCOverscrollTesterMock, OverscrollHandoff) {
   rootApzc->GetFrameMetrics().SetIsRootContent(true);
 
   // A pan gesture on the child scroller (which is not scrollable though).
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_START, manager, ScreenIntPoint(50, 20),
              ScreenPoint(0, -2), mcc->Time());
   EXPECT_TRUE(rootApzc->IsOverscrolled());
@@ -1727,9 +1731,8 @@ TEST_F(APZCOverscrollTesterMock, VerticalOverscrollHandoffToScrollableRoot) {
   LayerIntRect layerVisibleRect[] = {LayerIntRect(0, 0, 100, 100),
                                      LayerIntRect(0, 0, 100, 50)};
   CreateScrollData(treeShape, layerVisibleRect);
-  SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
-                            CSSRect(0, 0, 100, 200));
-  SetScrollableFrameMetrics(layers[1], ScrollableLayerGuid::START_SCROLL_ID + 1,
+  SetScrollableFrameMetrics(root, START_SCROLL_ID, CSSRect(0, 0, 100, 200));
+  SetScrollableFrameMetrics(layers[1], START_SCROLL_ID + 1,
                             CSSRect(0, 0, 100, 200));
 
   SetScrollHandoff(layers[1], root);
@@ -1741,7 +1744,7 @@ TEST_F(APZCOverscrollTesterMock, VerticalOverscrollHandoffToScrollableRoot) {
 
   // A vertical pan gesture on the child scroller which will be handed off to
   // the root APZC.
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_START, manager, ScreenIntPoint(50, 20),
              ScreenPoint(0, -2), mcc->Time());
   EXPECT_TRUE(rootApzc->IsOverscrolled());
@@ -1759,9 +1762,8 @@ TEST_F(APZCOverscrollTesterMock, NoOverscrollHandoffToNonScrollableRoot) {
   LayerIntRect layerVisibleRect[] = {LayerIntRect(0, 0, 100, 100),
                                      LayerIntRect(0, 0, 100, 50)};
   CreateScrollData(treeShape, layerVisibleRect);
-  SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
-                            CSSRect(0, 0, 100, 100));
-  SetScrollableFrameMetrics(layers[1], ScrollableLayerGuid::START_SCROLL_ID + 1,
+  SetScrollableFrameMetrics(root, START_SCROLL_ID, CSSRect(0, 0, 100, 100));
+  SetScrollableFrameMetrics(layers[1], START_SCROLL_ID + 1,
                             CSSRect(0, 0, 100, 200));
 
   SetScrollHandoff(layers[1], root);
@@ -1773,7 +1775,7 @@ TEST_F(APZCOverscrollTesterMock, NoOverscrollHandoffToNonScrollableRoot) {
 
   // A vertical pan gesture on the child scroller which should not be handed
   // off the root APZC.
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_START, manager, ScreenIntPoint(50, 20),
              ScreenPoint(0, -2), mcc->Time());
   EXPECT_FALSE(rootApzc->IsOverscrolled());
@@ -1791,9 +1793,8 @@ TEST_F(APZCOverscrollTesterMock, NoOverscrollHandoffOrthogonalPanGesture) {
   LayerIntRect layerVisibleRect[] = {LayerIntRect(0, 0, 100, 100),
                                      LayerIntRect(0, 0, 100, 50)};
   CreateScrollData(treeShape, layerVisibleRect);
-  SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
-                            CSSRect(0, 0, 200, 100));
-  SetScrollableFrameMetrics(layers[1], ScrollableLayerGuid::START_SCROLL_ID + 1,
+  SetScrollableFrameMetrics(root, START_SCROLL_ID, CSSRect(0, 0, 200, 100));
+  SetScrollableFrameMetrics(layers[1], START_SCROLL_ID + 1,
                             CSSRect(0, 0, 100, 200));
 
   SetScrollHandoff(layers[1], root);
@@ -1805,7 +1806,7 @@ TEST_F(APZCOverscrollTesterMock, NoOverscrollHandoffOrthogonalPanGesture) {
 
   // A vertical pan gesture on the child scroller which should not be handed
   // off the root APZC because the root APZC is not scrollable vertically.
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_START, manager, ScreenIntPoint(50, 20),
              ScreenPoint(0, -2), mcc->Time());
   EXPECT_FALSE(rootApzc->IsOverscrolled());
@@ -1824,9 +1825,8 @@ TEST_F(APZCOverscrollTesterMock,
   LayerIntRect layerVisibleRect[] = {LayerIntRect(0, 0, 100, 100),
                                      LayerIntRect(0, 0, 100, 50)};
   CreateScrollData(treeShape, layerVisibleRect);
-  SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
-                            CSSRect(0, 0, 100, 200));
-  SetScrollableFrameMetrics(layers[1], ScrollableLayerGuid::START_SCROLL_ID + 1,
+  SetScrollableFrameMetrics(root, START_SCROLL_ID, CSSRect(0, 0, 100, 200));
+  SetScrollableFrameMetrics(layers[1], START_SCROLL_ID + 1,
                             CSSRect(0, 0, 200, 50));
 
   SetScrollHandoff(layers[1], root);
@@ -1839,15 +1839,15 @@ TEST_F(APZCOverscrollTesterMock,
   ScreenIntPoint panPoint(50, 20);
   // A vertical pan gesture on the child scroller which should be handed off the
   // root APZC.
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_START, manager, panPoint,
              ScreenPoint(0, -2), mcc->Time());
   mcc->AdvanceByMillis(10);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_PAN, manager, panPoint,
              ScreenPoint(0, -10), mcc->Time());
   mcc->AdvanceByMillis(10);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_END, manager, panPoint,
              ScreenPoint(0, 0), mcc->Time());
 
@@ -1862,7 +1862,7 @@ TEST_F(APZCOverscrollTesterMock,
 
   // Start a new horizontal pan gesture on the child scroller which should be
   // handled by the child APZC now.
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   APZEventResult result = PanGesture(PanGestureInput::PANGESTURE_START, manager,
                                      panPoint, ScreenPoint(-2, 0), mcc->Time());
   // The above horizontal pan start event was flagged as "this event may trigger
@@ -1873,11 +1873,11 @@ TEST_F(APZCOverscrollTesterMock,
   // content response, so we need to respond explicitly here.
   manager->ContentReceivedInputBlock(result.mInputBlockId, false);
   mcc->AdvanceByMillis(10);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_PAN, manager, panPoint,
              ScreenPoint(-10, 0), mcc->Time());
   mcc->AdvanceByMillis(10);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_END, manager, panPoint,
              ScreenPoint(0, 0), mcc->Time());
 
@@ -1904,9 +1904,8 @@ TEST_F(APZCOverscrollTesterMock, RetriggeredOverscrollAnimationVelocity) {
   LayerIntRect layerVisibleRect[] = {LayerIntRect(0, 0, 100, 100),
                                      LayerIntRect(0, 0, 100, 50)};
   CreateScrollData(treeShape, layerVisibleRect);
-  SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
-                            CSSRect(0, 0, 100, 200));
-  SetScrollableFrameMetrics(layers[1], ScrollableLayerGuid::START_SCROLL_ID + 1,
+  SetScrollableFrameMetrics(root, START_SCROLL_ID, CSSRect(0, 0, 100, 200));
+  SetScrollableFrameMetrics(layers[1], START_SCROLL_ID + 1,
                             CSSRect(0, 0, 100, 200));
 
   SetScrollHandoff(layers[1], root);
@@ -1919,15 +1918,15 @@ TEST_F(APZCOverscrollTesterMock, RetriggeredOverscrollAnimationVelocity) {
   ScreenIntPoint panPoint(50, 20);
   // A vertical upward pan gesture on the child scroller which should be handed
   // off the root APZC.
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_START, manager, panPoint,
              ScreenPoint(0, -2), mcc->Time());
   mcc->AdvanceByMillis(10);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_PAN, manager, panPoint,
              ScreenPoint(0, -10), mcc->Time());
   mcc->AdvanceByMillis(10);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_END, manager, panPoint,
              ScreenPoint(0, 0), mcc->Time());
 
@@ -1948,14 +1947,14 @@ TEST_F(APZCOverscrollTesterMock, RetriggeredOverscrollAnimationVelocity) {
 
   // Start a new downward pan gesture on the child scroller which
   // should be handled by the child APZC now.
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_START, manager, panPoint,
              ScreenPoint(0, 2), mcc->Time());
   mcc->AdvanceByMillis(10);
   // The new pan-start gesture stops the overscroll animation at this moment.
   EXPECT_TRUE(!rootApzc->IsOverscrollAnimationRunning());
 
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_PAN, manager, panPoint,
              ScreenPoint(0, 10), mcc->Time());
   mcc->AdvanceByMillis(10);
@@ -1964,7 +1963,7 @@ TEST_F(APZCOverscrollTesterMock, RetriggeredOverscrollAnimationVelocity) {
   EXPECT_TRUE(!rootApzc->IsOverscrollAnimationRunning());
   EXPECT_TRUE(rootApzc->IsOverscrolled());
 
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
+  QueueMockHitResult(START_SCROLL_ID + 1);
   PanGesture(PanGestureInput::PANGESTURE_END, manager, panPoint,
              ScreenPoint(0, 10), mcc->Time());
 
@@ -1987,8 +1986,7 @@ TEST_F(APZCOverscrollTesterMock, OverscrollIntoPreventDefault) {
   const char* treeShape = "x";
   LayerIntRect layerVisibleRects[] = {LayerIntRect(0, 0, 100, 100)};
   CreateScrollData(treeShape, layerVisibleRects);
-  SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
-                            CSSRect(0, 0, 100, 200));
+  SetScrollableFrameMetrics(root, START_SCROLL_ID, CSSRect(0, 0, 100, 200));
 
   registration = MakeUnique<ScopedLayerTreeRegistration>(LayersId{0}, mcc);
   UpdateHitTestingTree();
@@ -1996,7 +1994,7 @@ TEST_F(APZCOverscrollTesterMock, OverscrollIntoPreventDefault) {
 
   // Start a pan gesture a few pixels below the 20px DTC region.
   ScreenIntPoint cursorLocation(10, 25);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  QueueMockHitResult(START_SCROLL_ID);
   APZEventResult result =
       PanGesture(PanGestureInput::PANGESTURE_START, manager, cursorLocation,
                  ScreenPoint(0, -2), mcc->Time());
@@ -2008,7 +2006,7 @@ TEST_F(APZCOverscrollTesterMock, OverscrollIntoPreventDefault) {
   // Note that, due to ApplyResistance(), we need a large input delta to cause a
   // visual transform enough to bridge the 5px to the DTC region.
   mcc->AdvanceByMillis(10);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  QueueMockHitResult(START_SCROLL_ID);
   PanGesture(PanGestureInput::PANGESTURE_PAN, manager, cursorLocation,
              ScreenPoint(0, -100), mcc->Time());
 
@@ -2029,7 +2027,7 @@ TEST_F(APZCOverscrollTesterMock, OverscrollIntoPreventDefault) {
   // Send one more pan event. This starts a new, *unconfirmed* input block
   // (via the "transmogrify" codepath).
   mcc->AdvanceByMillis(10);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID,
+  QueueMockHitResult(START_SCROLL_ID,
                      {CompositorHitTestFlags::eVisibleToHitTest,
                       CompositorHitTestFlags::eIrregularArea});
   result = PanGesture(PanGestureInput::PANGESTURE_PAN, manager, cursorLocation,
@@ -2051,11 +2049,11 @@ TEST_F(APZCOverscrollTesterMock, OverscrollIntoPreventDefault) {
   // If there are momentum events after this point, they should not cause
   // further scrolling or overscorll.
   mcc->AdvanceByMillis(10);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  QueueMockHitResult(START_SCROLL_ID);
   result = PanGesture(PanGestureInput::PANGESTURE_MOMENTUMSTART, manager,
                       cursorLocation, ScreenPoint(0, -100), mcc->Time());
   mcc->AdvanceByMillis(10);
-  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  QueueMockHitResult(START_SCROLL_ID);
   result = PanGesture(PanGestureInput::PANGESTURE_MOMENTUMPAN, manager,
                       cursorLocation, ScreenPoint(0, -100), mcc->Time());
   EXPECT_FALSE(rootApzc->IsOverscrolled());
@@ -2068,9 +2066,8 @@ TEST_F(APZCOverscrollTesterMock, OverscrollIntoPreventDefault) {
 TEST_F(APZCOverscrollTesterMock, StuckInOverscroll_Bug1810935) {
   SCOPED_GFX_PREF_BOOL("apz.overscroll.enabled", true);
 
-  using ViewID = ScrollableLayerGuid::ViewID;
-  ViewID rootScrollId = ScrollableLayerGuid::START_SCROLL_ID;
-  ViewID subframeScrollId = ScrollableLayerGuid::START_SCROLL_ID + 1;
+  ViewID rootScrollId = START_SCROLL_ID;
+  ViewID subframeScrollId = START_SCROLL_ID + 1;
 
   const char* treeShape = "x(x)";
   LayerIntRect layerVisibleRects[] = {LayerIntRect(0, 0, 100, 100),
@@ -2168,8 +2165,9 @@ TEST_F(APZCOverscrollTester, FillOutGutterWhilePanning) {
   metadata.SetScrollUpdates(scrollUpdates);
   metadata.GetMetrics().SetScrollGeneration(
       scrollUpdates.LastElement().GetGeneration());
-  apzc->NotifyLayersUpdated(metadata, /*aIsFirstPaint=*/false,
-                            /*aThisLayerTreeUpdated=*/true);
+  apzc->NotifyMainThreadTransaction(
+      metadata,
+      LayersUpdateFlags{.mIsFirstPaint = false, .mThisLayerTreeUpdated = true});
 
   CSSPoint scrollOffset = metadata.GetMetrics().GetLayoutScrollOffset();
 
@@ -2185,8 +2183,9 @@ TEST_F(APZCOverscrollTester, FillOutGutterWhilePanning) {
   const CSSRect& scrollableRect = metrics.GetScrollableRect();
   metrics.SetScrollableRect(scrollableRect +
                             CSSSize(0, scrollableRect.height + 10));
-  apzc->NotifyLayersUpdated(metadata, /*aIsFirstPaint=*/false,
-                            /*aThisLayerTreeUpdated=*/true);
+  apzc->NotifyMainThreadTransaction(
+      metadata,
+      LayersUpdateFlags{.mIsFirstPaint = false, .mThisLayerTreeUpdated = true});
 
   // Now that the scroll position was shifted with the overscroll amount.
   EXPECT_EQ(apzc->GetScrollMetadata().GetMetrics().GetVisualScrollOffset().y,
@@ -2210,8 +2209,9 @@ TEST_F(APZCOverscrollTester, FillOutGutterWhileAnimating) {
   metadata.SetScrollUpdates(scrollUpdates);
   metadata.GetMetrics().SetScrollGeneration(
       scrollUpdates.LastElement().GetGeneration());
-  apzc->NotifyLayersUpdated(metadata, /*aIsFirstPaint=*/false,
-                            /*aThisLayerTreeUpdated=*/true);
+  apzc->NotifyMainThreadTransaction(
+      metadata,
+      LayersUpdateFlags{.mIsFirstPaint = false, .mThisLayerTreeUpdated = true});
 
   CSSPoint scrollOffset = metadata.GetMetrics().GetLayoutScrollOffset();
 
@@ -2240,8 +2240,9 @@ TEST_F(APZCOverscrollTester, FillOutGutterWhileAnimating) {
   const CSSRect& scrollableRect = metrics.GetScrollableRect();
   metrics.SetScrollableRect(scrollableRect +
                             CSSSize(0, scrollableRect.height + 10));
-  apzc->NotifyLayersUpdated(metadata, /*aIsFirstPaint=*/false,
-                            /*aThisLayerTreeUpdated=*/true);
+  apzc->NotifyMainThreadTransaction(
+      metadata,
+      LayersUpdateFlags{.mIsFirstPaint = false, .mThisLayerTreeUpdated = true});
 
   // Now that the scroll position was shifted with the overscroll amount.
   EXPECT_EQ(apzc->GetScrollMetadata().GetMetrics().GetVisualScrollOffset().y,
@@ -2263,14 +2264,15 @@ TEST_F(APZCOverscrollTester, ProgrammaticScroll) {
   scrollUpdates.AppendElement(ScrollPositionUpdate::NewSmoothScroll(
       ScrollMode::SmoothMsd, ScrollOrigin::Other,
       CSSPoint::ToAppUnits(CSSPoint(0, 100000)), ScrollTriggeredByScript::Yes,
-      nullptr));
+      nullptr, ViewportType::Visual));
   metadata.SetScrollUpdates(scrollUpdates);
   metadata.GetMetrics().SetScrollGeneration(
       scrollUpdates.LastElement().GetGeneration());
-  apzc->NotifyLayersUpdated(metadata, /*aIsFirstPaint=*/false,
-                            /*aThisLayerTreeUpdated=*/true);
+  apzc->NotifyMainThreadTransaction(
+      metadata,
+      LayersUpdateFlags{.mIsFirstPaint = false, .mThisLayerTreeUpdated = true});
 
-  apzc->AssertStateIsSmoothMsdScroll();
+  apzc->AssertInSmoothMsdScroll();
 
   while (SampleAnimationOneFrame()) {
     EXPECT_FALSE(apzc->IsOverscrolled());

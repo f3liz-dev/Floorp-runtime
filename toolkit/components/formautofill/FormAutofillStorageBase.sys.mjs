@@ -131,12 +131,12 @@
 
 import { FormAutofill } from "resource://autofill/FormAutofill.sys.mjs";
 import { AddressRecord } from "resource://gre/modules/shared/AddressRecord.sys.mjs";
+import { AutofillDataTypes } from "resource://gre/modules/shared/AutofillDataTypes.sys.mjs";
 
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
   AutofillTelemetry: "resource://gre/modules/shared/AutofillTelemetry.sys.mjs",
-  CreditCard: "resource://gre/modules/CreditCard.sys.mjs",
   CreditCardRecord: "resource://gre/modules/shared/CreditCardRecord.sys.mjs",
   FormAutofillNameUtils:
     "resource://gre/modules/shared/FormAutofillNameUtils.sys.mjs",
@@ -185,6 +185,8 @@ const VALID_ADDRESS_COMPUTED_FIELDS = [
   ...AddressRecord.NAME_COMPONENTS,
   ...AddressRecord.STREET_ADDRESS_COMPONENTS,
   ...AddressRecord.TEL_COMPONENTS,
+  "address-housenumber",
+  "address-extra-housesuffix",
 ];
 
 export const VALID_CREDIT_CARD_FIELDS = [
@@ -289,12 +291,11 @@ class AutofillRecords {
       if (collectionName != this._collectionName) {
         return;
       }
-      const telemetryType =
-        subject.wrappedJSObject.collectionName == "creditCards"
-          ? lazy.AutofillTelemetry.CREDIT_CARD
-          : lazy.AutofillTelemetry.ADDRESS;
+      const dataType = AutofillDataTypes.all.find(
+        type => type.collectionName == collectionName
+      )?.id;
       const count = this._data.filter(entry => !entry.deleted).length;
-      lazy.AutofillTelemetry.recordAutofillProfileCount(telemetryType, count);
+      lazy.AutofillTelemetry.recordAutofillProfileCount(dataType, count);
     }
   }
 
@@ -1746,45 +1747,14 @@ export class CreditCardsBase extends AutofillRecords {
     // NOTE: Computed fields should be always present in the storage no matter
     //       it's empty or not.
 
-    let hasNewComputedFields = false;
-
     if (creditCard.deleted) {
-      return hasNewComputedFields;
+      return;
     }
 
-    let type = lazy.CreditCard.getType(creditCard["cc-number"]);
-    if (type) {
-      creditCard["cc-type"] = type;
-    }
-
-    // Compute split names
-    if (!("cc-given-name" in creditCard)) {
-      const nameParts = lazy.FormAutofillNameUtils.splitName(
-        creditCard["cc-name"]
-      );
-      creditCard["cc-given-name"] = nameParts.given;
-      creditCard["cc-additional-name"] = nameParts.middle;
-      creditCard["cc-family-name"] = nameParts.family;
-      hasNewComputedFields = true;
-    }
-
-    // Compute credit card expiration date
-    if (!("cc-exp" in creditCard)) {
-      if (creditCard["cc-exp-month"] && creditCard["cc-exp-year"]) {
-        creditCard["cc-exp"] =
-          String(creditCard["cc-exp-year"]) +
-          "-" +
-          String(creditCard["cc-exp-month"]).padStart(2, "0");
-      } else {
-        creditCard["cc-exp"] = "";
-      }
-      hasNewComputedFields = true;
-    }
+    lazy.CreditCardRecord.computeFields(creditCard);
 
     // Encrypt credit card number
     await this._encryptNumber(creditCard);
-
-    return hasNewComputedFields;
   }
 
   async _encryptNumber(_creditCard) {
@@ -2001,11 +1971,19 @@ export class FormAutofillStorageBase {
     return this.getCreditCards();
   }
 
+  get passports() {
+    return this.getPassports();
+  }
+
   getAddresses() {
     throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
   }
 
   getCreditCards() {
+    throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
+  }
+
+  getPassports() {
     throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
   }
 

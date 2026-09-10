@@ -4,122 +4,133 @@
 
 package org.mozilla.fenix.components.appstate.qrscanner
 
-import mozilla.components.support.test.ext.joinBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Test
-import org.mozilla.fenix.components.AppStore
 import org.mozilla.fenix.components.appstate.AppAction
 import org.mozilla.fenix.components.appstate.AppState
+import org.mozilla.fenix.components.appstate.AppStoreReducer
 import org.mozilla.fenix.components.appstate.qrScanner.QrScannerState
 
 class QrScannerActionTest {
 
     @Test
     fun `WHEN the QrScanner is requested THEN state should reflect that`() {
-        val store = AppStore(initialState = AppState())
+        val initialState = AppState()
 
-        store.dispatch(AppAction.QrScannerAction.QrScannerRequested).joinBlocking()
+        val finalState = AppStoreReducer.reduce(initialState, AppAction.QrScannerAction.QrScannerRequested)
 
-        val expectedState = AppState(
-            qrScannerState = QrScannerState(
-                isRequesting = true,
-                inProgress = false,
-                lastScanData = null,
-            ),
-        )
+        val expectedState =
+            AppState(
+                qrScannerState =
+                    QrScannerState(
+                        isRequesting = true,
+                        inProgress = false,
+                        lastScanData = null,
+                    )
+            )
 
-        assertEquals(expectedState, store.state)
+        assertEquals(expectedState, finalState)
     }
 
     @Test
     fun `WHEN the QrScanner request is consumed THEN the state should reflect that`() {
-        val store = AppStore(initialState = AppState())
+        var state = AppState()
 
-        store.dispatch(AppAction.QrScannerAction.QrScannerRequested).joinBlocking()
+        state = AppStoreReducer.reduce(state, AppAction.QrScannerAction.QrScannerRequested)
 
-        var expectedState = AppState(
-            qrScannerState = QrScannerState(
-                isRequesting = true,
-                inProgress = false,
-                lastScanData = null,
-            ),
-        )
+        var expectedState =
+            AppState(
+                qrScannerState =
+                    QrScannerState(
+                        isRequesting = true,
+                        inProgress = false,
+                        lastScanData = null,
+                    )
+            )
 
-        assertEquals(expectedState, store.state)
+        assertEquals(expectedState, state)
 
-        store.dispatch(AppAction.QrScannerAction.QrScannerRequestConsumed).joinBlocking()
+        state = AppStoreReducer.reduce(state, AppAction.QrScannerAction.QrScannerRequestConsumed)
 
-        expectedState = AppState(
-            qrScannerState = QrScannerState(
-                isRequesting = false,
-                inProgress = true,
-                lastScanData = null,
-            ),
-        )
+        expectedState =
+            AppState(
+                qrScannerState =
+                    QrScannerState(
+                        isRequesting = false,
+                        inProgress = true,
+                        lastScanData = null,
+                    )
+            )
 
-        assertEquals(expectedState, store.state)
+        assertEquals(expectedState, state)
     }
 
     @Test
     fun `WHEN the QrScanner Input is ready THEN the state should reflect that`() {
-        val store = AppStore(initialState = AppState())
+        val initialState = AppState()
 
-        store.dispatch(AppAction.QrScannerAction.QrScannerInputAvailable("test")).joinBlocking()
+        val finalState = AppStoreReducer.reduce(initialState, AppAction.QrScannerAction.QrScannerInputAvailable("test"))
 
-        val expectedState = AppState(
-            qrScannerState = QrScannerState(
-                isRequesting = false,
-                inProgress = false,
-                lastScanData = "test",
-            ),
-        )
+        val expectedState =
+            AppState(
+                qrScannerState =
+                    QrScannerState(
+                        isRequesting = false,
+                        inProgress = false,
+                        lastScanData = "test",
+                    )
+            )
 
-        assertEquals(expectedState, store.state)
+        assertEquals(expectedState, finalState)
     }
 
     @Test
     fun `WHEN the QrScanner Input is consumed THEN the state should reflect that`() {
-        val store = AppStore(initialState = AppState())
+        var state = AppState()
 
-        store.dispatch(AppAction.QrScannerAction.QrScannerInputAvailable("test")).joinBlocking()
+        state = AppStoreReducer.reduce(state, AppAction.QrScannerAction.QrScannerInputAvailable("test"))
 
-        var expectedState = AppState(
-            qrScannerState = QrScannerState(
-                isRequesting = false,
-                inProgress = false,
-                lastScanData = "test",
-            ),
-        )
+        var expectedState =
+            AppState(
+                qrScannerState =
+                    QrScannerState(
+                        isRequesting = false,
+                        inProgress = false,
+                        lastScanData = "test",
+                    )
+            )
 
-        assertEquals(expectedState, store.state)
+        assertEquals(expectedState, state)
 
-        store.dispatch(AppAction.QrScannerAction.QrScannerInputConsumed).joinBlocking()
+        state = AppStoreReducer.reduce(state, AppAction.QrScannerAction.QrScannerInputConsumed)
 
         expectedState = AppState(qrScannerState = QrScannerState.DEFAULT)
 
-        assertEquals(expectedState, store.state)
+        assertEquals(expectedState, state)
     }
 
     @Test
     fun `WHEN the QrScanner is dismissed THEN the state should reflect that`() {
-        val store = AppStore(initialState = AppState())
+        var state = AppState()
 
-        store.dispatch(AppAction.QrScannerAction.QrScannerRequested).joinBlocking()
+        state = AppStoreReducer.reduce(state, AppAction.QrScannerAction.QrScannerRequested)
 
-        var expectedState = AppState(
-            qrScannerState = QrScannerState(
-                isRequesting = true,
-                inProgress = false,
-                lastScanData = null,
-            ),
-        )
+        var expectedState =
+            AppState(
+                qrScannerState =
+                    QrScannerState(
+                        isRequesting = true,
+                        inProgress = false,
+                        lastScanData = null,
+                    )
+            )
 
-        assertEquals(expectedState, store.state)
+        assertEquals(expectedState, state)
 
-        store.dispatch(AppAction.QrScannerAction.QrScannerDismissed).joinBlocking()
+        state = AppStoreReducer.reduce(state, AppAction.QrScannerAction.QrScannerDismissed)
 
         expectedState = AppState(qrScannerState = QrScannerState.DEFAULT)
 
-        assertEquals(expectedState, store.state)
+        assertEquals(expectedState, state)
     }
 }

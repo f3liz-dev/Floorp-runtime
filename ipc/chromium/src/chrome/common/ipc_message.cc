@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 // Copyright (c) 2006-2008 The Chromium Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
@@ -128,6 +126,15 @@ void Message::SetAttachedFileHandles(
     nsTArray<mozilla::UniqueFileHandle> handles) {
   MOZ_DIAGNOSTIC_ASSERT(attached_handles_.IsEmpty());
   attached_handles_ = std::move(handles);
+}
+
+bool Message::has_any_attachments() const {
+  return !attached_ports_.IsEmpty() || !attached_handles_.IsEmpty()
+#if defined(XP_DARWIN)
+         || !attached_send_rights_.IsEmpty() ||
+         !attached_receive_rights_.IsEmpty()
+#endif
+      ;
 }
 
 uint32_t Message::num_handles() const { return attached_handles_.Length(); }

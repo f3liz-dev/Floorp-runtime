@@ -12,7 +12,7 @@ const { sinon } = ChromeUtils.importESModule(
   "resource://testing-common/Sinon.sys.mjs"
 );
 const { ForgetAboutSite } = ChromeUtils.importESModule(
-  "resource://gre/modules/ForgetAboutSite.sys.mjs"
+  "moz-src:///toolkit/components/forgetaboutsite/ForgetAboutSite.sys.mjs"
 );
 
 const TEST_URIs = [
@@ -83,20 +83,11 @@ async function testForgetAboutThisSite(
   let contextmenu = doc.getElementById("placesContext");
   let popupShown = promisePopupShown(contextmenu);
 
-  // Get cell coordinates.
-  let rect = tree.getCoordsForCellItem(
-    sitesToSelect[0],
-    tree.columns[0],
-    "text"
-  );
   // Initiate a context menu for the selected cell.
-  EventUtils.synthesizeMouse(
-    tree.body,
-    rect.x + rect.width / 2,
-    rect.y + rect.height / 2,
-    { type: "contextmenu", button: 2 },
-    organizer
-  );
+  await synthesizeClickOnSelectedTreeCell(tree, {
+    type: "contextmenu",
+    button: 2,
+  });
   await popupShown;
 
   let forgetThisSite = doc.getElementById("placesContext_deleteHost");
@@ -189,10 +180,10 @@ async function testForgetAboutThisSite(
   await teardown(organizer);
 }
 
-/*
- * Opens the history view in the PlacesOrganziner window
- * @returns {Promise}
- * @resolves The PlacesOrganizer
+/**
+ * Opens the history view in the Library window
+ *
+ * @returns {Promise<PlacesOrganizer>}
  */
 async function promiseHistoryView() {
   let organizer = await promiseLibrary();
@@ -209,9 +200,10 @@ async function promiseHistoryView() {
 
   return organizer;
 }
-/*
- * @returns {Promise}
- * @resolves once the popup is shown
+/**
+ * @param {XULElement} popup
+ * @returns {Promise<void>}
+ *   Resolves once the popup is shown
  */
 function promisePopupShown(popup) {
   return new Promise(resolve => {

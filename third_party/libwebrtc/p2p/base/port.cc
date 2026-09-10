@@ -15,16 +15,17 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
+#include "absl/functional/any_invocable.h"
 #include "absl/memory/memory.h"
-#include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
-#include "api/array_view.h"
 #include "api/candidate.h"
-#include "api/rtc_error.h"
+#include "api/local_network_access_permission.h"
 #include "api/sequence_checker.h"
 #include "api/task_queue/task_queue_base.h"
 #include "api/transport/stun.h"
@@ -51,7 +52,6 @@
 #include "rtc_base/string_encode.h"
 #include "rtc_base/string_utils.h"
 #include "rtc_base/strings/string_builder.h"
-#include "rtc_base/time_utils.h"
 #include "rtc_base/trace_event.h"
 #include "rtc_base/weak_ptr.h"
 
@@ -76,32 +76,9 @@ PacketInfoProtocolType ConvertProtocolTypeToPacketInfoProtocolType(
 
 // The delay before we begin checking if this port is useless. We set
 // it to a little higher than a total STUN timeout.
-const int kPortTimeoutDelay = webrtc::STUN_TOTAL_TIMEOUT + 5000;
+const int kPortTimeoutDelay = STUN_TOTAL_TIMEOUT + 5000;
 
 }  // namespace
-
-static const char* const PROTO_NAMES[] = {
-    webrtc::UDP_PROTOCOL_NAME, webrtc::TCP_PROTOCOL_NAME,
-    webrtc::SSLTCP_PROTOCOL_NAME, webrtc::TLS_PROTOCOL_NAME};
-
-const char* ProtoToString(ProtocolType proto) {
-  return PROTO_NAMES[proto];
-}
-
-std::optional<ProtocolType> StringToProto(absl::string_view proto_name) {
-  for (size_t i = 0; i <= webrtc::PROTO_LAST; ++i) {
-    if (absl::EqualsIgnoreCase(PROTO_NAMES[i], proto_name)) {
-      return static_cast<ProtocolType>(i);
-    }
-  }
-  return std::nullopt;
-}
-
-// RFC 6544, TCP candidate encoding rules.
-const int DISCARD_PORT = 9;
-const char TCPTYPE_ACTIVE_STR[] = "active";
-const char TCPTYPE_PASSIVE_STR[] = "passive";
-const char TCPTYPE_SIMOPEN_STR[] = "so";
 
 Port::Port(const PortParametersRef& args, IceCandidateType type)
     : Port(args, type, 0, 0, true) {}
@@ -114,21 +91,24 @@ Port::Port(const PortParametersRef& args,
     : env_(args.env),
       thread_(args.network_thread),
       factory_(args.socket_factory),
+      lna_permission_factory_(args.lna_permission_factory),
       type_(type),
       send_retransmit_count_attribute_(false),
       network_(args.network),
       min_port_(min_port),
       max_port_(max_port),
+      content_name_(args.content_name),
       component_(ICE_CANDIDATE_COMPONENT_DEFAULT),
       generation_(0),
       ice_username_fragment_(args.ice_username_fragment),
       password_(args.ice_password),
       timeout_delay_(kPortTimeoutDelay),
       enable_port_packets_(false),
-      ice_role_(webrtc::ICEROLE_UNKNOWN),
-      tiebreaker_(0),
+      ice_role_(ICEROLE_UNKNOWN),
+      ice_tiebreaker_(args.ice_tiebreaker),
       shared_socket_(shared_socket),
       network_cost_(args.network->GetCost(env_.field_trials())),
+      role_conflict_callback_(nullptr),
       weak_factory_(this) {
   RTC_DCHECK_RUN_ON(thread_);
   RTC_DCHECK(factory_ != nullptr);
@@ -137,10 +117,18 @@ Port::Port(const PortParametersRef& args,
   // we should just create one.
   if (ice_username_fragment_.empty()) {
     RTC_DCHECK(password_.empty());
-    ice_username_fragment_ = webrtc::CreateRandomString(ICE_UFRAG_LENGTH);
-    password_ = webrtc::CreateRandomString(ICE_PWD_LENGTH);
+    ice_username_fragment_ = CreateRandomString(ICE_UFRAG_LENGTH);
+    password_ = CreateRandomString(ICE_PWD_LENGTH);
   }
-  network_->SignalTypeChanged.connect(this, &Port::OnNetworkTypeChanged);
+  // TODO: https://issues.webrtc.org/462023697 - remove need for const_cast
+  const_cast<::webrtc::Network*>(network_)->SubscribeTypeChanged(
+      this, [this](const ::webrtc::Network* network) {
+        OnNetworkTypeChanged(network);
+      });
+  const_cast<::webrtc::Network*>(network_)->SubscribeNetworkSliceChanged(
+      this, [this](const ::webrtc::Network* network) {
+        OnNetworkSliceChanged(network);
+      });
 
   PostDestroyIfDead(/*delayed=*/true);
   RTC_LOG(LS_INFO) << ToString() << ": Port created with network cost "
@@ -151,6 +139,9 @@ Port::~Port() {
   RTC_DCHECK_RUN_ON(thread_);
   DestroyAllConnections();
   CancelPendingTasks();
+  const_cast<::webrtc::Network*>(network_)->UnsubscribeTypeChanged(this);
+  const_cast<::webrtc::Network*>(network_)->UnsubscribeNetworkSliceChanged(
+      this);
 }
 
 IceCandidateType Port::Type() const {
@@ -161,22 +152,22 @@ const Network* Port::Network() const {
 }
 
 IceRole Port::GetIceRole() const {
+  RTC_DCHECK_RUN_ON(thread_);
   return ice_role_;
 }
 
 void Port::SetIceRole(IceRole role) {
+  RTC_DCHECK_RUN_ON(thread_);
   ice_role_ = role;
 }
 
-void Port::SetIceTiebreaker(uint64_t tiebreaker) {
-  tiebreaker_ = tiebreaker;
-}
-
 uint64_t Port::IceTiebreaker() const {
-  return tiebreaker_;
+  RTC_DCHECK_RUN_ON(thread_);
+  return ice_tiebreaker_;
 }
 
 bool Port::SharedSocket() const {
+  RTC_DCHECK_RUN_ON(thread_);
   return shared_socket_;
 }
 
@@ -205,11 +196,12 @@ const std::vector<Candidate>& Port::Candidates() const {
 }
 
 Connection* Port::GetConnection(const SocketAddress& remote_addr) {
+  RTC_DCHECK_RUN_ON(thread_);
   AddressMap::const_iterator iter = connections_.find(remote_addr);
   if (iter != connections_.end())
     return iter->second;
   else
-    return NULL;
+    return nullptr;
 }
 
 void Port::AddAddress(const SocketAddress& address,
@@ -232,12 +224,11 @@ void Port::AddAddress(const SocketAddress& address,
               type, generation_, "", network_->id(), network_cost_);
   // Set the relay protocol before computing the foundation field.
   c.set_relay_protocol(relay_protocol);
-  // TODO(bugs.webrtc.org/14605): ensure IceTiebreaker() is set.
-  c.ComputeFoundation(base_address, tiebreaker_);
+  c.ComputeFoundation(base_address, ice_tiebreaker_);
 
   c.set_priority(
       c.GetPriority(type_preference, network_->preference(), relay_preference,
-                    field_trials().IsEnabled(
+                    env().field_trials().IsEnabled(
                         "WebRTC-IncreaseIceCandidatePriorityHostSrflx")));
 #if RTC_DCHECK_IS_ON
   if (protocol == TCP_PROTOCOL_NAME && c.is_local()) {
@@ -250,6 +241,7 @@ void Port::AddAddress(const SocketAddress& address,
   c.set_underlying_type_for_vpn(network_->underlying_type_for_vpn());
   c.set_url(url);
   c.set_related_address(related_address);
+  c.set_network_slice(network_->network_slice());
 
   bool pending = MaybeObfuscateAddress(c, is_final);
 
@@ -296,18 +288,50 @@ bool Port::MaybeObfuscateAddress(const Candidate& c, bool is_final) {
 
 void Port::FinishAddingAddress(const Candidate& c, bool is_final) {
   candidates_.push_back(c);
-  SignalCandidateReady(this, c);
+  NotifyCandidateReady(this, c);
 
   PostAddAddress(is_final);
 }
 
 void Port::PostAddAddress(bool is_final) {
   if (is_final) {
-    SignalPortComplete(this);
+    NotifyPortComplete(this);
   }
 }
 
+void Port::SubscribePortComplete(const void* tag,
+                                 absl::AnyInvocable<void(Port*)> callback) {
+  RTC_DCHECK_RUN_ON(thread_);
+  port_complete_callback_list_.AddReceiver(tag, std::move(callback));
+}
+
+void Port::SubscribeCandidateError(
+    const void* tag,
+    std::function<void(Port*, const IceCandidateErrorEvent&)> callback) {
+  RTC_DCHECK_RUN_ON(thread_);
+  candidate_error_callback_list_.AddReceiver(tag, std::move(callback));
+}
+
+void Port::SendCandidateError(const IceCandidateErrorEvent& event) {
+  RTC_DCHECK_RUN_ON(thread_);
+  candidate_error_callback_list_.Send(this, event);
+}
+
+void Port::SubscribeCandidateReadyCallback(
+    const void* tag,
+    absl::AnyInvocable<void(Port*, const Candidate&)> callback) {
+  RTC_DCHECK_RUN_ON(thread_);
+  candidate_ready_callback_list_.AddReceiver(tag, std::move(callback));
+}
+
+void Port::SubscribePortError(const void* tag,
+                              absl::AnyInvocable<void(Port*)> callback) {
+  RTC_DCHECK_RUN_ON(thread_);
+  port_error_callback_list_.AddReceiver(tag, std::move(callback));
+}
+
 void Port::AddOrReplaceConnection(Connection* conn) {
+  RTC_DCHECK_RUN_ON(thread_);
   auto ret = connections_.insert(
       std::make_pair(conn->remote_candidate().address(), conn));
   // If there is a different connection on the same remote address, replace
@@ -326,12 +350,13 @@ void Port::AddOrReplaceConnection(Connection* conn) {
 }
 
 void Port::OnReadPacket(const ReceivedIpPacket& packet, ProtocolType proto) {
-  const char* data = reinterpret_cast<const char*>(packet.payload().data());
-  size_t size = packet.payload().size();
+  RTC_DCHECK_RUN_ON(thread_);
+
   const SocketAddress& addr = packet.source_address();
+  std::span<const uint8_t> data = packet.payload();
   // If the user has enabled port packets, just hand this over.
   if (enable_port_packets_) {
-    SignalReadPacket(this, data, size, addr);
+    NotifyReadPacket(this, data, addr);
     return;
   }
 
@@ -339,7 +364,7 @@ void Port::OnReadPacket(const ReceivedIpPacket& packet, ProtocolType proto) {
   // send back a proper binding response.
   std::unique_ptr<IceMessage> msg;
   std::string remote_username;
-  if (!GetStunMessage(data, size, addr, &msg, &remote_username)) {
+  if (!GetStunMessage(data, addr, &msg, &remote_username)) {
     RTC_LOG(LS_ERROR) << ToString()
                       << ": Received non-STUN packet from unknown address: "
                       << addr.ToSensitiveString();
@@ -347,12 +372,12 @@ void Port::OnReadPacket(const ReceivedIpPacket& packet, ProtocolType proto) {
     // STUN message handled already
   } else if (msg->type() == STUN_BINDING_REQUEST) {
     RTC_LOG(LS_INFO) << "Received " << StunMethodToString(msg->type())
-                     << " id=" << webrtc::hex_encode(msg->transaction_id())
+                     << " id=" << hex_encode(msg->transaction_id())
                      << " from unknown address " << addr.ToSensitiveString();
     // We need to signal an unknown address before we handle any role conflict
     // below. Otherwise there would be no candidate pair and TURN entry created
     // to send the error response in case of a role conflict.
-    SignalUnknownAddress(this, addr, proto, msg.get(), remote_username, false);
+    NotifyUnknownAddress(this, addr, proto, msg.get(), remote_username, false);
     // Check for role conflicts.
     if (!MaybeIceRoleConflict(addr, msg.get(), remote_username)) {
       RTC_LOG(LS_INFO) << "Received conflicting role from the peer.";
@@ -381,6 +406,7 @@ void Port::OnReadPacket(const ReceivedIpPacket& packet, ProtocolType proto) {
 }
 
 void Port::OnReadyToSend() {
+  RTC_DCHECK_RUN_ON(thread_);
   AddressMap::iterator iter = connections_.begin();
   for (; iter != connections_.end(); ++iter) {
     iter->second->OnReadyToSend();
@@ -392,8 +418,7 @@ void Port::AddPrflxCandidate(const Candidate& local) {
   candidates_.push_back(local);
 }
 
-bool Port::GetStunMessage(const char* data,
-                          size_t size,
+bool Port::GetStunMessage(std::span<const uint8_t> data,
                           const SocketAddress& addr,
                           std::unique_ptr<IceMessage>* out_msg,
                           std::string* out_username) {
@@ -401,8 +426,8 @@ bool Port::GetStunMessage(const char* data,
   // NOTE: This could clearly be optimized to avoid allocating any memory.
   //       However, at the data rates we'll be looking at on the client side,
   //       this probably isn't worth worrying about.
-  RTC_DCHECK(out_msg != NULL);
-  RTC_DCHECK(out_username != NULL);
+  RTC_DCHECK(out_msg != nullptr);
+  RTC_DCHECK(out_username != nullptr);
   out_username->clear();
 
   // Don't bother parsing the packet if we can tell it's not STUN.
@@ -410,16 +435,15 @@ bool Port::GetStunMessage(const char* data,
   // Except GOOG_PING_REQUEST/RESPONSE that does not send fingerprint.
   int types[] = {GOOG_PING_REQUEST, GOOG_PING_RESPONSE,
                  GOOG_PING_ERROR_RESPONSE};
-  if (!StunMessage::IsStunMethod(types, data, size) &&
-      !StunMessage::ValidateFingerprint(data, size)) {
+  if (!StunMessage::IsStunMethod(types, data) &&
+      !StunMessage::ValidateFingerprint(data)) {
     return false;
   }
 
   // Parse the request message.  If the packet is not a complete and correct
   // STUN message, then ignore it.
   std::unique_ptr<IceMessage> stun_msg(new IceMessage());
-  ByteBufferReader buf(
-      MakeArrayView(reinterpret_cast<const uint8_t*>(data), size));
+  ByteBufferReader buf(data);
   if (!stun_msg->Read(&buf) || (buf.Length() > 0)) {
     return false;
   }
@@ -569,7 +593,7 @@ bool Port::IsCompatibleAddress(const SocketAddress& addr) {
   }
   // Link-local IPv6 ports can only connect to other link-local IPv6 ports.
   if (ip.family() == AF_INET6 &&
-      (webrtc::IPIsLinkLocal(ip) != webrtc::IPIsLinkLocal(addr.ipaddr()))) {
+      (IPIsLinkLocal(ip) != IPIsLinkLocal(addr.ipaddr()))) {
     return false;
   }
   return true;
@@ -577,7 +601,7 @@ bool Port::IsCompatibleAddress(const SocketAddress& addr) {
 
 DiffServCodePoint Port::StunDscpValue() const {
   // By default, inherit from whatever the MediaChannel sends.
-  return webrtc::DSCP_NO_CHANGE;
+  return DSCP_NO_CHANGE;
 }
 
 void Port::DestroyAllConnections() {
@@ -609,7 +633,7 @@ bool Port::ParseStunUsername(const StunMessage* stun_msg,
   remote_ufrag->clear();
   const StunByteStringAttribute* username_attr =
       stun_msg->GetByteString(STUN_ATTR_USERNAME);
-  if (username_attr == NULL)
+  if (username_attr == nullptr)
     return false;
 
   // RFRAG:LFRAG
@@ -630,12 +654,12 @@ bool Port::MaybeIceRoleConflict(const SocketAddress& addr,
   RTC_DCHECK_RUN_ON(thread_);
   // Validate ICE_CONTROLLING or ICE_CONTROLLED attributes.
   bool ret = true;
-  IceRole remote_ice_role = webrtc::ICEROLE_UNKNOWN;
+  IceRole remote_ice_role = ICEROLE_UNKNOWN;
   uint64_t remote_tiebreaker = 0;
   const StunUInt64Attribute* stun_attr =
       stun_msg->GetUInt64(STUN_ATTR_ICE_CONTROLLING);
   if (stun_attr) {
-    remote_ice_role = webrtc::ICEROLE_CONTROLLING;
+    remote_ice_role = ICEROLE_CONTROLLING;
     remote_tiebreaker = stun_attr->value();
   }
 
@@ -643,7 +667,7 @@ bool Port::MaybeIceRoleConflict(const SocketAddress& addr,
   // tie breaker value received in the ping message matches port
   // tiebreaker value this must be a loopback call.
   // We will treat this as valid scenario.
-  if (remote_ice_role == webrtc::ICEROLE_CONTROLLING &&
+  if (remote_ice_role == ICEROLE_CONTROLLING &&
       username_fragment() == remote_ufrag &&
       remote_tiebreaker == IceTiebreaker()) {
     return true;
@@ -651,15 +675,15 @@ bool Port::MaybeIceRoleConflict(const SocketAddress& addr,
 
   stun_attr = stun_msg->GetUInt64(STUN_ATTR_ICE_CONTROLLED);
   if (stun_attr) {
-    remote_ice_role = webrtc::ICEROLE_CONTROLLED;
+    remote_ice_role = ICEROLE_CONTROLLED;
     remote_tiebreaker = stun_attr->value();
   }
 
   switch (ice_role_) {
-    case webrtc::ICEROLE_CONTROLLING:
-      if (webrtc::ICEROLE_CONTROLLING == remote_ice_role) {
-        if (remote_tiebreaker >= tiebreaker_) {
-          SignalRoleConflict(this);
+    case ICEROLE_CONTROLLING:
+      if (ICEROLE_CONTROLLING == remote_ice_role) {
+        if (remote_tiebreaker >= ice_tiebreaker_) {
+          NotifyRoleConflict();
         } else {
           // Send Role Conflict (487) error response.
           SendBindingErrorResponse(stun_msg, addr, STUN_ERROR_ROLE_CONFLICT,
@@ -668,10 +692,10 @@ bool Port::MaybeIceRoleConflict(const SocketAddress& addr,
         }
       }
       break;
-    case webrtc::ICEROLE_CONTROLLED:
-      if (webrtc::ICEROLE_CONTROLLED == remote_ice_role) {
-        if (remote_tiebreaker < tiebreaker_) {
-          SignalRoleConflict(this);
+    case ICEROLE_CONTROLLED:
+      if (ICEROLE_CONTROLLED == remote_ice_role) {
+        if (remote_tiebreaker < ice_tiebreaker_) {
+          NotifyRoleConflict();
         } else {
           // Send Role Conflict (487) error response.
           SendBindingErrorResponse(stun_msg, addr, STUN_ERROR_ROLE_CONFLICT,
@@ -744,7 +768,7 @@ void Port::SendBindingErrorResponse(StunMessage* message,
   AsyncSocketPacketOptions options(StunDscpValue());
   options.info_signaled_after_sent.packet_type =
       PacketType::kIceConnectivityCheckResponse;
-  SendTo(buf.Data(), buf.Length(), addr, options, false);
+  SendTo(buf.DataView(), addr, options, false);
   RTC_LOG(LS_INFO) << ToString() << ": Sending STUN "
                    << StunMethodToString(response.type())
                    << ": reason=" << reason << " to "
@@ -782,13 +806,15 @@ void Port::SendUnknownAttributesErrorResponse(
   AsyncSocketPacketOptions options(StunDscpValue());
   options.info_signaled_after_sent.packet_type =
       PacketType::kIceConnectivityCheckResponse;
-  SendTo(buf.Data(), buf.Length(), addr, options, false);
+  SendTo(buf.DataView(), addr, options, false);
   RTC_LOG(LS_ERROR) << ToString() << ": Sending STUN binding error: reason="
                     << STUN_ERROR_UNKNOWN_ATTRIBUTE << " to "
                     << addr.ToSensitiveString();
 }
 
 void Port::KeepAliveUntilPruned() {
+  RTC_DCHECK_RUN_ON(thread_);
+
   // If it is pruned, we won't bring it up again.
   if (state_ == State::INIT) {
     state_ = State::KEEP_ALIVE_UNTIL_PRUNED;
@@ -796,6 +822,7 @@ void Port::KeepAliveUntilPruned() {
 }
 
 void Port::Prune() {
+  RTC_DCHECK_RUN_ON(thread_);
   state_ = State::PRUNED;
   PostDestroyIfDead(/*delayed=*/false);
 }
@@ -808,6 +835,7 @@ void Port::CancelPendingTasks() {
 }
 
 void Port::PostDestroyIfDead(bool delayed) {
+  RTC_DCHECK_RUN_ON(thread_);
   WeakPtr<Port> weak_ptr = NewWeakPtr();
   auto task = [weak_ptr = std::move(weak_ptr)] {
     if (weak_ptr) {
@@ -824,21 +852,25 @@ void Port::PostDestroyIfDead(bool delayed) {
 
 void Port::DestroyIfDead() {
   RTC_DCHECK_RUN_ON(thread_);
-  bool dead = (state_ == State::INIT || state_ == State::PRUNED) &&
-              connections_.empty() &&
-              webrtc::TimeMillis() - last_time_all_connections_removed_ >=
-                  timeout_delay_;
+  bool dead =
+      (state_ == State::INIT || state_ == State::PRUNED) &&
+      connections_.empty() &&
+      env_.clock().TimeInMilliseconds() - last_time_all_connections_removed_ >=
+          timeout_delay_;
   if (dead) {
     Destroy();
   }
 }
 
 void Port::SubscribePortDestroyed(
+    const void* tag,
     std::function<void(PortInterface*)> callback) {
-  port_destroyed_callback_list_.AddReceiver(callback);
+  RTC_DCHECK_RUN_ON(thread_);
+  port_destroyed_callback_list_.AddReceiver(tag, std::move(callback));
 }
 
 void Port::SendPortDestroyed(Port* port) {
+  RTC_DCHECK_RUN_ON(thread_);
   port_destroyed_callback_list_.Send(port);
 }
 void Port::OnNetworkTypeChanged(const ::webrtc::Network* network) {
@@ -847,19 +879,32 @@ void Port::OnNetworkTypeChanged(const ::webrtc::Network* network) {
   UpdateNetworkCost();
 }
 
+void Port::OnNetworkSliceChanged(const ::webrtc::Network* network) {
+  RTC_DCHECK_RUN_ON(thread_);
+  RTC_DCHECK(network == network_);
+
+  for (Candidate& candidate : candidates_) {
+    candidate.set_network_slice(network_->network_slice());
+  }
+
+  // The network slice affects the network cost as well, so also update the cost
+  // when the slice changes.
+  UpdateNetworkCost();
+}
+
 std::string Port::ToString() const {
+  RTC_DCHECK_RUN_ON(thread_);
   StringBuilder ss;
-  ss << "Port[" << webrtc::ToHex(reinterpret_cast<uintptr_t>(this)) << ":"
+  ss << "Port[" << ToHex(reinterpret_cast<uintptr_t>(this)) << ":"
      << content_name_ << ":" << component_ << ":" << generation_ << ":"
-     << webrtc::IceCandidateTypeToString(type_) << ":" << network_->ToString()
-     << "]";
+     << IceCandidateTypeToString(type_) << ":" << network_->ToString() << "]";
   return ss.Release();
 }
 
 // TODO(honghaiz): Make the network cost configurable from user setting.
 void Port::UpdateNetworkCost() {
   RTC_DCHECK_RUN_ON(thread_);
-  uint16_t new_cost = network_->GetCost(field_trials());
+  uint16_t new_cost = network_->GetCost(env().field_trials());
   if (network_cost_ == new_cost) {
     return;
   }
@@ -877,10 +922,12 @@ void Port::UpdateNetworkCost() {
 }
 
 void Port::EnablePortPackets() {
+  RTC_DCHECK_RUN_ON(thread_);
   enable_port_packets_ = true;
 }
 
 bool Port::OnConnectionDestroyed(Connection* conn) {
+  RTC_DCHECK_RUN_ON(thread_);
   if (connections_.erase(conn->remote_candidate().address()) == 0) {
     // This could indicate a programmer error outside of webrtc so while we
     // do have this check here to alert external developers, we also need to
@@ -897,7 +944,7 @@ bool Port::OnConnectionDestroyed(Connection* conn) {
   // fails and is removed before kPortTimeoutDelay, then this message will
   // not cause the Port to be destroyed.
   if (connections_.empty()) {
-    last_time_all_connections_removed_ = webrtc::TimeMillis();
+    last_time_all_connections_removed_ = env_.clock().TimeInMilliseconds();
     PostDestroyIfDead(/*delayed=*/true);
   }
 
@@ -924,6 +971,7 @@ void Port::DestroyConnectionInternal(Connection* conn, bool async) {
 }
 
 void Port::Destroy() {
+  RTC_DCHECK_RUN_ON(thread_);
   RTC_DCHECK(connections_.empty());
   RTC_LOG(LS_INFO) << ToString() << ": Port deleted";
   SendPortDestroyed(this);
@@ -938,6 +986,110 @@ const std::string& Port::username_fragment() const {
 void Port::CopyPortInformationToPacketInfo(PacketInfo* info) const {
   info->protocol = ConvertProtocolTypeToPacketInfoProtocolType(GetProtocol());
   info->network_id = Network()->id();
+}
+
+void Port::MaybeRequestLocalNetworkAccessPermission(
+    const SocketAddress& address,
+    absl::AnyInvocable<void(LocalNetworkAccessPermissionStatus)> callback) {
+  RTC_DCHECK_RUN_ON(thread_);
+  if (!lna_permission_factory_) {
+    std::move(callback)(LocalNetworkAccessPermissionStatus::kGranted);
+    return;
+  }
+
+  std::unique_ptr<LocalNetworkAccessPermissionInterface> permission_query =
+      lna_permission_factory_->Create();
+  if (!permission_query->ShouldRequestPermission(address)) {
+    std::move(callback)(LocalNetworkAccessPermissionStatus::kGranted);
+    return;
+  }
+
+  RTC_LOG(LS_VERBOSE) << "Asynchronously requesting LNA permission."
+                      << address.HostAsSensitiveURIString();
+
+  auto* permission_query_ptr = permission_query.get();
+  permission_queries_.push_back(std::move(permission_query));
+
+  permission_query_ptr->RequestPermission(
+      address, [this, permission_query_ptr, callback = std::move(callback)](
+                   LocalNetworkAccessPermissionStatus status) mutable {
+        OnRequestLocalNetworkAccessPermission(permission_query_ptr,
+                                              std::move(callback), status);
+      });
+}
+
+void Port::OnRequestLocalNetworkAccessPermission(
+    LocalNetworkAccessPermissionInterface* permission_query,
+    absl::AnyInvocable<void(LocalNetworkAccessPermissionStatus)> callback,
+    LocalNetworkAccessPermissionStatus status) {
+  RTC_DCHECK_RUN_ON(thread_);
+  auto it =
+      absl::c_find_if(permission_queries_, [permission_query](const auto& q) {
+        return q.get() == permission_query;
+      });
+  if (it == permission_queries_.end()) {
+    RTC_LOG(LS_ERROR) << "Unexpected LocalNetworkAccessPermission return";
+    RTC_DCHECK_NOTREACHED();
+    return;
+  }
+
+  permission_queries_.erase(it);
+  std::move(callback)(status);
+}
+
+void Port::SubscribeRoleConflict(absl::AnyInvocable<void()> callback) {
+  RTC_DCHECK_RUN_ON(thread_);
+  RTC_DCHECK(callback);
+  RTC_DCHECK(!role_conflict_callback_);
+  role_conflict_callback_ = std::move(callback);
+}
+
+void Port::NotifyRoleConflict() {
+  RTC_DCHECK_RUN_ON(thread_);
+  role_conflict_callback_();
+}
+
+void Port::SubscribeUnknownAddress(const void* tag,
+                                   absl::AnyInvocable<void(PortInterface*,
+                                                           const SocketAddress&,
+                                                           ProtocolType,
+                                                           IceMessage*,
+                                                           const std::string&,
+                                                           bool)> callback) {
+  unknown_address_callbacks_.AddReceiver(tag, std::move(callback));
+}
+
+void Port::NotifyUnknownAddress(PortInterface* port,
+                                const SocketAddress& address,
+                                ProtocolType proto,
+                                IceMessage* msg,
+                                const std::string& rf,
+                                bool port_muxed) {
+  unknown_address_callbacks_.Send(port, address, proto, msg, rf, port_muxed);
+}
+
+void Port::SubscribeReadPacket(
+    const void* tag,
+    absl::AnyInvocable<void(PortInterface*,
+                            std::span<const uint8_t>,
+                            const SocketAddress&)> callback) {
+  read_packet_callbacks_.AddReceiver(tag, std::move(callback));
+}
+
+void Port::NotifyReadPacket(PortInterface* port,
+                            std::span<const uint8_t> data,
+                            const SocketAddress& remote_address) {
+  read_packet_callbacks_.Send(port, data, remote_address);
+}
+
+void Port::SubscribeSentPacket(
+    const void* tag,
+    absl::AnyInvocable<void(const SentPacketInfo&)> callback) {
+  sent_packet_callbacks_.AddReceiver(tag, std::move(callback));
+}
+
+void Port::NotifySentPacket(const SentPacketInfo& packet) {
+  sent_packet_callbacks_.Send(packet);
 }
 
 }  // namespace webrtc

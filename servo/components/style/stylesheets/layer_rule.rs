@@ -6,6 +6,7 @@
 //!
 //! [layer]: https://drafts.csswg.org/css-cascade-5/#layering
 
+use crate::derives::*;
 use crate::parser::{Parse, ParserContext};
 use crate::shared_lock::{DeepCloneWithLock, Locked};
 use crate::shared_lock::{SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
@@ -95,27 +96,24 @@ impl LayerName {
 }
 
 impl Parse for LayerName {
-    fn parse<'i, 't>(
-        _: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
+    fn parse(_: &ParserContext, input: &mut Parser) -> Result<Self, ParseError> {
         let mut result = SmallVec::new();
         result.push(AtomIdent::from(&**input.expect_ident()?));
         loop {
-            let next_name = input.try_parse(|input| -> Result<AtomIdent, ParseError<'i>> {
+            let next_name = input.try_parse(|input| -> Result<AtomIdent, ParseError> {
                 match input.next_including_whitespace()? {
                     Token::Delim('.') => {},
                     other => {
-                        let t = other.clone();
-                        return Err(input.new_unexpected_token_error(t));
+                        let _ = other.clone();
+                        return Err(ParseError::unexpected_token());
                     },
                 }
 
                 let name = match input.next_including_whitespace()? {
                     Token::Ident(ref ident) => ident,
                     other => {
-                        let t = other.clone();
-                        return Err(input.new_unexpected_token_error(t));
+                        let _ = other.clone();
+                        return Err(ParseError::unexpected_token());
                     },
                 };
 
@@ -164,7 +162,7 @@ impl ToCssWithGuard for LayerBlockRule {
     fn to_css(
         &self,
         guard: &SharedRwLockReadGuard,
-        dest: &mut crate::str::CssStringWriter,
+        dest: &mut style_traits::CssStringWriter,
     ) -> fmt::Result {
         dest.write_str("@layer")?;
         if let Some(ref name) = self.name {
@@ -206,7 +204,7 @@ impl ToCssWithGuard for LayerStatementRule {
     fn to_css(
         &self,
         _: &SharedRwLockReadGuard,
-        dest: &mut crate::str::CssStringWriter,
+        dest: &mut style_traits::CssStringWriter,
     ) -> fmt::Result {
         let mut writer = CssWriter::new(dest);
         writer.write_str("@layer ")?;

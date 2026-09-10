@@ -3,9 +3,14 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /**
+ * @typedef {string} TabGroupId
+ *   Unique ID of a tab group.
+ */
+
+/**
  * @typedef {object} TabGroupStateData
  *   State of a tab group inside of an open window.
- * @property {string} id
+ * @property {TabGroupId} id
  *   Unique ID of the tab group.
  * @property {string} name
  *   User-defined name of the tab group.
@@ -45,6 +50,9 @@
  *   due to a window closing. Not set when a user explicitly saves a tab group.
  * @property {ClosedTabStateData[]} tabs
  *   Copy of all tab data for the tabs that were in this tab group
+ *   at the time it was saved.
+ * @property {TabSplitViewStateData[]} splitViews
+ *   Copy of all splitview data for the splitviews that were in this tab group
  *   at the time it was saved.
  */
 
@@ -87,6 +95,7 @@ class _TabGroupState {
     closedData.closedAt = Date.now();
     closedData.sourceWindowId = sourceWindowId;
     closedData.tabs = [];
+    closedData.splitViews = [];
     return closedData;
   }
 
@@ -130,6 +139,7 @@ class _TabGroupState {
     savedData.closedAt = Date.now();
     savedData.windowClosedId = windowClosedId;
     savedData.tabs = [];
+    savedData.splitViews = [];
     return savedData;
   }
 

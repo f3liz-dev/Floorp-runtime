@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -43,6 +41,7 @@ class DOMLocalization : public intl::Localization {
   JSObject* WrapObject(JSContext*, JS::Handle<JSObject*> aGivenProto) override;
 
   bool HasPendingMutations() const;
+  bool IsDocumentL10n() const { return mIsDocumentL10n; }
 
   /**
    * DOMLocalization API
@@ -118,6 +117,8 @@ class DOMLocalization : public intl::Localization {
   DOMLocalization(nsIGlobalObject* aGlobal, bool aSync);
   DOMLocalization(nsIGlobalObject* aGlobal, bool aIsSync,
                   const intl::ffi::LocalizationRc* aRaw);
+  DOMLocalization(nsIGlobalObject* aGlobal, bool aSync,
+                  const nsTArray<nsCString>& aLocales);
 
  protected:
   virtual ~DOMLocalization();
@@ -125,11 +126,12 @@ class DOMLocalization : public intl::Localization {
   void DisconnectMutations();
   void DisconnectRoots();
   void ReportL10nOverlaysErrors(nsTArray<L10nOverlaysError>& aErrors);
-  void ConvertStringToL10nArgs(const nsString& aInput, intl::L10nArgs& aRetVal,
-                               ErrorResult& aRv);
+  void ConvertStringToL10nArgs(const nsCString& aL10nId, const nsString& aInput,
+                               intl::L10nArgs& aRetVal, ErrorResult& aRv);
 
   RefPtr<L10nMutations> mMutations;
   nsTHashSet<RefPtr<nsINode>> mRoots;
+  bool mIsDocumentL10n = false;
 };
 
 }  // namespace mozilla::dom

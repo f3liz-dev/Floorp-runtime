@@ -1,12 +1,9 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #ifndef mozilla_dom_HTMLAudioElement_h
 #define mozilla_dom_HTMLAudioElement_h
 
-#include "mozilla/Attributes.h"
 #include "mozilla/dom/HTMLMediaElement.h"
 #include "mozilla/dom/TypedArray.h"
 
@@ -21,7 +18,7 @@ class HTMLAudioElement final : public HTMLMediaElement {
 
   NS_IMPL_FROMNODE_HTML_WITH_TAG(HTMLAudioElement, audio)
 
-  explicit HTMLAudioElement(already_AddRefed<NodeInfo>&& aNodeInfo);
+  explicit HTMLAudioElement(already_AddRefed<NodeInfo> aNodeInfo);
 
   // Element
   virtual bool IsInteractiveHTMLContent() const override;

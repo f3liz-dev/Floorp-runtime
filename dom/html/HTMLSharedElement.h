@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,7 +6,6 @@
 #define mozilla_dom_HTMLSharedElement_h
 
 #include "mozilla/Assertions.h"
-#include "mozilla/Attributes.h"
 #include "nsGenericHTMLElement.h"
 #include "nsGkAtoms.h"
 
@@ -16,8 +13,7 @@ namespace mozilla::dom {
 
 class HTMLSharedElement final : public nsGenericHTMLElement {
  public:
-  explicit HTMLSharedElement(
-      already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo)
+  explicit HTMLSharedElement(already_AddRefed<mozilla::dom::NodeInfo> aNodeInfo)
       : nsGenericHTMLElement(std::move(aNodeInfo)) {
     if (mNodeInfo->Equals(nsGkAtoms::head) ||
         mNodeInfo->Equals(nsGkAtoms::html)) {

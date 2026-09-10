@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -599,7 +598,7 @@ class XSLTProcessRequest final : public nsIRequest {
   void Done() { mState = nullptr; }
 
  private:
-  ~XSLTProcessRequest() {}
+  ~XSLTProcessRequest() = default;
   txExecutionState* mState;
 };
 NS_IMPL_ISUPPORTS(XSLTProcessRequest, nsIRequest)
@@ -1140,7 +1139,7 @@ void txMozillaXSLTProcessor::notifyError() {
 
   IgnoredErrorResult rv;
   ElementCreationOptionsOrString options;
-  Unused << options.SetAsString();
+  (void)options.SetAsString();
 
   nsCOMPtr<Element> element =
       document->CreateElementNS(ns, u"parsererror"_ns, options, rv);
@@ -1162,7 +1161,7 @@ void txMozillaXSLTProcessor::notifyError() {
 
   if (!mSourceText.IsEmpty()) {
     ElementCreationOptionsOrString options;
-    Unused << options.SetAsString();
+    (void)options.SetAsString();
 
     nsCOMPtr<Element> sourceElement =
         document->CreateElementNS(ns, u"sourcetext"_ns, options, rv);
@@ -1228,8 +1227,7 @@ void txMozillaXSLTProcessor::CharacterDataChanged(
 
 void txMozillaXSLTProcessor::AttributeChanged(Element* aElement,
                                               int32_t aNameSpaceID,
-                                              nsAtom* aAttribute,
-                                              int32_t aModType,
+                                              nsAtom* aAttribute, AttrModType,
                                               const nsAttrValue* aOldValue) {
   mStylesheet = nullptr;
 }
@@ -1262,8 +1260,14 @@ DocGroup* txMozillaXSLTProcessor::GetDocGroup() const {
 /* static */
 already_AddRefed<txMozillaXSLTProcessor> txMozillaXSLTProcessor::Constructor(
     const GlobalObject& aGlobal) {
+  nsISupports* supports = aGlobal.GetAsSupports();
+  nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(supports);
+  if (win && win->GetExtantDoc()) {
+    win->GetExtantDoc()->WarnOnceAndReportAbout(
+        DeprecatedOperations::eXSLTDeprecated);
+  }
   RefPtr<txMozillaXSLTProcessor> processor =
-      new txMozillaXSLTProcessor(aGlobal.GetAsSupports());
+      new txMozillaXSLTProcessor(supports);
   return processor.forget();
 }
 

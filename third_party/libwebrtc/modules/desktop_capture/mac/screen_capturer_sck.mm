@@ -25,8 +25,6 @@
 #include "sck_picker_handle.h"
 #include "sdk/objc/helpers/scoped_cftyperef.h"
 
-using webrtc::DesktopFrameIOSurface;
-
 namespace webrtc {
 class ScreenCapturerSck;
 }  // namespace webrtc
@@ -534,9 +532,9 @@ void ScreenCapturerSck::StartWithFilter(SCContentFilter* __strong filter) {
   config.colorSpaceName = kCGColorSpaceSRGB;
   config.showsCursor = capture_options_.prefer_cursor_embedded();
   config.captureResolution = SCCaptureResolutionNominal;
-  config.minimumFrameInterval =
-      max_frame_rate_ > 0 ? CMTimeMake(1, static_cast<int32_t>(max_frame_rate_))
-                          : kCMTimeZero;
+  config.minimumFrameInterval = max_frame_rate_ > 0 ?
+      CMTimeMake(1, static_cast<int32_t>(max_frame_rate_)) :
+      kCMTimeZero;
 
   {
     MutexLock lock(&latest_frame_lock_);
@@ -590,7 +588,8 @@ void ScreenCapturerSck::StartWithFilter(SCContentFilter* __strong filter) {
         // this handler.
         permanent_error_ = true;
         RTC_LOG(LS_ERROR) << "ScreenCapturerSck " << this
-                          << " Starting failed.";
+                          << " Starting failed with error code " << error.code
+                          << ".";
       } else {
         RTC_LOG(LS_INFO) << "ScreenCapturerSck " << this << " Capture started.";
       }
@@ -778,8 +777,9 @@ std::unique_ptr<DesktopCapturer> CreateGenericCapturerSck(
   if (@available(macOS 14.0, *)) {
     if (options.allow_sck_system_picker()) {
       return std::make_unique<ScreenCapturerSck>(
-          options, SCContentSharingPickerModeSingleDisplay |
-                       SCContentSharingPickerModeMultipleWindows);
+          options,
+          SCContentSharingPickerModeSingleDisplay |
+              SCContentSharingPickerModeMultipleWindows);
     }
   }
   return nullptr;

@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,7 +13,6 @@
 #include "js/Value.h"  // JS::Value
 #include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/UniquePtr.h"
-#include "mozilla/Unused.h"
 #include "mozilla/dom/BrowserChild.h"
 #include "mozilla/dom/PBrowserChild.h"
 #include "mozilla/net/NeckoChild.h"
@@ -158,7 +155,7 @@ void TCPSocketChild::GetHost(nsAString& aHost) { aHost = mHost; }
 void TCPSocketChild::GetPort(uint16_t* aPort) const { *aPort = mPort; }
 
 mozilla::ipc::IPCResult TCPSocketChild::RecvRequestDelete() {
-  mozilla::Unused << Send__delete__(this);
+  (void)Send__delete__(this);
   return IPC_OK();
 }
 

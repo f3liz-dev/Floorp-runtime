@@ -22,7 +22,6 @@
 #include "absl/strings/string_view.h"
 #include "api/task_queue/pending_task_safety_flag.h"
 #include "rtc_base/buffer.h"
-#include "rtc_base/openssl_stream_adapter.h"
 #ifdef OPENSSL_IS_BORINGSSL
 #include "rtc_base/boringssl_identity.h"
 #else
@@ -51,13 +50,13 @@ class OpenSSLAdapter final : public SSLAdapter {
   // immutable after the the SSL connection starts.
   explicit OpenSSLAdapter(Socket* socket,
                           OpenSSLSessionCache* ssl_session_cache = nullptr,
-                          SSLCertificateVerifier* ssl_cert_verifier = nullptr);
+                          SSLCertificateVerifier* ssl_cert_verifier = nullptr,
+                          bool dtls = false);
   ~OpenSSLAdapter() override;
 
   void SetIgnoreBadCert(bool ignore) override;
   void SetAlpnProtocols(const std::vector<std::string>& protos) override;
   void SetEllipticCurves(const std::vector<std::string>& curves) override;
-  [[deprecated]] void SetMode(SSLMode mode) override;
   void SetCertVerifier(SSLCertificateVerifier* ssl_cert_verifier) override;
   void SetIdentity(std::unique_ptr<SSLIdentity> identity) override;
   void SetRole(SSLRole role) override;
@@ -117,9 +116,6 @@ class OpenSSLAdapter final : public SSLAdapter {
   int DoSslWrite(const void* pv, size_t cb, int* error);
   bool SSLPostConnectionCheck(SSL* ssl, absl::string_view host);
 
-  // Logs info about the state of the SSL connection.
-  static void SSLInfoCallback(const SSL* ssl, int where, int ret);
-
 #if defined(OPENSSL_IS_BORINGSSL) && \
     defined(WEBRTC_EXCLUDE_BUILT_IN_SSL_ROOT_CERTS)
   static enum ssl_verify_result_t SSLVerifyCallback(SSL* ssl,
@@ -131,7 +127,6 @@ class OpenSSLAdapter final : public SSLAdapter {
   // Returns 1 on success, `status_on_error` on error or verification failure.
   int SSLVerifyInternal(int status_on_error, SSL* ssl, X509_STORE_CTX* store);
 #endif
-  friend class OpenSSLStreamAdapter;  // for custom_verify_callback_;
 
   // If the SSL_CTX was created with `enable_cache` set to true, this callback
   // will be called when a SSL session has been successfully established,
@@ -148,7 +143,7 @@ class OpenSSLAdapter final : public SSLAdapter {
 #ifdef OPENSSL_IS_BORINGSSL
   std::unique_ptr<BoringSSLIdentity> identity_;
 #else
-  std::unique_ptr<webrtc::OpenSSLIdentity> identity_;
+  std::unique_ptr<OpenSSLIdentity> identity_;
 #endif
   // Indicates whethere this is a client or a server.
   SSLRole role_;
@@ -211,8 +206,8 @@ class OpenSSLAdapterFactory : public SSLAdapterFactory {
 
  private:
   // Holds the SSLMode (DTLS,TLS) that will be used to set the session cache.
-  SSLMode ssl_mode_ = webrtc::SSL_MODE_TLS;
-  SSLRole ssl_role_ = webrtc::SSL_CLIENT;
+  SSLMode ssl_mode_ = SSL_MODE_TLS;
+  SSLRole ssl_role_ = SSL_CLIENT;
   bool ignore_bad_cert_ = false;
 
   std::unique_ptr<SSLIdentity> identity_;
@@ -235,14 +230,5 @@ std::string TransformAlpnProtocols(const std::vector<std::string>& protos);
 
 }  //  namespace webrtc
 
-// Re-export symbols from the webrtc namespace for backwards compatibility.
-// TODO(bugs.webrtc.org/4222596): Remove once all references are updated.
-#ifdef WEBRTC_ALLOW_DEPRECATED_NAMESPACES
-namespace rtc {
-using ::webrtc::OpenSSLAdapter;
-using ::webrtc::OpenSSLAdapterFactory;
-using ::webrtc::TransformAlpnProtocols;
-}  // namespace rtc
-#endif  // WEBRTC_ALLOW_DEPRECATED_NAMESPACES
 
 #endif  // RTC_BASE_OPENSSL_ADAPTER_H_

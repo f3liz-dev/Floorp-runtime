@@ -2,11 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { actionCreators as ac, actionTypes as at } from "common/Actions.mjs";
+import { actionCreators as ac } from "common/Actions.mjs";
 import { DSImage } from "../DSImage/DSImage.jsx";
 import { DSLinkMenu } from "../DSLinkMenu/DSLinkMenu";
 import { ImpressionStats } from "../../DiscoveryStreamImpressionStats/ImpressionStats";
-import { getActiveCardSize } from "../../../lib/utils";
+import { getActiveCardSize, getNovaColumnLayout } from "../../../lib/utils";
 import React from "react";
 import { SafeAnchor } from "../SafeAnchor/SafeAnchor";
 import {
@@ -14,18 +14,16 @@ import {
   SponsorLabel,
   DSMessageFooter,
 } from "../DSContextFooter/DSContextFooter.jsx";
-import { DSThumbsUpDownButtons } from "../DSThumbsUpDownButtons/DSThumbsUpDownButtons.jsx";
 import { FluentOrText } from "../../FluentOrText/FluentOrText.jsx";
 import { connect } from "react-redux";
-import { LinkMenuOptions } from "content-src/lib/link-menu-options";
 const READING_WPM = 220;
 const PREF_OHTTP_MERINO = "discoverystream.merino-provider.ohttp.enabled";
 const PREF_OHTTP_UNIFIED_ADS = "unifiedAds.ohttp.enabled";
 const PREF_SECTIONS_ENABLED = "discoverystream.sections.enabled";
-const PREF_FAVICONS_ENABLED = "discoverystream.publisherFavicon.enabled";
 
 /**
  * READ TIME FROM WORD COUNT
+ *
  * @param {int} wordCount number of words in an article
  * @returns {int} number of words per minute in minutes
  */
@@ -44,10 +42,8 @@ export const DSSource = ({
   sponsor,
   sponsored_by_override,
   icon_src,
-  refinedCardsLayout,
 }) => {
-  // refinedCard styles will have a larger favicon size
-  const faviconSize = refinedCardsLayout ? 20 : 16;
+  const faviconSize = 20;
 
   // First try to display sponsored label or time to read here.
   if (newSponsoredLabel) {
@@ -101,44 +97,16 @@ export const DefaultMeta = ({
   sponsored_by_override,
   ctaButtonVariant,
   dispatch,
-  spocMessageVariant,
   mayHaveSectionsCards,
-  mayHaveThumbsUpDown,
-  onThumbsUpClick,
-  onThumbsDownClick,
-  isListCard,
-  state,
   format,
-  topic,
-  isSectionsCard,
-  showTopics,
   icon_src,
-  refinedCardsLayout,
+  novaEnabled,
 }) => {
-  const shouldHaveThumbs =
-    !isListCard &&
-    format !== "rectangle" &&
-    mayHaveSectionsCards &&
-    mayHaveThumbsUpDown;
-  const shouldHaveFooterSection =
-    isSectionsCard && (shouldHaveThumbs || showTopics);
+  const shouldShowFooter = format !== "rectangle" && format !== "spoc";
 
   return (
     <div className="meta">
       <div className="info-wrap">
-        {ctaButtonVariant !== "variant-b" &&
-          format !== "rectangle" &&
-          !refinedCardsLayout && (
-            <DSSource
-              source={source}
-              timeToRead={timeToRead}
-              newSponsoredLabel={newSponsoredLabel}
-              context={context}
-              sponsor={sponsor}
-              sponsored_by_override={sponsored_by_override}
-              icon_src={icon_src}
-            />
-          )}
         <h3 className="title clamp">
           {format === "rectangle" ? "Sponsored" : title}
         </h3>
@@ -150,49 +118,17 @@ export const DefaultMeta = ({
           excerpt && <p className="excerpt clamp">{excerpt}</p>
         )}
       </div>
-      {!isListCard &&
-        format !== "rectangle" &&
-        !mayHaveSectionsCards &&
-        mayHaveThumbsUpDown &&
-        !refinedCardsLayout && (
-          <DSThumbsUpDownButtons
-            onThumbsDownClick={onThumbsDownClick}
-            onThumbsUpClick={onThumbsUpClick}
-            sponsor={sponsor}
-            isThumbsDownActive={state.isThumbsDownActive}
-            isThumbsUpActive={state.isThumbsUpActive}
-          />
-        )}
-      {(shouldHaveFooterSection || refinedCardsLayout) && (
+      {shouldShowFooter && (
         <div className="sections-card-footer">
-          {refinedCardsLayout &&
-            format !== "rectangle" &&
-            format !== "spoc" && (
-              <DSSource
-                source={source}
-                timeToRead={timeToRead}
-                newSponsoredLabel={newSponsoredLabel}
-                context={context}
-                sponsor={sponsor}
-                sponsored_by_override={sponsored_by_override}
-                icon_src={icon_src}
-                refinedCardsLayout={refinedCardsLayout}
-              />
-            )}
-          {(shouldHaveThumbs || refinedCardsLayout) && (
-            <DSThumbsUpDownButtons
-              onThumbsDownClick={onThumbsDownClick}
-              onThumbsUpClick={onThumbsUpClick}
+          {format !== "rectangle" && format !== "spoc" && (
+            <DSSource
+              source={source}
+              timeToRead={timeToRead}
+              newSponsoredLabel={newSponsoredLabel}
+              context={context}
               sponsor={sponsor}
-              isThumbsDownActive={state.isThumbsDownActive}
-              isThumbsUpActive={state.isThumbsUpActive}
-              refinedCardsLayout={refinedCardsLayout}
-            />
-          )}
-          {showTopics && (
-            <span
-              className="ds-card-topic"
-              data-l10n-id={`newtab-topic-label-${topic}`}
+              sponsored_by_override={sponsored_by_override}
+              icon_src={icon_src}
             />
           )}
         </div>
@@ -206,8 +142,8 @@ export const DefaultMeta = ({
           cta_button_variant={ctaButtonVariant}
           source={source}
           dispatch={dispatch}
-          spocMessageVariant={spocMessageVariant}
           mayHaveSectionsCards={mayHaveSectionsCards}
+          novaEnabled={novaEnabled}
         />
       )}
       {/* Sponsored label is normally in the way of any message.
@@ -229,10 +165,6 @@ export class _DSCard extends React.PureComponent {
       this.doesLinkTopicMatchSelectedTopic.bind(this);
     this.onMenuUpdate = this.onMenuUpdate.bind(this);
     this.onMenuShow = this.onMenuShow.bind(this);
-    this.onThumbsUpClick = this.onThumbsUpClick.bind(this);
-    this.onThumbsDownClick = this.onThumbsDownClick.bind(this);
-    const refinedCardsLayout =
-      this.props.Prefs.values["discoverystream.refinedCardsLayout.enabled"];
 
     this.setContextMenuButtonHostRef = element => {
       this.contextMenuButtonHostElement = element;
@@ -243,8 +175,6 @@ export class _DSCard extends React.PureComponent {
 
     this.state = {
       isSeen: false,
-      isThumbsUpActive: false,
-      isThumbsDownActive: false,
     };
 
     // If this is for the about:home startup cache, then we always want
@@ -265,7 +195,7 @@ export class _DSCard extends React.PureComponent {
       {
         mediaMatcher: "default",
         width: 296,
-        height: 148,
+        height: 160,
       },
     ];
 
@@ -289,11 +219,26 @@ export class _DSCard extends React.PureComponent {
       },
       medium: {
         width: 300,
-        height: refinedCardsLayout ? 160 : 150,
+        height: 160,
       },
       large: {
         width: 190,
         height: 250,
+      },
+    };
+
+    this.novaSectionsCardImagesSizes = {
+      small: {
+        width: 132,
+        height: 108,
+      },
+      medium: {
+        width: 300,
+        height: 160,
+      },
+      large: {
+        width: 240,
+        height: 200,
       },
     };
 
@@ -303,13 +248,28 @@ export class _DSCard extends React.PureComponent {
       3: "(min-width: 1122px)",
       4: "(min-width: 1390px)",
     };
+
+    this.novaSectionsColumnMediaMatcher = {
+      1: "default",
+      2: "(min-width: 684px)",
+      3: "(min-width: 1032px)",
+      4: "(min-width: 1380px)",
+    };
   }
 
   getSectionImageSize(column, size) {
+    // @nova-cleanup(remove-pref): Remove conditional, use nova sizes as default
+    const novaEnabled = this.props.Prefs.values["nova.enabled"];
+    const imageSizes = novaEnabled
+      ? this.novaSectionsCardImagesSizes
+      : this.sectionsCardImagesSizes;
+    const mediaMatchers = novaEnabled
+      ? this.novaSectionsColumnMediaMatcher
+      : this.sectionsColumnMediaMatcher;
     const cardImageSize = {
-      mediaMatcher: this.sectionsColumnMediaMatcher[column],
-      width: this.sectionsCardImagesSizes[size].width,
-      height: this.sectionsCardImagesSizes[size].height,
+      mediaMatcher: mediaMatchers[column],
+      width: imageSizes[size].width,
+      height: imageSizes[size].height,
     };
     return cardImageSize;
   }
@@ -335,41 +295,66 @@ export class _DSCard extends React.PureComponent {
   onLinkClick() {
     const matchesSelectedTopic = this.doesLinkTopicMatchSelectedTopic();
     if (this.props.dispatch) {
-      if (this.props.isFakespot) {
-        this.props.dispatch(
-          ac.DiscoveryStreamUserEvent({
-            event: "FAKESPOT_CLICK",
-            value: {
-              product_id: this.props.id,
-              category: this.props.category || "",
-            },
-          })
-        );
-      } else {
-        this.props.dispatch(
-          ac.DiscoveryStreamUserEvent({
-            event: "CLICK",
-            source: this.props.type.toUpperCase(),
-            action_position: this.props.pos,
-            value: {
-              event_source: "card",
-              card_type: this.props.flightId ? "spoc" : "organic",
-              recommendation_id: this.props.recommendation_id,
-              tile_id: this.props.id,
+      this.props.dispatch(
+        ac.DiscoveryStreamUserEvent({
+          event: "CLICK",
+          source: this.props.type.toUpperCase(),
+          action_position: this.props.pos,
+          value: {
+            event_source: "card",
+            card_type: this.props.flightId ? "spoc" : "organic",
+            tile_id: this.props.id,
+            ...(this.props.shim && this.props.shim.click
+              ? { shim: this.props.shim.click }
+              : {}),
+            corpus_item_id: this.props.corpus_item_id,
+            scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
+            recommended_at: this.props.recommended_at,
+            received_rank: this.props.received_rank,
+            topic: this.props.topic,
+            features: this.props.features,
+            matches_selected_topic: matchesSelectedTopic,
+            selected_topics: this.props.selectedTopics,
+            attribution: this.props.attribution,
+            ...(this.props.format
+              ? { format: this.props.format }
+              : {
+                  format: getActiveCardSize(
+                    window.innerWidth,
+                    this.props.sectionsClassNames,
+                    this.props.section,
+                    this.props.flightId,
+                    getNovaColumnLayout(this.contextMenuButtonHostElement)
+                  ),
+                }),
+            ...(this.props.section
+              ? {
+                  section: this.props.section,
+                  section_position: this.props.sectionPosition,
+                  is_section_followed: this.props.sectionFollowed,
+                  layout_name: this.props.sectionLayoutName,
+                }
+              : {}),
+          },
+        })
+      );
+
+      this.props.dispatch(
+        ac.ImpressionStats({
+          source: this.props.type.toUpperCase(),
+          click: 0,
+          window_inner_width: this.props.windowObj.innerWidth,
+          window_inner_height: this.props.windowObj.innerHeight,
+          tiles: [
+            {
+              id: this.props.id,
+              pos: this.props.pos,
               ...(this.props.shim && this.props.shim.click
                 ? { shim: this.props.shim.click }
                 : {}),
-              fetchTimestamp: this.props.fetchTimestamp,
-              firstVisibleTimestamp: this.props.firstVisibleTimestamp,
-              corpus_item_id: this.props.corpus_item_id,
-              scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
-              recommended_at: this.props.recommended_at,
-              received_rank: this.props.received_rank,
+              type: this.props.flightId ? "spoc" : "organic",
               topic: this.props.topic,
-              features: this.props.features,
-              matches_selected_topic: matchesSelectedTopic,
               selected_topics: this.props.selectedTopics,
-              is_list_card: this.props.isListCard,
               ...(this.props.format
                 ? { format: this.props.format }
                 : {
@@ -377,7 +362,8 @@ export class _DSCard extends React.PureComponent {
                       window.innerWidth,
                       this.props.sectionsClassNames,
                       this.props.section,
-                      this.props.flightId
+                      this.props.flightId,
+                      getNovaColumnLayout(this.contextMenuButtonHostElement)
                     ),
                   }),
               ...(this.props.section
@@ -388,206 +374,8 @@ export class _DSCard extends React.PureComponent {
                   }
                 : {}),
             },
-          })
-        );
-
-        this.props.dispatch(
-          ac.ImpressionStats({
-            source: this.props.type.toUpperCase(),
-            click: 0,
-            window_inner_width: this.props.windowObj.innerWidth,
-            window_inner_height: this.props.windowObj.innerHeight,
-            tiles: [
-              {
-                id: this.props.id,
-                pos: this.props.pos,
-                ...(this.props.shim && this.props.shim.click
-                  ? { shim: this.props.shim.click }
-                  : {}),
-                type: this.props.flightId ? "spoc" : "organic",
-                recommendation_id: this.props.recommendation_id,
-                topic: this.props.topic,
-                selected_topics: this.props.selectedTopics,
-                is_list_card: this.props.isListCard,
-                ...(this.props.format
-                  ? { format: this.props.format }
-                  : {
-                      format: getActiveCardSize(
-                        window.innerWidth,
-                        this.props.sectionsClassNames,
-                        this.props.section,
-                        this.props.flightId
-                      ),
-                    }),
-                ...(this.props.section
-                  ? {
-                      section: this.props.section,
-                      section_position: this.props.sectionPosition,
-                      is_section_followed: this.props.sectionFollowed,
-                    }
-                  : {}),
-              },
-            ],
-          })
-        );
-      }
-    }
-  }
-
-  onThumbsUpClick(event) {
-    event.stopPropagation();
-    event.preventDefault();
-
-    // Toggle active state for thumbs up button to show CSS animation
-    const currentState = this.state.isThumbsUpActive;
-
-    // If thumbs up has been clicked already, do nothing.
-    if (currentState) {
-      return;
-    }
-
-    this.setState({ isThumbsUpActive: !currentState });
-
-    // Record thumbs up telemetry event
-    this.props.dispatch(
-      ac.DiscoveryStreamUserEvent({
-        event: "POCKET_THUMBS_UP",
-        source: "THUMBS_UI",
-        value: {
-          recommendation_id: this.props.recommendation_id,
-          tile_id: this.props.id,
-          corpus_item_id: this.props.corpus_item_id,
-          scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
-          recommended_at: this.props.recommended_at,
-          received_rank: this.props.received_rank,
-          thumbs_up: true,
-          thumbs_down: false,
-          topic: this.props.topic,
-          format: getActiveCardSize(
-            window.innerWidth,
-            this.props.sectionsClassNames,
-            this.props.section,
-            false // (thumbs up/down only exist on organic content)
-          ),
-          ...(this.props.section
-            ? {
-                section: this.props.section,
-                section_position: this.props.sectionPosition,
-                is_section_followed: this.props.sectionFollowed,
-              }
-            : {}),
-        },
-      })
-    );
-
-    // Show Toast
-    this.props.dispatch(
-      ac.OnlyToOneContent(
-        {
-          type: at.SHOW_TOAST_MESSAGE,
-          data: {
-            showNotifications: true,
-            toastId: "thumbsUpToast",
-          },
-        },
-        "ActivityStream:Content"
-      )
-    );
-  }
-
-  onThumbsDownClick(event) {
-    event.stopPropagation();
-    event.preventDefault();
-
-    // Toggle active state for thumbs down button to show CSS animation
-    const currentState = this.state.isThumbsDownActive;
-    this.setState({ isThumbsDownActive: !currentState });
-
-    // Run dismiss event after 0.5 second delay
-    if (
-      this.props.dispatch &&
-      this.props.type &&
-      this.props.id &&
-      this.props.url
-    ) {
-      const index = this.props.pos;
-      const source = this.props.type.toUpperCase();
-      const spocData = {
-        url: this.props.url,
-        guid: this.props.id,
-        type: "CardGrid",
-        card_type: "organic",
-        recommendation_id: this.props.recommendation_id,
-        tile_id: this.props.id,
-        corpus_item_id: this.props.corpus_item_id,
-        scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
-        recommended_at: this.props.recommended_at,
-        received_rank: this.props.received_rank,
-      };
-      const blockUrlOption = LinkMenuOptions.BlockUrl(spocData, index, source);
-
-      const { action, impression, userEvent } = blockUrlOption;
-
-      setTimeout(() => {
-        this.props.dispatch(action);
-
-        this.props.dispatch(
-          ac.DiscoveryStreamUserEvent({
-            event: userEvent,
-            source,
-            action_position: index,
-          })
-        );
-      }, 500);
-
-      if (impression) {
-        this.props.dispatch(impression);
-      }
-
-      // Record thumbs down telemetry event
-      this.props.dispatch(
-        ac.DiscoveryStreamUserEvent({
-          event: "POCKET_THUMBS_DOWN",
-          source: "THUMBS_UI",
-          value: {
-            recommendation_id: this.props.recommendation_id,
-            tile_id: this.props.id,
-            corpus_item_id: this.props.corpus_item_id,
-            scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
-            recommended_at: this.props.recommended_at,
-            received_rank: this.props.received_rank,
-            thumbs_up: false,
-            thumbs_down: true,
-            topic: this.props.topic,
-            format: getActiveCardSize(
-              window.innerWidth,
-              this.props.sectionsClassNames,
-              this.props.section,
-              false // (thumbs up/down only exist on organic content)
-            ),
-            ...(this.props.section
-              ? {
-                  section: this.props.section,
-                  section_position: this.props.sectionPosition,
-                  is_section_followed: this.props.sectionFollowed,
-                }
-              : {}),
-          },
+          ],
         })
-      );
-
-      // Show Toast
-      this.props.dispatch(
-        ac.OnlyToOneContent(
-          {
-            type: at.SHOW_TOAST_MESSAGE,
-            data: {
-              showNotifications: true,
-              toastId: "thumbsDownToast",
-            },
-          },
-          "ActivityStream:Content"
-        )
       );
     }
   }
@@ -690,13 +478,8 @@ export class _DSCard extends React.PureComponent {
 
   getFaviconSrc() {
     let faviconSrc = "";
-    const faviconEnabled = this.props.Prefs.values[PREF_FAVICONS_ENABLED];
     // There is no point in fetching favicons for startup cache.
-    if (
-      !this.props.App.isForStartupCache.App &&
-      faviconEnabled &&
-      this.props.icon_src
-    ) {
+    if (!this.props.App.isForStartupCache.App && this.props.icon_src) {
       faviconSrc = this.props.icon_src;
       if (this.secureImage) {
         faviconSrc = this.secureImageURL(this.props.icon_src);
@@ -754,17 +537,23 @@ export class _DSCard extends React.PureComponent {
   renderSectionCardImages() {
     const { sectionsCardImageSizes } = this.props;
 
-    const columns = ["1", "2", "3", "4"];
-    const images = [];
+    // Derived from the layout's breakpoints rather than a fixed list, so a
+    // 5-column layout renders a 5th variant.
+    const columns = Object.keys(sectionsCardImageSizes);
 
-    for (const column of columns) {
-      const size = sectionsCardImageSizes[column];
-      const sizes = [this.getSectionImageSize(column, size)];
-      const image = this.renderImage({ sizes, classNames: `image-${column}` });
-      images.push(image);
-    }
-
-    return <>{images}</>;
+    return (
+      <>
+        {columns.map(column => {
+          const size = sectionsCardImageSizes[column];
+          const sizes = [this.getSectionImageSize(column, size)];
+          const image = this.renderImage({
+            sizes,
+            classNames: `image-${column}`,
+          });
+          return React.cloneElement(image, { key: column });
+        })}
+      </>
+    );
   }
 
   render() {
@@ -772,15 +561,9 @@ export class _DSCard extends React.PureComponent {
       isRecentSave,
       DiscoveryStream,
       Prefs,
-      isListCard,
-      isFakespot,
       mayHaveSectionsCards,
       format,
     } = this.props;
-
-    const refinedCardsLayout =
-      Prefs.values["discoverystream.refinedCardsLayout.enabled"];
-    const refinedCardsClassName = refinedCardsLayout ? `refined-cards` : ``;
 
     if (this.props.placeholder || !this.state.isSeen) {
       // placeholder-seen is used to ensure the loading animation is only used if the card is visible.
@@ -794,20 +577,16 @@ export class _DSCard extends React.PureComponent {
         </>
       );
 
-      if (refinedCardsLayout) {
-        placeholderElements = (
-          <>
-            <div className="placeholder-image placeholder-fill" />
-            <div className="placeholder-description placeholder-fill" />
-            <div className="placeholder-header placeholder-fill" />
-          </>
-        );
-      }
+      placeholderElements = (
+        <>
+          <div className="placeholder-image placeholder-fill" />
+          <div className="placeholder-description placeholder-fill" />
+          <div className="placeholder-header placeholder-fill" />
+        </>
+      );
       return (
         <div
-          className={`ds-card placeholder ${placeholderClassName} ${
-            isListCard ? "list-card-placeholder" : ""
-          } ${refinedCardsClassName}`}
+          className={`ds-card placeholder ${placeholderClassName}`}
           ref={this.setPlaceholderRef}
         >
           {placeholderElements}
@@ -833,12 +612,12 @@ export class _DSCard extends React.PureComponent {
     } = DiscoveryStream;
 
     const sectionsEnabled = Prefs.values[PREF_SECTIONS_ENABLED];
-    // Refined cards have their own excerpt hiding logic.
-    // We can ignore hideDescriptions if we are in sections and refined cards.
+    // @nova-cleanup(remove-pref): Delete this read and the two novaEnabled props
+    // passed to DSContextFooter below; that component drops the prop entirely.
+    const novaEnabled = Prefs.values["nova.enabled"];
+    // We can ignore hideDescriptions if we are in sections.
     const excerpt =
-      !hideDescriptions || (sectionsEnabled && refinedCardsLayout)
-        ? this.props.excerpt
-        : "";
+      !hideDescriptions || sectionsEnabled ? this.props.excerpt : "";
 
     let timeToRead;
     if (displayReadTime) {
@@ -860,30 +639,33 @@ export class _DSCard extends React.PureComponent {
     const imageGradientClassName = imageGradient
       ? `ds-card-image-gradient`
       : ``;
-    const listCardClassName = isListCard ? `list-feed-card` : ``;
-    const fakespotClassName = isFakespot ? `fakespot` : ``;
     const sectionsCardsClassName = [
       mayHaveSectionsCards ? `sections-card-ui` : ``,
       this.props.sectionsClassNames,
-    ].join(" ");
+    ]
+      .filter(Boolean)
+      .join(" ");
     const titleLinesName = `ds-card-title-lines-${titleLines}`;
     const descLinesClassName = `ds-card-desc-lines-${descLines}`;
     const isMediumRectangle = format === "rectangle";
-    const spocFormatClassName = isMediumRectangle ? `ds-spoc-rectangle` : ``;
+    let spocFormatClassName = ``;
+    if (isMediumRectangle) {
+      spocFormatClassName = `ds-spoc-rectangle`;
+    } else if (format === "spoc") {
+      spocFormatClassName = `ds-spoc`;
+    }
     const faviconSrc = this.getFaviconSrc();
 
     let images = this.renderImage({ sizes: this.standardCardImageSizes });
     if (isMediumRectangle) {
       images = this.renderImage();
-    } else if (isListCard) {
-      images = this.renderImage({ sizes: this.listCardImageSizes });
     } else if (sectionsEnabled) {
       images = this.renderSectionCardImages();
     }
 
     return (
       <article
-        className={`ds-card ${listCardClassName} ${fakespotClassName} ${sectionsCardsClassName} ${compactImagesClassName} ${imageGradientClassName} ${titleLinesName} ${descLinesClassName} ${spocFormatClassName} ${ctaButtonClassName} ${ctaButtonVariantClassName} ${refinedCardsClassName}`}
+        className={`ds-card ${sectionsCardsClassName} ${compactImagesClassName} ${imageGradientClassName} ${titleLinesName} ${descLinesClassName} ${spocFormatClassName} ${ctaButtonClassName} ${ctaButtonVariantClassName}`}
         ref={this.setContextMenuButtonHostRef}
         data-position-one={this.props["data-position-one"]}
         data-position-two={this.props["data-position-one"]}
@@ -897,19 +679,15 @@ export class _DSCard extends React.PureComponent {
           url={this.props.url}
           title={this.props.title}
           isSponsored={!!this.props.flightId}
+          tabIndex={this.props.tabIndex}
+          onFocus={this.props.onFocus}
         >
-          {this.props.showTopics &&
-            !this.props.mayHaveSectionsCards &&
-            this.props.topic &&
-            !isListCard &&
-            !refinedCardsLayout && (
-              <span
-                className="ds-card-topic"
-                data-l10n-id={`newtab-topic-label-${this.props.topic}`}
-              />
-            )}
           <div className="img-wrapper">{images}</div>
+          {/* Only the carousel passes isActive, and only its visible slide gets
+              true. This stays mounted while the slide is hidden, so a card that
+              is shown more than once still reports a single impression. */}
           <ImpressionStats
+            isActive={this.props.isActive !== false}
             flightId={this.props.flightId}
             rows={[
               {
@@ -918,23 +696,21 @@ export class _DSCard extends React.PureComponent {
                 ...(this.props.shim && this.props.shim.impression
                   ? { shim: this.props.shim.impression }
                   : {}),
-                recommendation_id: this.props.recommendation_id,
-                fetchTimestamp: this.props.fetchTimestamp,
                 corpus_item_id: this.props.corpus_item_id,
                 scheduled_corpus_item_id: this.props.scheduled_corpus_item_id,
                 recommended_at: this.props.recommended_at,
                 received_rank: this.props.received_rank,
                 topic: this.props.topic,
                 features: this.props.features,
-                is_list_card: isListCard,
                 ...(format ? { format } : {}),
-                isFakespot,
                 category: this.props.category,
+                attribution: this.props.attribution,
                 ...(this.props.section
                   ? {
                       section: this.props.section,
                       section_position: this.props.sectionPosition,
                       is_section_followed: this.props.sectionFollowed,
+                      sectionLayoutName: this.props.sectionLayoutName,
                     }
                   : {}),
                 ...(!format && this.props.section
@@ -944,101 +720,76 @@ export class _DSCard extends React.PureComponent {
               },
             ]}
             dispatch={this.props.dispatch}
-            isFakespot={isFakespot}
             source={this.props.type}
-            firstVisibleTimestamp={this.props.firstVisibleTimestamp}
           />
 
           {ctaButtonVariant === "variant-b" && (
             <div className="cta-header">Shop Now</div>
           )}
-          {isFakespot ? (
-            <div className="meta">
-              <div className="info-wrap">
-                <h3 className="title clamp">{this.props.title}</h3>
-              </div>
-            </div>
-          ) : (
-            <DefaultMeta
-              source={source}
-              title={this.props.title}
-              excerpt={excerpt}
-              newSponsoredLabel={newSponsoredLabel}
-              timeToRead={timeToRead}
-              context={this.props.context}
-              context_type={this.props.context_type}
-              sponsor={this.props.sponsor}
-              sponsored_by_override={this.props.sponsored_by_override}
-              ctaButtonVariant={ctaButtonVariant}
-              dispatch={this.props.dispatch}
-              spocMessageVariant={this.props.spocMessageVariant}
-              mayHaveThumbsUpDown={this.props.mayHaveThumbsUpDown}
-              mayHaveSectionsCards={this.props.mayHaveSectionsCards}
-              onThumbsUpClick={this.onThumbsUpClick}
-              onThumbsDownClick={this.onThumbsDownClick}
-              state={this.state}
-              isListCard={isListCard}
-              showTopics={!refinedCardsLayout && this.props.showTopics}
-              isSectionsCard={
-                this.props.mayHaveSectionsCards &&
-                this.props.topic &&
-                !isListCard
-              }
-              format={format}
-              topic={this.props.topic}
-              icon_src={faviconSrc}
-              refinedCardsLayout={refinedCardsLayout}
-            />
-          )}
+          <DefaultMeta
+            source={source}
+            title={this.props.title}
+            excerpt={excerpt}
+            newSponsoredLabel={newSponsoredLabel}
+            timeToRead={timeToRead}
+            context={this.props.context}
+            context_type={this.props.context_type}
+            sponsor={this.props.sponsor}
+            sponsored_by_override={this.props.sponsored_by_override}
+            ctaButtonVariant={ctaButtonVariant}
+            dispatch={this.props.dispatch}
+            mayHaveSectionsCards={this.props.mayHaveSectionsCards}
+            state={this.state}
+            format={format}
+            icon_src={faviconSrc}
+            tabIndex={this.props.tabIndex}
+            novaEnabled={novaEnabled}
+          />
         </SafeAnchor>
         <div className="card-stp-button-hover-background">
           <div className="card-stp-button-position-wrapper">
-            {!isFakespot && (
-              <DSLinkMenu
-                id={this.props.id}
-                index={this.props.pos}
-                dispatch={this.props.dispatch}
-                url={this.props.url}
-                title={this.props.title}
-                source={source}
-                type={this.props.type}
-                card_type={this.props.flightId ? "spoc" : "organic"}
-                pocket_id={this.props.pocket_id}
-                shim={this.props.shim}
-                bookmarkGuid={this.props.bookmarkGuid}
-                flightId={this.props.flightId}
-                showPrivacyInfo={!!this.props.flightId}
-                onMenuUpdate={this.onMenuUpdate}
-                onMenuShow={this.onMenuShow}
-                isRecentSave={isRecentSave}
-                recommendation_id={this.props.recommendation_id}
-                tile_id={this.props.id}
-                block_key={this.props.id}
-                corpus_item_id={this.props.corpus_item_id}
-                scheduled_corpus_item_id={this.props.scheduled_corpus_item_id}
-                recommended_at={this.props.recommended_at}
-                received_rank={this.props.received_rank}
-                is_list_card={this.props.isListCard}
-                section={this.props.section}
-                section_position={this.props.sectionPosition}
-                is_section_followed={this.props.sectionFollowed}
-                fetchTimestamp={this.props.fetchTimestamp}
-                firstVisibleTimestamp={this.props.firstVisibleTimestamp}
-                format={
-                  format
-                    ? format
-                    : getActiveCardSize(
-                        window.innerWidth,
-                        this.props.sectionsClassNames,
-                        this.props.section,
-                        this.props.flightId
-                      )
-                }
-                isSectionsCard={this.props.mayHaveSectionsCards}
-                topic={this.props.topic}
-                selected_topics={this.props.selected_topics}
-              />
-            )}
+            <DSLinkMenu
+              id={this.props.id}
+              index={this.props.pos}
+              dispatch={this.props.dispatch}
+              url={this.props.url}
+              title={this.props.title}
+              source={source}
+              type={this.props.type}
+              card_type={this.props.flightId ? "spoc" : "organic"}
+              pocket_id={this.props.pocket_id}
+              shim={this.props.shim}
+              bookmarkGuid={this.props.bookmarkGuid}
+              flightId={this.props.flightId}
+              showPrivacyInfo={!!this.props.flightId}
+              onMenuUpdate={this.onMenuUpdate}
+              onMenuShow={this.onMenuShow}
+              isRecentSave={isRecentSave}
+              tile_id={this.props.id}
+              block_key={this.props.id}
+              corpus_item_id={this.props.corpus_item_id}
+              scheduled_corpus_item_id={this.props.scheduled_corpus_item_id}
+              recommended_at={this.props.recommended_at}
+              received_rank={this.props.received_rank}
+              section={this.props.section}
+              section_position={this.props.sectionPosition}
+              is_section_followed={this.props.sectionFollowed}
+              format={
+                format
+                  ? format
+                  : getActiveCardSize(
+                      window.innerWidth,
+                      this.props.sectionsClassNames,
+                      this.props.section,
+                      this.props.flightId,
+                      getNovaColumnLayout(this.contextMenuButtonHostElement)
+                    )
+              }
+              isSectionsCard={this.props.mayHaveSectionsCards}
+              topic={this.props.topic}
+              selected_topics={this.props.selected_topics}
+              tabIndex={this.props.tabIndex}
+            />
           </div>
         </div>
       </article>

@@ -6,12 +6,13 @@ task-defaults:
     description: "uv toolchain build"
     attributes:
         local-toolchain: true
-    worker-type: b-linux-amd
+    worker-type: b-linux-docker-amd
     worker:
         max-run-time: 1800
         env:
             FETCH: uv/crates/uv
     run:
+        clone-with: hg
         script: build-rust-based-toolchain.sh
         toolchain-artifact: public/build/uv.tar.zst
     fetches:

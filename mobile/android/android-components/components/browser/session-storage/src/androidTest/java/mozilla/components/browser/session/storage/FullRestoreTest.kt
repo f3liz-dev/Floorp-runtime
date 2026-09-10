@@ -7,6 +7,8 @@ package mozilla.components.browser.session.storage
 import android.content.Context
 import android.os.SystemClock
 import androidx.test.core.app.ApplicationProvider
+import java.util.concurrent.TimeoutException
+import kotlin.test.assertNotNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import mozilla.components.browser.engine.gecko.GeckoEngine
@@ -16,22 +18,19 @@ import mozilla.components.browser.state.store.BrowserStore
 import mozilla.components.concept.engine.Engine
 import mozilla.components.feature.tabs.TabsUseCases
 import mozilla.components.support.android.test.rules.WebserverRule
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
-import java.util.concurrent.TimeoutException
 
 class FullRestoreTest {
-    @get:Rule
-    val webserverRule: WebserverRule = WebserverRule()
+    @get:Rule val webserverRule: WebserverRule = WebserverRule()
 
     private val context: Context
         get() = ApplicationProvider.getApplicationContext()
 
     /**
-     * In this test we use GeckoView Nightly to load a test page and then we save and restore the
-     * browsing session, asserting that we end up with the same state as before.
+     * In this test we use GeckoView Nightly to load a test page and then we save and restore the browsing session,
+     * asserting that we end up with the same state as before.
      */
     @Test
     fun loadAndRestore() {
@@ -77,7 +76,7 @@ class FullRestoreTest {
 
             val browsingSession = storage.restore()
             assertNotNull(browsingSession)
-            newUseCases.restore(browsingSession!!)
+            newUseCases.restore(browsingSession)
 
             waitFor { newStore.state.selectedTab?.engineState != null }
             waitFor { newStore.state.selectedTab?.content?.title == "Restore Test" }
@@ -90,9 +89,7 @@ class FullRestoreTest {
         }
     }
 
-    private fun createStore(
-        engine: Engine,
-    ): BrowserStore {
+    private fun createStore(engine: Engine): BrowserStore {
         return runBlocking(Dispatchers.Main) {
             BrowserStore(middleware = EngineMiddleware.create(engine))
         }

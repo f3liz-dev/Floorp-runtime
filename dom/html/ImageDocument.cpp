@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -28,12 +26,12 @@
 #include "mozilla/dom/MouseEvent.h"
 #include "nsContentPolicyUtils.h"
 #include "nsContentUtils.h"
+#include "nsDOMCSSDeclaration.h"
 #include "nsDOMTokenList.h"
 #include "nsDocShell.h"
 #include "nsError.h"
 #include "nsGenericHTMLElement.h"
 #include "nsGkAtoms.h"
-#include "nsICSSDeclaration.h"
 #include "nsIChannel.h"
 #include "nsIContentPolicy.h"
 #include "nsIDOMEventListener.h"
@@ -532,7 +530,7 @@ void ImageDocument::UpdateRemoteStyle(StyleImageRendering aImageRendering) {
             aImageRendering));
   }
 
-  nsCOMPtr<nsICSSDeclaration> style = mImageContent->Style();
+  nsCOMPtr<nsDOMCSSDeclaration> style = mImageContent->Style();
   switch (aImageRendering) {
     case StyleImageRendering::Auto:
     case StyleImageRendering::Smooth:
@@ -713,7 +711,7 @@ void ImageDocument::ResetZoomLevel() {
 
   if (RefPtr<BrowsingContext> bc = GetBrowsingContext()) {
     // Resetting the zoom level on a discarded browsing context has no effect.
-    Unused << bc->SetFullZoom(mOriginalZoomLevel);
+    (void)bc->SetFullZoom(mOriginalZoomLevel);
   }
 }
 

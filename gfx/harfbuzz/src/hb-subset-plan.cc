@@ -418,7 +418,8 @@ _nameid_closure (hb_subset_plan_t* plan,
 		 hb_set_t* drop_tables)
 {
 #ifndef HB_NO_STYLE
-  plan->source->table.STAT->collect_name_ids (&plan->user_axes_location, &plan->name_ids);
+  if (!drop_tables->has (HB_OT_TAG_STAT))
+    plan->source->table.STAT->collect_name_ids (&plan->user_axes_location, &plan->name_ids);
 #endif
 #ifndef HB_NO_VAR
   if (!plan->all_axes_pinned)
@@ -450,6 +451,14 @@ _populate_gids_to_retain (hb_subset_plan_t* plan,
   plan->_glyphset_gsub.add (0); // Not-def
 
   _cmap_closure (plan->source, &plan->unicodes, &plan->_glyphset_gsub);
+  plan->_glyphset_cmaped = plan->_glyphset_gsub;
+
+  if (!drop_tables->has (HB_OT_TAG_MATH))
+  {
+    _math_closure (plan, &plan->_glyphset_gsub);
+    _remove_invalid_gids (&plan->_glyphset_gsub, plan->source->get_num_glyphs ());
+  }
+  plan->_glyphset_mathed = plan->_glyphset_gsub;
 
 #ifndef HB_NO_SUBSET_LAYOUT
   layout_populate_gids_to_retain(plan, drop_tables);
@@ -457,14 +466,7 @@ _populate_gids_to_retain (hb_subset_plan_t* plan,
 
   _remove_invalid_gids (&plan->_glyphset_gsub, plan->source->get_num_glyphs ());
 
-  plan->_glyphset_mathed = plan->_glyphset_gsub;
-  if (!drop_tables->has (HB_OT_TAG_MATH))
-  {
-    _math_closure (plan, &plan->_glyphset_mathed);
-    _remove_invalid_gids (&plan->_glyphset_mathed, plan->source->get_num_glyphs ());
-  }
-
-  hb_set_t cur_glyphset = plan->_glyphset_mathed;
+  hb_set_t cur_glyphset = plan->_glyphset_gsub;
   if (!drop_tables->has (HB_OT_TAG_COLR))
   {
     _colr_closure (plan, &cur_glyphset);
@@ -646,6 +648,7 @@ hb_subset_plan_t::hb_subset_plan_t (hb_face_t *face,
   all_axes_pinned = false;
   pinned_at_default = true;
   has_gdef_varstore = false;
+  has_avar2 = false;
 
 #ifdef HB_EXPERIMENTAL_API
   for (auto _ : input->name_table_overrides)
@@ -676,7 +679,8 @@ hb_subset_plan_t::hb_subset_plan_t (hb_face_t *face,
     return;
 
 #ifndef HB_NO_VAR
-  normalize_axes_location (face, this);
+  if (!check_success (normalize_axes_location (face, this)))
+      return;
 #endif
 
   _populate_unicodes_to_retain (input->sets.unicodes, input->sets.glyphs, this);
@@ -697,6 +701,15 @@ hb_subset_plan_t::hb_subset_plan_t (hb_face_t *face,
     return;
   }
 
+#ifdef HB_EXPERIMENTAL_API  
+  if ((input->flags & HB_SUBSET_FLAGS_RETAIN_GIDS) &&
+      (input->flags & HB_SUBSET_FLAGS_RETAIN_NUM_GLYPHS)) {
+    // We've been requested to maintain the num glyphs count from the
+    // input face.
+    _num_output_glyphs = source->get_num_glyphs ();
+  }
+#endif
+
   _create_glyph_map_gsub (
       &_glyphset_gsub,
       glyph_map,
@@ -710,10 +723,10 @@ hb_subset_plan_t::hb_subset_plan_t (hb_face_t *face,
         glyph_map->get(unicode_to_new_gid_list.arrayZ[i].second);
   }
 
-  bounds_width_vec.resize (_num_output_glyphs, false);
+  bounds_width_vec.resize_dirty  (_num_output_glyphs);
   for (auto &v : bounds_width_vec)
     v = 0xFFFFFFFF;
-  bounds_height_vec.resize (_num_output_glyphs, false);
+  bounds_height_vec.resize_dirty  (_num_output_glyphs);
   for (auto &v : bounds_height_vec)
     v = 0xFFFFFFFF;
 
@@ -732,8 +745,10 @@ hb_subset_plan_t::hb_subset_plan_t (hb_face_t *face,
   if (unlikely (in_error ()))
     return;
 
-#ifndef HB_NO_VAR
+#if !defined(HB_NO_VAR) && !defined(HB_NO_OT_FONT_CFF)
   update_instance_metrics_map_from_cff2 (this);
+#endif
+#ifndef HB_NO_VAR
   if (!check_success (get_instance_glyphs_contour_points (this)))
       return;
 #endif

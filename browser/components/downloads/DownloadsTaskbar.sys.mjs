@@ -1,5 +1,3 @@
-/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80 filetype=javascript: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -77,11 +75,13 @@ class DownloadsTaskbarInstance {
   #summary = null;
 
   /**
-   * nsITaskbarProgress object to which download information is dispatched.
-   * This can be null if the indicator has never been initialized or if the
+   * nsITaskbarProgress objects to which download information is dispatched.
+   * This can be empty if the indicator has never been initialized or if the
    * indicator is currently hidden on Windows.
+   *
+   * @type {Set<nsITaskbarProgress>}
    */
-  #taskbarProgress = null;
+  #taskbarProgresses = new Set();
 
   /**
    * The kind of downloads that will be summarized.
@@ -123,30 +123,32 @@ class DownloadsTaskbarInstance {
    *        indicator may be attached.
    */
   async registerIndicator(aBrowserWindow, aForcedBackend) {
-    if (!this.#taskbarProgress) {
+    if (
+      aForcedBackend == "windows" ||
+      (!aForcedBackend && gInterfaces.winTaskbar)
+    ) {
+      // On Windows, we show download progress on all browser windows
+      // of the appropriate filter (public or private). See bug 1418568
+      this.#windowsAttachIndicator(aBrowserWindow);
+    } else if (!this.#taskbarProgresses.size) {
+      // On non-Windows platforms, we only show download progress on one
+      // target at a time.
       if (
         aForcedBackend == "mac" ||
         (!aForcedBackend && gInterfaces.macTaskbarProgress)
       ) {
         // On Mac OS X, we have to register the global indicator only once.
-        this.#taskbarProgress = gInterfaces.macTaskbarProgress;
+        this.#taskbarProgresses.add(gInterfaces.macTaskbarProgress);
         // Free the XPCOM reference on shutdown, to prevent detecting a leak.
         Services.obs.addObserver(() => {
-          this.#taskbarProgress = null;
+          this.#taskbarProgresses.clear();
           gInterfaces.macTaskbarProgress = null;
         }, "quit-application-granted");
-      } else if (
-        aForcedBackend == "windows" ||
-        (!aForcedBackend && gInterfaces.winTaskbar)
-      ) {
-        // On Windows, the indicator is currently hidden because we have no
-        // previous browser window, thus we should attach the indicator now.
-        this.#attachIndicator(aBrowserWindow);
       } else if (
         aForcedBackend == "linux" ||
         (!aForcedBackend && gInterfaces.gtkTaskbarProgress)
       ) {
-        this.#taskbarProgress = gInterfaces.gtkTaskbarProgress;
+        this.#taskbarProgresses.add(gInterfaces.gtkTaskbarProgress);
 
         this.#attachGtkTaskbarProgress(aBrowserWindow);
       } else {
@@ -173,10 +175,11 @@ class DownloadsTaskbarInstance {
   /**
    * On Windows, attaches the taskbar indicator to the specified browser window.
    */
-  #attachIndicator(aWindow) {
+  #windowsAttachIndicator(aWindow) {
     // Activate the indicator on the specified window.
     let { docShell } = aWindow.browsingContext.topChromeWindow;
-    this.#taskbarProgress = gInterfaces.winTaskbar.getTaskbarProgress(docShell);
+    let taskbarProgress = gInterfaces.winTaskbar.getTaskbarProgress(docShell);
+    this.#taskbarProgresses.add(taskbarProgress);
 
     // If the DownloadSummary object has already been created, we should update
     // the state of the new indicator, otherwise it will be updated as soon as
@@ -186,17 +189,9 @@ class DownloadsTaskbarInstance {
     }
 
     aWindow.addEventListener("unload", () => {
-      // Locate another browser window, excluding the one being closed.
-      let browserWindow = this.#determineProgressRepresentative();
-      if (browserWindow) {
-        // Move the progress indicator to the other browser window.
-        this.#attachIndicator(browserWindow);
-      } else {
-        // The last browser window has been closed.  We remove the reference to
-        // the taskbar progress object so that the indicator will be registered
-        // again on the next browser window that is opened.
-        this.#taskbarProgress = null;
-      }
+      // Remove the taskbar progress indicator from the list of progress indicators
+      // to update.
+      this.#taskbarProgresses.delete(taskbarProgress);
     });
   }
 
@@ -205,7 +200,9 @@ class DownloadsTaskbarInstance {
    */
   #attachGtkTaskbarProgress(aWindow) {
     // Set the current window.
-    this.#taskbarProgress.setPrimaryWindow(aWindow);
+    // For gtk, there's only one entry in #taskbarProgresses
+    let taskbarProgress = this.#taskbarProgresses.values().next().value;
+    taskbarProgress.setPrimaryWindow(aWindow);
 
     // If the DownloadSummary object has already been created, we should update
     // the state of the new indicator, otherwise it will be updated as soon as
@@ -224,7 +221,7 @@ class DownloadsTaskbarInstance {
         // The last browser window has been closed.  We remove the reference to
         // the taskbar progress object so that the indicator will be registered
         // again on the next browser window that is opened.
-        this.#taskbarProgress = null;
+        this.#taskbarProgresses.clear();
       }
     });
   }
@@ -247,29 +244,34 @@ class DownloadsTaskbarInstance {
       this.#summary.removeView(this);
     }
 
-    this.#taskbarProgress = null;
+    this.#taskbarProgresses.clear();
+  }
+
+  /**
+   * Updates progress for all nsITaskbarProgress objects.
+   *
+   * @param {number} aProgressState An nsTaskbarProgressState constant from nsITaskbarProgress
+   * @param {number} aCurrentValue Current progress value.
+   * @param {number} aMaxValue Maximum progress value
+   */
+  updateProgress(aProgressState, aCurrentValue, aMaxValue) {
+    for (let progress of this.#taskbarProgresses) {
+      progress.setProgressState(aProgressState, aCurrentValue, aMaxValue);
+    }
   }
 
   // DownloadSummary view
 
   onSummaryChanged() {
     // If the last browser window has been closed, we have no indicator any more.
-    if (!this.#taskbarProgress) {
+    if (!this.#taskbarProgresses.size) {
       return;
     }
 
     if (this.#summary.allHaveStopped || this.#summary.progressTotalBytes == 0) {
-      this.#taskbarProgress.setProgressState(
-        Ci.nsITaskbarProgress.STATE_NO_PROGRESS,
-        0,
-        0
-      );
+      this.updateProgress(Ci.nsITaskbarProgress.STATE_NO_PROGRESS, 0, 0);
     } else if (this.#summary.allUnknownSize) {
-      this.#taskbarProgress.setProgressState(
-        Ci.nsITaskbarProgress.STATE_INDETERMINATE,
-        0,
-        0
-      );
+      this.updateProgress(Ci.nsITaskbarProgress.STATE_INDETERMINATE, 0, 0);
     } else {
       // For a brief moment before completion, some download components may
       // report more transferred bytes than the total number of bytes.  Thus,
@@ -278,7 +280,7 @@ class DownloadsTaskbarInstance {
         this.#summary.progressTotalBytes,
         this.#summary.progressCurrentBytes
       );
-      this.#taskbarProgress.setProgressState(
+      this.updateProgress(
         Ci.nsITaskbarProgress.STATE_NORMAL,
         progressCurrentBytes,
         this.#summary.progressTotalBytes
@@ -310,7 +312,7 @@ export var DownloadsTaskbar = {
       // On Windows, the private and public windows are separated. Plus, the native code
       // supports multiple taskbar progresses at a time. Therefore, have a separate
       // instance for each.
-      return lazy.PrivateBrowsingUtils.isBrowserPrivate(aWindow)
+      return lazy.PrivateBrowsingUtils.isWindowPrivate(aWindow)
         ? lazy.Downloads.PRIVATE
         : lazy.Downloads.PUBLIC;
     }

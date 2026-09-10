@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -70,6 +68,7 @@ class SharedSectionTestHelper {
            (offsetof(SharedSection::Layout, mFirstBlockEntry) +
             sizeof(DllBlockInfo));
   }
+  static HANDLE GetSectionHandle() { return SharedSection::sSectionHandle; }
 };
 }  // namespace mozilla::freestanding
 
@@ -243,7 +242,7 @@ static DynamicBlockList ConvertStaticBlocklistToDynamic(
             });
 
   Vector<DllBlockInfo> copied;
-  Unused << copied.resize(originalLength + 1);  // aBlockEntries + sentinel
+  (void)copied.resize(originalLength + 1);  // aBlockEntries + sentinel
 
   size_t currentStringOffset = 0;
   for (size_t i = 0; i < originalLength; ++i) {
@@ -467,7 +466,7 @@ class ChildProcess final {
     Vector<std::thread> threads;
     std::atomic<bool> success = true;
     for (int i = 0; i < 10; ++i) {
-      Unused << threads.emplaceBack(
+      (void)threads.emplaceBack(
           [&success](SRWLOCK* aLock) {
             // All threads call GetKernel32Exports(), but only the first thread
             // maps a write-copy section and populates it.
@@ -524,6 +523,18 @@ class ChildProcess final {
     if (result.inspectErr() !=
         WindowsError::FromWin32Error(ERROR_ACCESS_DENIED)) {
       PrintLauncherError(result, "The readonly section was writable");
+      return 1;
+    }
+
+    // The empty DACL should prevent writable handles.
+    HANDLE writableHandle;
+    if (::DuplicateHandle(
+            nt::kCurrentProcess, SharedSectionTestHelper::GetSectionHandle(),
+            nt::kCurrentProcess, &writableHandle, GENERIC_WRITE, FALSE, 0)) {
+      ::CloseHandle(writableHandle);
+      printf(
+          "TEST-FAILED | TestCrossProcessWin | "
+          "The handle was writable.\n");
       return 1;
     }
 

@@ -1,16 +1,13 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_IOUtils__
-#define mozilla_dom_IOUtils__
+#ifndef mozilla_dom_IOUtils_
+#define mozilla_dom_IOUtils_
 
 #include "js/Utility.h"
 #include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/Attributes.h"
-#include "mozilla/Buffer.h"
 #include "mozilla/DataMutex.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/Result.h"
@@ -97,7 +94,7 @@ class IOUtils final {
 
   static already_AddRefed<dom::Promise> WriteJSON(
       dom::GlobalObject& aGlobal, const nsAString& aPath,
-      JS::Handle<JS::Value> aValue, const dom::WriteOptions& aOptions,
+      JS::Handle<JS::Value> aValue, const dom::WriteJSONOptions& aOptions,
       ErrorResult& aError);
 
   static already_AddRefed<dom::Promise> Move(dom::GlobalObject& aGlobal,
@@ -189,7 +186,8 @@ class IOUtils final {
 
   static already_AddRefed<dom::Promise> SetWindowsAttributes(
       dom::GlobalObject& aGlobal, const nsAString& aPath,
-      const mozilla::dom::WindowsFileAttributes& aAttrs, ErrorResult& aError);
+      const mozilla::dom::WindowsFileAttributes& aAttrs, bool aRecursive,
+      ErrorResult& aError);
 #elif defined(XP_MACOSX)
   static already_AddRefed<dom::Promise> HasMacXAttr(dom::GlobalObject& aGlobal,
                                                     const nsAString& aPath,
@@ -248,6 +246,26 @@ class IOUtils final {
     String,
     Uint8Array,
   };
+
+  /**
+   * Attempts to remove the file located at |aFile|.
+   *
+   * Must be called off the main thread.
+   *
+   * @param aFile          The location of the file.
+   * @param aIgnoreAbsent  If true, suppress errors due to an absent target
+   * file.
+   * @param aRecursive     If true, attempt to recursively remove descendant
+   *                       files. This option is safe to use even if the target
+   *                       is not a directory.
+   * @param aRetryReadonly Retry a delete that failed with a NotAllowedError by
+   *                       first removing the readonly attribute. Only has an
+   *                       effect on Windows.
+   *
+   * @return Ok if the file was removed successfully, or an error.
+   */
+  static Result<Ok, IOError> RemoveSync(nsIFile* aFile, bool aIgnoreAbsent,
+                                        bool aRecursive, bool aRetryReadonly);
 
  private:
   ~IOUtils() = default;
@@ -389,24 +407,6 @@ class IOUtils final {
                                             bool aNoOverwrite);
 
   /**
-   * Attempts to remove the file located at |aFile|.
-   *
-   * @param aFile          The location of the file.
-   * @param aIgnoreAbsent  If true, suppress errors due to an absent target
-   * file.
-   * @param aRecursive     If true, attempt to recursively remove descendant
-   *                       files. This option is safe to use even if the target
-   *                       is not a directory.
-   * @param aRetryReadonly Retry a delete that failed with a NotAllowedError by
-   *                       first removing the readonly attribute. Only has an
-   *                       effect on Windows.
-   *
-   * @return Ok if the file was removed successfully, or an error.
-   */
-  static Result<Ok, IOError> RemoveSync(nsIFile* aFile, bool aIgnoreAbsent,
-                                        bool aRecursive, bool aRetryReadonly);
-
-  /**
    * Attempts to create a new directory at |aFile|.
    *
    * @param aFile             The location of the directory to create.
@@ -539,13 +539,17 @@ class IOUtils final {
   /**
    * Set the Windows-specific attributes of the file.
    *
-   * @param aFile  The location of the file.
-   * @param aAttrs The attributes to set on the file.
+   * @param aFile       The location of the file.
+   * @param aSetAttrs   The attributes to set on the file.
+   * @param aClearAttrs The attributes to clear on the file.
+   * @param aRecursive  Whether or not to apply the change to folder contents
+   *                    recursively.
    *
    * @return |Ok| if the attributes were successfully set, or an error.
    */
   static Result<Ok, IOError> SetWindowsAttributesSync(
-      nsIFile* aFile, const uint32_t aSetAttrs, const uint32_t aClearAttrs);
+      nsIFile* aFile, const uint32_t aSetAttrs, const uint32_t aClearAttrs,
+      bool aRecursive);
 #elif defined(XP_MACOSX)
   static Result<bool, IOError> HasMacXAttrSync(nsIFile* aFile,
                                                const nsCString& aAttr);
@@ -734,9 +738,12 @@ struct IOUtils::InternalWriteOpts {
   dom::WriteMode mMode;
   bool mFlush = false;
   bool mCompress = false;
+  size_t mLengthHint = 0;
 
   static Result<InternalWriteOpts, IOUtils::IOError> FromBinding(
       const dom::WriteOptions& aOptions);
+  static Result<InternalWriteOpts, IOUtils::IOError> FromBinding(
+      const dom::WriteJSONOptions& aOptions);
 };
 
 /**

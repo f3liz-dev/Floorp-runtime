@@ -8,20 +8,16 @@ use std::{
     cell::RefCell,
     collections::VecDeque,
     fmt::{self, Display, Formatter},
-    ops::{Deref, DerefMut},
+    ops::Deref,
     rc::Rc,
+    time::Instant,
 };
 
-use neqo_common::{qdebug, Encoder, Header};
-use neqo_transport::{
-    server::ConnectionRef, AppError, Connection, DatagramTracking, StreamId, StreamType,
-};
+use neqo_common::{Header, qdebug};
+use neqo_transport::{AppError, Connection, StreamId, server::ConnectionRef};
 
 use crate::{
-    connection::{Http3State, WebTransportSessionAcceptAction},
-    connection_server::Http3ServerHandler,
-    features::extended_connect::SessionCloseReason,
-    Error, Http3StreamInfo, Http3StreamType, Priority, Res,
+    Http3StreamInfo, Priority, Res, connection::Http3State, connection_server::Http3ServerHandler,
 };
 
 #[derive(Debug, Clone)]
@@ -42,7 +38,6 @@ impl std::hash::Hash for StreamHandler {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.conn.hash(state);
         state.write_u64(self.stream_info.stream_id().as_u64());
-        _ = state.finish();
     }
 }
 
@@ -75,10 +70,10 @@ impl StreamHandler {
     /// # Errors
     ///
     /// It may return `InvalidStreamId` if a stream does not exist anymore.
-    pub fn send_data(&self, buf: &[u8]) -> Res<usize> {
+    pub fn send_data(&self, buf: &[u8], now: Instant) -> Res<usize> {
         self.handler
             .borrow_mut()
-            .send_data(self.stream_id(), buf, &mut self.conn.borrow_mut())
+            .send_data(self.stream_id(), buf, &mut self.conn.borrow_mut(), now)
     }
 
     /// Bytes sendable on stream at the QUIC layer.
@@ -99,10 +94,12 @@ impl StreamHandler {
     /// # Errors
     ///
     /// It may return `InvalidStreamId` if a stream does not exist anymore.
-    pub fn stream_close_send(&self) -> Res<()> {
-        self.handler
-            .borrow_mut()
-            .stream_close_send(self.stream_id(), &mut self.conn.borrow_mut())
+    pub fn stream_close_send(&self, now: Instant) -> Res<()> {
+        self.handler.borrow_mut().stream_close_send(
+            self.stream_id(),
+            &mut self.conn.borrow_mut(),
+            now,
+        )
     }
 
     /// Request a peer to stop sending a stream.
@@ -136,6 +133,21 @@ impl StreamHandler {
             self.stream_info.stream_id(),
             app_error,
             &mut self.conn.borrow_mut(),
+        )
+    }
+
+    /// Commit to reliably delivering the stream data buffered so far. If the stream is later
+    /// reset, that prefix is delivered using `RESET_STREAM_AT` (when the peer supports it).
+    ///
+    /// # Errors
+    ///
+    /// It may return `InvalidStreamId` if a stream does not exist anymore, or `NotAvailable`
+    /// if the peer did not enable reliable reset.
+    pub fn stream_commit(&self, now: Instant) -> Res<()> {
+        self.handler.borrow_mut().stream_commit(
+            self.stream_info.stream_id(),
+            &mut self.conn.borrow_mut(),
+            now,
         )
     }
 
@@ -194,9 +206,9 @@ impl Http3OrWebTransportStream {
     /// # Errors
     ///
     /// It may return `InvalidStreamId` if a stream does not exist anymore.
-    pub fn send_data(&self, data: &[u8]) -> Res<usize> {
+    pub fn send_data(&self, data: &[u8], now: Instant) -> Res<usize> {
         qdebug!("[{self}] Set new response");
-        self.stream_handler.send_data(data)
+        self.stream_handler.send_data(data, now)
     }
 
     /// Close sending side.
@@ -204,9 +216,9 @@ impl Http3OrWebTransportStream {
     /// # Errors
     ///
     /// It may return `InvalidStreamId` if a stream does not exist anymore.
-    pub fn stream_close_send(&self) -> Res<()> {
+    pub fn stream_close_send(&self, now: Instant) -> Res<()> {
         qdebug!("[{self}] Set new response");
-        self.stream_handler.stream_close_send()
+        self.stream_handler.stream_close_send(now)
     }
 }
 
@@ -217,16 +229,9 @@ impl Deref for Http3OrWebTransportStream {
     }
 }
 
-impl DerefMut for Http3OrWebTransportStream {
-    fn deref_mut(&mut self) -> &mut StreamHandler {
-        &mut self.stream_handler
-    }
-}
-
 impl std::hash::Hash for Http3OrWebTransportStream {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.stream_handler.hash(state);
-        _ = state.finish();
     }
 }
 
@@ -238,190 +243,7 @@ impl PartialEq for Http3OrWebTransportStream {
 
 impl Eq for Http3OrWebTransportStream {}
 
-#[derive(Debug, Clone)]
-pub struct WebTransportRequest {
-    stream_handler: StreamHandler,
-}
-
-impl Display for WebTransportRequest {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "WebTransport session {}", self.stream_handler)
-    }
-}
-
-impl WebTransportRequest {
-    pub(crate) const fn new(
-        conn: ConnectionRef,
-        handler: Rc<RefCell<Http3ServerHandler>>,
-        stream_id: StreamId,
-    ) -> Self {
-        Self {
-            stream_handler: StreamHandler {
-                conn,
-                handler,
-                stream_info: Http3StreamInfo::new(stream_id, Http3StreamType::Http),
-            },
-        }
-    }
-
-    #[must_use]
-    pub fn state(&self) -> Http3State {
-        self.stream_handler.handler.borrow().state()
-    }
-
-    /// Respond to a `WebTransport` session request.
-    ///
-    /// # Errors
-    ///
-    /// It may return `InvalidStreamId` if a stream does not exist anymore.
-    pub fn response(&self, accept: &WebTransportSessionAcceptAction) -> Res<()> {
-        qdebug!("[{self}] Set a response for a WebTransport session");
-        self.stream_handler
-            .handler
-            .borrow_mut()
-            .webtransport_session_accept(
-                &mut self.stream_handler.conn.borrow_mut(),
-                self.stream_handler.stream_info.stream_id(),
-                accept,
-            )
-    }
-
-    /// # Errors
-    ///
-    /// It may return `InvalidStreamId` if a stream does not exist anymore.
-    /// Also return an error if the stream was closed on the transport layer,
-    /// but that information is not yet consumed on the  http/3 layer.
-    pub fn close_session(&self, error: u32, message: &str) -> Res<()> {
-        self.stream_handler
-            .handler
-            .borrow_mut()
-            .webtransport_close_session(
-                &mut self.stream_handler.conn.borrow_mut(),
-                self.stream_handler.stream_info.stream_id(),
-                error,
-                message,
-            )
-    }
-
-    #[must_use]
-    pub const fn stream_id(&self) -> StreamId {
-        self.stream_handler.stream_id()
-    }
-
-    /// Close sending side.
-    ///
-    /// # Errors
-    ///
-    /// It may return `InvalidStreamId` if a stream does not exist anymore.
-    pub fn create_stream(&self, stream_type: StreamType) -> Res<Http3OrWebTransportStream> {
-        let session_id = self.stream_handler.stream_id();
-        let id = self
-            .stream_handler
-            .handler
-            .borrow_mut()
-            .webtransport_create_stream(
-                &mut self.stream_handler.conn.borrow_mut(),
-                session_id,
-                stream_type,
-            )?;
-
-        Ok(Http3OrWebTransportStream::new(
-            self.stream_handler.conn.clone(),
-            Rc::clone(&self.stream_handler.handler),
-            Http3StreamInfo::new(id, Http3StreamType::WebTransport(session_id)),
-        ))
-    }
-
-    /// Send `WebTransport` datagram.
-    ///
-    /// # Errors
-    ///
-    /// It may return `InvalidStreamId` if a stream does not exist anymore.
-    /// The function returns `TooMuchData` if the supply buffer is bigger than
-    /// the allowed remote datagram size.
-    pub fn send_datagram<I: Into<DatagramTracking>>(&self, buf: &[u8], id: I) -> Res<()> {
-        let session_id = self.stream_handler.stream_id();
-        self.stream_handler
-            .handler
-            .borrow_mut()
-            .webtransport_send_datagram(
-                &mut self.stream_handler.conn.borrow_mut(),
-                session_id,
-                buf,
-                id,
-            )
-    }
-
-    #[must_use]
-    pub fn remote_datagram_size(&self) -> u64 {
-        self.stream_handler.conn.borrow().remote_datagram_size()
-    }
-
-    /// Returns the current max size of a datagram that can fit into a packet.
-    /// The value will change over time depending on the encoded size of the
-    /// packet number, ack frames, etc.
-    ///
-    /// # Errors
-    ///
-    /// The function returns `NotAvailable` if datagrams are not enabled.
-    ///
-    /// # Panics
-    ///
-    /// This cannot panic. The max varint length is 8.
-    pub fn max_datagram_size(&self) -> Res<u64> {
-        let max_size = self.stream_handler.conn.borrow().max_datagram_size()?;
-        Ok(max_size
-            - u64::try_from(Encoder::varint_len(
-                self.stream_handler.stream_id().as_u64(),
-            ))
-            .map_err(|_| Error::Internal)?)
-    }
-}
-
-impl Deref for WebTransportRequest {
-    type Target = StreamHandler;
-    fn deref(&self) -> &Self::Target {
-        &self.stream_handler
-    }
-}
-
-impl DerefMut for WebTransportRequest {
-    fn deref_mut(&mut self) -> &mut StreamHandler {
-        &mut self.stream_handler
-    }
-}
-
-impl std::hash::Hash for WebTransportRequest {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.stream_handler.hash(state);
-        _ = state.finish();
-    }
-}
-
-impl PartialEq for WebTransportRequest {
-    fn eq(&self, other: &Self) -> bool {
-        self.stream_handler == other.stream_handler
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum WebTransportServerEvent {
-    NewSession {
-        session: WebTransportRequest,
-        headers: Vec<Header>,
-    },
-    SessionClosed {
-        session: WebTransportRequest,
-        reason: SessionCloseReason,
-        headers: Option<Vec<Header>>,
-    },
-    NewStream(Http3OrWebTransportStream),
-    Datagram {
-        session: WebTransportRequest,
-        datagram: Vec<u8>,
-    },
-}
-
+/// Server events for one or more connections.
 #[derive(Debug, Clone)]
 pub enum Http3ServerEvent {
     /// Headers are ready.
@@ -456,7 +278,8 @@ pub enum Http3ServerEvent {
         stream_id: StreamId,
         priority: Priority,
     },
-    WebTransport(WebTransportServerEvent),
+    WebTransport(crate::webtransport::ServerEvent),
+    ConnectUdp(crate::connect_udp::ServerEvent),
 }
 
 #[derive(Debug, Default, Clone)]
@@ -465,12 +288,12 @@ pub struct Http3ServerEvents {
 }
 
 impl Http3ServerEvents {
-    fn insert(&self, event: Http3ServerEvent) {
+    pub(crate) fn insert(&self, event: Http3ServerEvent) {
         self.events.borrow_mut().push_back(event);
     }
 
     /// Take all events
-    pub fn events(&self) -> impl Iterator<Item = Http3ServerEvent> {
+    pub fn events(&self) -> impl Iterator<Item = Http3ServerEvent> + use<> {
         self.events.replace(VecDeque::new()).into_iter()
     }
 
@@ -561,42 +384,5 @@ impl Http3ServerEvents {
             stream_id,
             priority,
         });
-    }
-
-    pub(crate) fn webtransport_new_session(
-        &self,
-        session: WebTransportRequest,
-        headers: Vec<Header>,
-    ) {
-        self.insert(Http3ServerEvent::WebTransport(
-            WebTransportServerEvent::NewSession { session, headers },
-        ));
-    }
-
-    pub(crate) fn webtransport_session_closed(
-        &self,
-        session: WebTransportRequest,
-        reason: SessionCloseReason,
-        headers: Option<Vec<Header>>,
-    ) {
-        self.insert(Http3ServerEvent::WebTransport(
-            WebTransportServerEvent::SessionClosed {
-                session,
-                reason,
-                headers,
-            },
-        ));
-    }
-
-    pub(crate) fn webtransport_new_stream(&self, stream: Http3OrWebTransportStream) {
-        self.insert(Http3ServerEvent::WebTransport(
-            WebTransportServerEvent::NewStream(stream),
-        ));
-    }
-
-    pub(crate) fn webtransport_datagram(&self, session: WebTransportRequest, datagram: Vec<u8>) {
-        self.insert(Http3ServerEvent::WebTransport(
-            WebTransportServerEvent::Datagram { session, datagram },
-        ));
     }
 }

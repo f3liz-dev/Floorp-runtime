@@ -1,5 +1,3 @@
-/* -*- Mode: indent-tabs-mode: nil; js-indent-level: 2 -*- */
-/* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
 const { ProfilerTestUtils } = ChromeUtils.importESModule(
@@ -74,7 +72,7 @@ let getExtension = () => {
               });
             }
             break;
-          case "test profile as array buffer":
+          case "test profile as array buffer": {
             let arrayBuffer =
               await browser.geckoProfiler.getProfileAsArrayBuffer();
             browser.test.assertTrue(
@@ -101,6 +99,7 @@ let getExtension = () => {
             );
             browser.test.sendMessage("tested profile as array buffer");
             break;
+          }
           case "remove runningListener":
             browser.geckoProfiler.onRunning.removeListener(runningListener);
             browser.test.sendMessage("removed runningListener");

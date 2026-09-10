@@ -1,6 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -55,6 +53,7 @@ class OutOfLineCallPostWriteElementBarrier;
 class CodeGenerator final : public CodeGeneratorSpecific {
   // Warp snapshot. This is nullptr for Wasm compilations.
   const WarpSnapshot* snapshot_ = nullptr;
+  IonScriptCounts* counts_ = nullptr;
 
   [[nodiscard]] bool generateBody();
 
@@ -98,9 +97,11 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                                   size_t trapExitLayoutNumWords,
                                   wasm::FuncOffsets* offsets,
                                   wasm::StackMaps* stackMaps,
-                                  wasm::Decoder* decoder,
-                                  jit::IonPerfSpewer* spewer);
+                                  wasm::Decoder* decoder);
+  [[nodiscard]] bool generateBlock(LBlock* current, size_t blockNumber,
+                                   IonScriptCounts* counts, bool compilingWasm);
 
+  [[nodiscard]] bool generateOutOfLineBlocks();
   [[nodiscard]] bool link(JSContext* cx);
 
   void emitOOLTestObject(Register objreg, Label* ifTruthy, Label* ifFalsy,
@@ -140,14 +141,6 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                              Register allocSite, Register output,
                              const wasm::TrapSiteDesc& trapSiteDesc);
 
-#ifdef ENABLE_WASM_JSPI
-  void callWasmUpdateSuspenderState(wasm::UpdateSuspenderStateAction kind,
-                                    Register suspender, Register temp);
-  // Stack switching trampoline requires two arguments (suspender and data) to
-  // be passed. The function prepares stack and registers according Wasm ABI.
-  void prepareWasmStackSwitchTrampolineCall(Register suspender, Register data);
-#endif
-
   void setCompilationTime(mozilla::TimeDuration duration) {
     compileTime_ = duration;
   }
@@ -169,6 +162,14 @@ class CodeGenerator final : public CodeGeneratorSpecific {
   void visitPostWriteBarrierCommon(LPostBarrierType* lir, OutOfLineCode* ool);
   template <class LPostBarrierType>
   void visitPostWriteBarrierCommonV(LPostBarrierType* lir, OutOfLineCode* ool);
+  void visitLoadSlotByIteratorIndexCommon(Register object,
+                                          Register indexScratch,
+                                          Register kindScratch,
+                                          ValueOperand result);
+  void visitStoreSlotByIteratorIndexCommon(Register object,
+                                           Register indexScratch,
+                                           Register kindScratch,
+                                           ValueOperand value);
 
   void emitCallInvokeFunction(LInstruction* call, Register callereg,
                               bool isConstructing, bool ignoresReturnValue,
@@ -177,9 +178,13 @@ class CodeGenerator final : public CodeGeneratorSpecific {
   void emitApplyGeneric(T* apply);
   template <typename T>
   void emitCallInvokeFunction(T* apply);
-  void emitAllocateSpaceForApply(Register argcreg, Register scratch);
+  template <typename T>
+  void emitAllocateSpaceForApply(T* apply, Register calleeReg, Register argcreg,
+                                 Register scratch);
+  template <typename T>
   void emitAllocateSpaceForConstructAndPushNewTarget(
-      Register argcreg, Register newTargetAndScratch);
+      T* apply, Register calleeReg, Register argcreg,
+      Register newTargetAndScratch);
   void emitCopyValuesForApply(Register argvSrcBase, Register argvIndex,
                               Register copyreg, size_t argvSrcOffset,
                               size_t argvDstOffset);
@@ -224,6 +229,12 @@ class CodeGenerator final : public CodeGeneratorSpecific {
   void emitMaybeAtomizeSlot(LInstruction* ins, Register stringReg,
                             Address slotAddr, TypedOrValueRegister dest);
 
+  void emitWeakMapLookupObject(Register weakMap, Register obj,
+                               Register hashTable, Register hashCode,
+                               Register scratch, Register scratch2,
+                               Register scratch3, Register scratch4,
+                               Register scratch5, Label* found, Label* missing);
+
   using RegisterOrInt32 = mozilla::Variant<Register, int32_t>;
 
   static RegisterOrInt32 ToRegisterOrInt32(const LAllocation* allocation);
@@ -257,6 +268,10 @@ class CodeGenerator final : public CodeGeneratorSpecific {
                   Register output);
 
   void emitInstanceOf(LInstruction* ins, Register protoReg);
+
+  void emitIteratorHasIndicesAndBranch(Register iterator, Register object,
+                                       Register temp, Register temp2,
+                                       Label* ifFalse);
 
 #ifdef DEBUG
   void emitAssertResultV(const ValueOperand output, const MDefinition* mir);
@@ -410,8 +425,6 @@ class CodeGenerator final : public CodeGeneratorSpecific {
 
   // Script counts created during code generation.
   IonScriptCounts* scriptCounts_;
-
-  IonPerfSpewer perfSpewer_;
 
   // Total Ion compilation time.
   mozilla::TimeDuration compileTime_;

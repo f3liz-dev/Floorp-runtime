@@ -1,11 +1,9 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "CanvasUtils.h"
 
-#include <stdarg.h>
 #include <stdlib.h>
 
 #include "WebGL2Context.h"
@@ -17,6 +15,7 @@
 #include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/StaticPrefs_webgl.h"
 #include "mozilla/dom/BrowserChild.h"
+#include "mozilla/dom/ContentList.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/HTMLCanvasElement.h"
 #include "mozilla/dom/OffscreenCanvas.h"
@@ -27,10 +26,10 @@
 #include "mozilla/dom/WorkerRunnable.h"
 #include "mozilla/gfx/Matrix.h"
 #include "mozilla/gfx/gfxVars.h"
+#include "mozilla/webgpu/Instance.h"
 #include "nsContentUtils.h"
 #include "nsGfxCIID.h"
 #include "nsICanvasRenderingContextInternal.h"
-#include "nsIHTMLCollection.h"
 #include "nsIObserverService.h"
 #include "nsIPermissionManager.h"
 #include "nsIPrincipal.h"
@@ -360,7 +359,7 @@ bool IsImageExtractionAllowed(dom::Document* aDocument, JSContext* aCx,
     nsPIDOMWindowOuter* win = aDocument->GetWindow();
     if (RefPtr<dom::BrowserChild> browserChild =
             dom::BrowserChild::GetFrom(win)) {
-      browserChild->SendShowCanvasPermissionPrompt(origin,
+      browserChild->SendShowCanvasPermissionPrompt(std::move(origin),
                                                    hidePermissionDoorhanger);
     }
   };
@@ -383,7 +382,17 @@ ImageExtraction ImageExtractionResult(dom::HTMLCanvasElement* aCanvasElement,
     return ImageExtraction::Placeholder;
   }
 
-  if (ownerDoc->ShouldResistFingerprinting(RFPTarget::CanvasRandomization)) {
+  if (ownerDoc->ShouldResistFingerprinting(
+          RFPTarget::EfficientCanvasRandomization) &&
+      GetCanvasExtractDataPermission(aPrincipal) !=
+          nsIPermissionManager::ALLOW_ACTION) {
+    return ImageExtraction::EfficientRandomize;
+  }
+
+  if ((ownerDoc->ShouldResistFingerprinting(RFPTarget::CanvasRandomization) ||
+       ownerDoc->ShouldResistFingerprinting(RFPTarget::WebGLRandomization)) &&
+      GetCanvasExtractDataPermission(aPrincipal) !=
+          nsIPermissionManager::ALLOW_ACTION) {
     return ImageExtraction::Randomize;
   }
 
@@ -459,13 +468,14 @@ bool IsImageExtractionAllowed(dom::OffscreenCanvas* aOffscreenCanvas,
 
     if (!XRE_IsContentProcess()) {
       MOZ_ASSERT_UNREACHABLE(
-          "Who's calling this from the parent process without a chrome window "
+          "Who's calling this from the parent process without a chrome "
+          "window "
           "(it would have been exempt from the RFP targets)?");
       return;
     }
 
     if (NS_IsMainThread()) {
-      nsCOMPtr<nsIGlobalObject> global = canvasRef->GetOwnerGlobal();
+      nsCOMPtr<nsIGlobalObject> global = canvasRef->GetRelevantGlobal();
       NS_ENSURE_TRUE_VOID(global);
 
       RefPtr<nsPIDOMWindowInner> window = global->GetAsInnerWindow();
@@ -536,12 +546,20 @@ ImageExtraction ImageExtractionResult(dom::OffscreenCanvas* aOffscreenCanvas,
     return ImageExtraction::Placeholder;
   }
 
+  if (GetCanvasExtractDataPermission(aPrincipal) ==
+      nsIPermissionManager::ALLOW_ACTION) {
+    return ImageExtraction::Unrestricted;
+  }
+
   if (aOffscreenCanvas->ShouldResistFingerprinting(
-          RFPTarget::CanvasRandomization)) {
-    if (GetCanvasExtractDataPermission(aPrincipal) ==
-        nsIPermissionManager::ALLOW_ACTION) {
-      return ImageExtraction::Unrestricted;
-    }
+          RFPTarget::EfficientCanvasRandomization)) {
+    return ImageExtraction::EfficientRandomize;
+  }
+
+  if (aOffscreenCanvas->ShouldResistFingerprinting(
+          RFPTarget::CanvasRandomization) ||
+      aOffscreenCanvas->ShouldResistFingerprinting(
+          RFPTarget::WebGLRandomization)) {
     return ImageExtraction::Randomize;
   }
 
@@ -567,7 +585,7 @@ bool GetCanvasContextType(const nsAString& str,
     }
   }
 
-  if (gfxVars::AllowWebGPU()) {
+  if (webgpu::Instance::PrefEnabled() && gfxVars::AllowWebGPU()) {
     if (str.EqualsLiteral("webgpu")) {
       *out_type = dom::CanvasContextType::WebGPU;
       return true;
@@ -583,11 +601,11 @@ bool GetCanvasContextType(const nsAString& str,
 }
 
 /**
- * This security check utility might be called from an source that never taints
- * others. For example, while painting a CanvasPattern, which is created from an
- * ImageBitmap, onto a canvas. In this case, the caller could set the CORSUsed
- * true in order to pass this check and leave the aPrincipal to be a nullptr
- * since the aPrincipal is not going to be used.
+ * This security check utility might be called from an source that never
+ * taints others. For example, while painting a CanvasPattern, which is
+ * created from an ImageBitmap, onto a canvas. In this case, the caller could
+ * set the CORSUsed true in order to pass this check and leave the aPrincipal
+ * to be a nullptr since the aPrincipal is not going to be used.
  */
 void DoDrawImageSecurityCheck(dom::HTMLCanvasElement* aCanvasElement,
                               nsIPrincipal* aPrincipal, bool forceWriteOnly,
@@ -645,11 +663,11 @@ void DoDrawImageSecurityCheck(dom::HTMLCanvasElement* aCanvasElement,
 }
 
 /**
- * This security check utility might be called from an source that never taints
- * others. For example, while painting a CanvasPattern, which is created from an
- * ImageBitmap, onto a canvas. In this case, the caller could set the aCORSUsed
- * true in order to pass this check and leave the aPrincipal to be a nullptr
- * since the aPrincipal is not going to be used.
+ * This security check utility might be called from an source that never
+ * taints others. For example, while painting a CanvasPattern, which is
+ * created from an ImageBitmap, onto a canvas. In this case, the caller could
+ * set the aCORSUsed true in order to pass this check and leave the aPrincipal
+ * to be a nullptr since the aPrincipal is not going to be used.
  */
 void DoDrawImageSecurityCheck(dom::OffscreenCanvas* aOffscreenCanvas,
                               nsIPrincipal* aPrincipal, bool aForceWriteOnly,
@@ -676,7 +694,7 @@ void DoDrawImageSecurityCheck(dom::OffscreenCanvas* aOffscreenCanvas,
   }
 
   // If we are on a worker thread, we might not have any principals at all.
-  nsIGlobalObject* global = aOffscreenCanvas->GetOwnerGlobal();
+  nsIGlobalObject* global = aOffscreenCanvas->GetRelevantGlobal();
   nsIPrincipal* canvasPrincipal = global ? global->PrincipalOrNull() : nullptr;
   if (!aPrincipal || !canvasPrincipal) {
     aOffscreenCanvas->SetWriteOnly();

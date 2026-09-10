@@ -2,8 +2,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* eslint-env mozilla/frame-script */
-
 const gfxFrameScript = {
   domUtils: null,
 
@@ -23,7 +21,7 @@ const gfxFrameScript = {
       triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal(),
     };
     webNav.loadURI(
-      Services.io.newURI("chrome://gfxsanity/content/sanitytest.html"),
+      Services.io.newURI("resource://gfxsanity/sanitytest.html"),
       loadURIOptions
     );
   },

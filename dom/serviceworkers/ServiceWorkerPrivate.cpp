@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,7 +7,6 @@
 #include <utility>
 
 #include "MainThreadUtils.h"
-#include "ServiceWorkerCloneData.h"
 #include "ServiceWorkerManager.h"
 #include "ServiceWorkerRegistrationInfo.h"
 #include "ServiceWorkerUtils.h"
@@ -25,13 +22,11 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/RemoteLazyInputStreamStorage.h"
 #include "mozilla/Result.h"
-#include "mozilla/ResultExtensions.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/StoragePrincipalHelper.h"
-#include "mozilla/Unused.h"
 #include "mozilla/dom/Client.h"
 #include "mozilla/dom/ClientIPCTypes.h"
 #include "mozilla/dom/ClientManager.h"
@@ -64,6 +59,7 @@
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/ipc/IPCStreamUtils.h"
 #include "mozilla/ipc/PBackgroundChild.h"
+#include "mozilla/ipc/PBackgroundSharedTypes.h"
 #include "mozilla/ipc/URIUtils.h"
 #include "mozilla/net/CookieJarSettings.h"
 #include "mozilla/net/CookieService.h"
@@ -314,9 +310,6 @@ Result<IPCInternalRequest, nsresult> GetIPCInternalRequest(
   nsCOMPtr<nsICacheInfoChannel> cacheInfoChannel =
       do_QueryInterface(underlyingChannel);
 
-  nsAutoCString spec;
-  MOZ_TRY(uriNoFragment->GetSpec(spec));
-
   nsAutoCString fragment;
   MOZ_TRY(uri->GetRef(fragment));
 
@@ -354,7 +347,7 @@ Result<IPCInternalRequest, nsresult> GetIPCInternalRequest(
   nsCOMPtr<nsIReferrerInfo> referrerInfo = httpChannel->GetReferrerInfo();
   if (referrerInfo) {
     referrerPolicy = referrerInfo->ReferrerPolicy();
-    Unused << referrerInfo->GetComputedReferrerSpec(referrer);
+    (void)referrerInfo->GetComputedReferrerSpec(referrer);
   }
 
   uint32_t loadFlags;
@@ -430,9 +423,9 @@ Result<IPCInternalRequest, nsresult> GetIPCInternalRequest(
   // Note: all the arguments are copied rather than moved, which would be more
   // efficient, because there's no move-friendly constructor generated.
   return IPCInternalRequest(
-      method, {spec}, ipcHeadersGuard, ipcHeaders, Nothing(), -1,
-      alternativeDataType, contentPolicyType, internalPriority, referrer,
-      referrerPolicy, environmentReferrerPolicy, requestMode,
+      method, {WrapNotNull(uriNoFragment.get())}, ipcHeadersGuard, ipcHeaders,
+      Nothing(), -1, alternativeDataType, contentPolicyType, internalPriority,
+      referrer, referrerPolicy, environmentReferrerPolicy, requestMode,
       requestCredentials, cacheMode, requestRedirect, requestPriority,
       integrity, false, fragment, principalInfo, interceptionPrincipalInfo,
       contentPolicyType, redirectChain, isThirdPartyChannel, embedderPolicy);
@@ -510,6 +503,20 @@ ServiceWorkerPrivate::~ServiceWorkerPrivate() {
 nsresult ServiceWorkerPrivate::Initialize() {
   AssertIsOnMainThread();
   MOZ_ASSERT(mInfo);
+
+  // Initialize() is only ever called from our constructor and there is no retry
+  // mechanism, so on failure this ServiceWorkerPrivate can never become usable;
+  // in particular mRemoteWorkerData would stay default-constructed, and its
+  // OptionalServiceWorkerData union would fatally assert the first time
+  // RefreshRemoteWorkerData() touched it. Neutralize ourselves by clearing
+  // mInfo, which is the same state NoteDeadServiceWorkerInfo() establishes and
+  // which SpawnWorkerIfNeeded() already refuses to act on, so that every
+  // operation fails cleanly instead. For fetch that means the interception is
+  // reset and the request goes to the network.
+  //
+  // Note that we run from within ServiceWorkerInfo's constructor, so mInfo
+  // points at a not-yet-fully-constructed object; this only clears the pointer.
+  auto neutralizeOnFailure = MakeScopeExit([&] { mInfo = nullptr; });
 
   nsCOMPtr<nsIPrincipal> principal = mInfo->Principal();
 
@@ -645,8 +652,7 @@ nsresult ServiceWorkerPrivate::Initialize() {
       }
     }
   } else {
-    net::CookieJarSettings::Cast(cookieJarSettings)
-        ->SetPartitionKey(uri, false);
+    net::CookieJarSettings::Cast(cookieJarSettings)->SetPartitionKey(uri);
     firstPartyURI = uri;
 
     // The service worker is for a first-party context, we can use the uri of
@@ -722,7 +728,8 @@ nsresult ServiceWorkerPrivate::Initialize() {
   }
 
   auto remoteType = RemoteWorkerManager::GetRemoteType(
-      principal, WorkerKind::WorkerKindService);
+      principal, WorkerKind::WorkerKindService,
+      SharedWebRemoteType(principal->OriginAttributesRef()));
   if (NS_WARN_IF(remoteType.isErr())) {
     return remoteType.unwrapErr();
   }
@@ -745,9 +752,24 @@ nsresult ServiceWorkerPrivate::Initialize() {
   mClientInfo->SetURL(mInfo->ScriptSpec());
   mClientInfo->SetFrameType(FrameType::None);
 
+  WorkerOptions workerOptions;
+  workerOptions.mCredentials = RequestCredentials::Omit;
+  workerOptions.mType = mInfo->Type();
+
+  // Build a copy of the ClientInfo for the IPC message with ipAddressSpace set
+  // for LNA checks. We must NOT modify mClientInfo itself because it is used
+  // for ServiceWorker lookups (GetServiceWorkerByClientInfo) via operator==,
+  // which compares all fields including policyContainerArgs. Modifying
+  // mClientInfo would break those lookups and prevent SWs from spawning.
+  ClientInfo ipcClientInfo = mClientInfo.ref();
+  mozilla::ipc::PolicyContainerArgs policyContainerArgs;
+  policyContainerArgs.ipAddressSpace() =
+      static_cast<nsILoadInfo::IPAddressSpace>(regInfo->GetIPAddressSpace());
+  ipcClientInfo.SetPolicyContainerArgs(policyContainerArgs);
+
   mRemoteWorkerData = RemoteWorkerData(
       NS_ConvertUTF8toUTF16(mInfo->ScriptSpec()), baseScriptURL, baseScriptURL,
-      WorkerOptions(),
+      workerOptions,
       /* loading principal */ principalInfo, principalInfo,
       partitionedPrincipalInfo,
       /* useRegularPrincipal */ true,
@@ -757,7 +779,7 @@ nsresult ServiceWorkerPrivate::Initialize() {
 
       cjsData, domain,
       /* isSecureContext */ true,
-      /* clientInfo*/ Some(mClientInfo.ref().ToIPC()),
+      /* clientInfo*/ Some(ipcClientInfo.ToIPC()),
 
       // The RemoteWorkerData CTOR doesn't allow to set the referrerInfo via
       // already_AddRefed<>. Let's set it to null.
@@ -768,24 +790,51 @@ nsresult ServiceWorkerPrivate::Initialize() {
       // Origin trials are associated to a window, so it doesn't make sense on
       // service workers.
       OriginTrials(), std::move(serviceWorkerData), regInfo->AgentClusterId(),
-      remoteType.unwrap());
+      remoteType.unwrap(),
+      // Bug 2040904. Add support for language override for service workers.
+      ""_ns, nsTArray<nsString>(),
+      // Bug 2039330. Add support for timezone override for service workers.
+      u""_ns);
 
-  mRemoteWorkerData.referrerInfo() = MakeAndAddRef<ReferrerInfo>();
+  mRemoteWorkerData.referrerInfo() = MakeAndAddRef<ReferrerInfo>(nullptr);
 
   // This fills in the rest of mRemoteWorkerData.serviceWorkerData().
   RefreshRemoteWorkerData(regInfo);
 
+  neutralizeOnFailure.release();
   return NS_OK;
 }
 
 void ServiceWorkerPrivate::RegenerateClientInfo() {
   // inductively, this object can only still be alive after Initialize() if the
-  // mClientInfo was correctly initialized.
+  // mClientInfo was correctly initialized; a failed Initialize() clears mInfo,
+  // which stops us from ever spawning a worker and therefore from getting here.
   MOZ_DIAGNOSTIC_ASSERT(mClientInfo.isSome());
+
+  // Preserve the ipAddressSpace from the current RemoteWorkerData clientInfo
+  // before re-creating mClientInfo, so that LNA checks continue to work on
+  // subsequent spawns. mClientInfo itself must not carry policyContainerArgs
+  // (see Initialize() comment), so we apply it only to the IPC copy.
+  nsILoadInfo::IPAddressSpace ipAddressSpace = nsILoadInfo::Unknown;
+  if (mRemoteWorkerData.clientInfo().isSome()) {
+    ClientInfo current(mRemoteWorkerData.clientInfo().ref());
+    if (const auto& args = current.GetPolicyContainerArgs()) {
+      ipAddressSpace = args->ipAddressSpace();
+    }
+  }
 
   mClientInfo = ClientManager::CreateInfo(
       ClientType::Serviceworker, mClientInfo->GetPrincipal().unwrap().get());
-  mRemoteWorkerData.clientInfo().ref() = mClientInfo.ref().ToIPC();
+
+  if (ipAddressSpace != nsILoadInfo::Unknown) {
+    ClientInfo ipcClientInfo = mClientInfo.ref();
+    mozilla::ipc::PolicyContainerArgs policyContainerArgs;
+    policyContainerArgs.ipAddressSpace() = ipAddressSpace;
+    ipcClientInfo.SetPolicyContainerArgs(policyContainerArgs);
+    mRemoteWorkerData.clientInfo().ref() = ipcClientInfo.ToIPC();
+  } else {
+    mRemoteWorkerData.clientInfo().ref() = mClientInfo.ref().ToIPC();
+  }
 }
 
 nsresult ServiceWorkerPrivate::CheckScriptEvaluation(
@@ -885,11 +934,10 @@ nsresult ServiceWorkerPrivate::CheckScriptEvaluation(
 }
 
 nsresult ServiceWorkerPrivate::SendMessageEvent(
-    RefPtr<ServiceWorkerCloneData>&& aData,
+    ipc::StructuredCloneData* aData,
     const ServiceWorkerLifetimeExtension& aLifetimeExtension,
     const PostMessageSource& aSource) {
   AssertIsOnMainThread();
-  MOZ_ASSERT(aData);
 
   auto scopeExit = MakeScopeExit([&] { Shutdown(); });
 
@@ -901,9 +949,7 @@ nsresult ServiceWorkerPrivate::SendMessageEvent(
 
   ServiceWorkerMessageEventOpArgs args;
   args.source() = aSource;
-  if (!aData->BuildClonedMessageData(args.clonedData())) {
-    return NS_ERROR_DOM_DATA_CLONE_ERR;
-  }
+  args.clonedData() = aData;
 
   scopeExit.release();
 
@@ -939,8 +985,14 @@ nsresult ServiceWorkerPrivate::SendCookieChangeEvent(
     const net::CookieStruct& aCookie, bool aCookieDeleted,
     RefPtr<ServiceWorkerRegistrationInfo> aRegistration) {
   AssertIsOnMainThread();
-  MOZ_ASSERT(mInfo);
   MOZ_ASSERT(aRegistration);
+
+  // mInfo is cleared both when our ServiceWorkerInfo dies and when Initialize()
+  // failed, and unlike the ops below we dereference it before delegating to
+  // SpawnWorkerIfNeeded(), which is where that is normally caught.
+  if (NS_WARN_IF(!mInfo)) {
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
+  }
 
   ServiceWorkerCookieChangeEventOpArgs args;
   args.cookie() = aCookie;
@@ -983,8 +1035,14 @@ nsresult ServiceWorkerPrivate::SendPushEvent(
     const nsAString& aMessageId, const Maybe<nsTArray<uint8_t>>& aData,
     RefPtr<ServiceWorkerRegistrationInfo> aRegistration) {
   AssertIsOnMainThread();
-  MOZ_ASSERT(mInfo);
   MOZ_ASSERT(aRegistration);
+
+  // mInfo is cleared both when our ServiceWorkerInfo dies and when Initialize()
+  // failed, and unlike the ops below we dereference it before delegating to
+  // SpawnWorkerIfNeeded(), which is where that is normally caught.
+  if (NS_WARN_IF(!mInfo)) {
+    return NS_ERROR_DOM_INVALID_STATE_ERR;
+  }
 
   ServiceWorkerPushEventOpArgs args;
   args.messageId() = nsString(aMessageId);
@@ -1105,8 +1163,8 @@ nsresult ServiceWorkerPrivate::SendFetchEvent(
     nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
 
     // We'll check for a null registration below rather than an error code here.
-    Unused << swm->GetClientRegistration(loadInfo->GetClientInfo().ref(),
-                                         getter_AddRefs(registration));
+    (void)swm->GetClientRegistration(loadInfo->GetClientInfo().ref(),
+                                     getter_AddRefs(registration));
   }
 
   // Its possible the registration is removed between starting the interception
@@ -1144,8 +1202,7 @@ nsresult ServiceWorkerPrivate::SendFetchEvent(
     Shutdown();
   });
 
-  IPCInternalRequest request;
-  MOZ_TRY_VAR(request, GetIPCInternalRequest(aChannel));
+  IPCInternalRequest request = MOZ_TRY(GetIPCInternalRequest(aChannel));
 
   scopeExit.release();
 
@@ -1214,7 +1271,7 @@ nsresult ServiceWorkerPrivate::SendFetchEventInternal(
       ->Then(GetCurrentSerialEventTarget(), __func__,
              [holder = std::move(holder)](
                  const GenericPromise::ResolveOrRejectValue& aResult) {
-               Unused << NS_WARN_IF(aResult.IsReject());
+               (void)NS_WARN_IF(aResult.IsReject());
              });
 
   return NS_OK;
@@ -1395,7 +1452,7 @@ void ServiceWorkerPrivate::UpdateState(ServiceWorkerState aState) {
   }
 
   for (auto& event : mPendingFunctionalEvents) {
-    Unused << NS_WARN_IF(NS_FAILED(event->Send()));
+    (void)NS_WARN_IF(NS_FAILED(event->Send()));
   }
 
   mPendingFunctionalEvents.Clear();
@@ -1570,6 +1627,8 @@ void ServiceWorkerPrivate::TerminateWorkerCallback(nsITimer* aTimer) {
   // mInfo must be non-null at this point because NoteDeadServiceWorkerInfo
   // which zeroes it calls TerminateWorker which cancels our timer which will
   // ensure we don't get invoked even if the nsTimerEvent is in the event queue.
+  // The other place which zeroes mInfo, a failed Initialize(), stops us from
+  // ever spawning a worker and therefore from ever arming this timer.
   ServiceWorkerManager::LocalizeAndReportToAllClients(
       mInfo->Scope(), "ServiceWorkerGraceTimeoutTermination",
       nsTArray<nsString>{NS_ConvertUTF8toUTF16(mInfo->Scope())});
@@ -1961,7 +2020,7 @@ RefPtr<GenericNonExclusivePromise> ServiceWorkerPrivate::ShutdownInternal(
   RefPtr<GenericNonExclusivePromise::Private> promise =
       new GenericNonExclusivePromise::Private(__func__);
 
-  Unused << ExecServiceWorkerOp(
+  (void)ExecServiceWorkerOp(
       ServiceWorkerTerminateWorkerOpArgs(aShutdownStateId),
       // It doesn't make sense to extend the lifetime in this case.  This will
       // also ensure that we don't try and spawn the ServiceWorker, but as our

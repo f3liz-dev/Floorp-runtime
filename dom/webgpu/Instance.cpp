@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -30,13 +29,9 @@ namespace mozilla::webgpu {
 
 GPU_IMPL_CYCLE_COLLECTION(WGSLLanguageFeatures, mParent)
 
-GPU_IMPL_CYCLE_COLLECTION(Instance, mOwner, mWgslLanguageFeatures)
+GPU_IMPL_CYCLE_COLLECTION(Instance, mGlobal, mWgslLanguageFeatures)
 
-static inline nsDependentCString ToCString(const std::string_view s) {
-  return {s.data(), s.length()};
-}
-
-/* static */ bool Instance::PrefEnabled(JSContext* aCx, JSObject* aObj) {
+/* static */ bool Instance::PrefEnabled() {
   if (!StaticPrefs::dom_webgpu_enabled()) {
     return false;
   }
@@ -59,13 +54,13 @@ static inline nsDependentCString ToCString(const std::string_view s) {
 }
 
 /*static*/
-already_AddRefed<Instance> Instance::Create(nsIGlobalObject* aOwner) {
-  RefPtr<Instance> result = new Instance(aOwner);
+already_AddRefed<Instance> Instance::Create(nsIGlobalObject* aGlobal) {
+  RefPtr<Instance> result = new Instance(aGlobal);
   return result.forget();
 }
 
-Instance::Instance(nsIGlobalObject* aOwner)
-    : mOwner(aOwner), mWgslLanguageFeatures(new WGSLLanguageFeatures(this)) {
+Instance::Instance(nsIGlobalObject* aGlobal)
+    : mGlobal(aGlobal), mWgslLanguageFeatures(new WGSLLanguageFeatures(this)) {
   // Populate `mWgslLanguageFeatures`.
   IgnoredErrorResult rv;
   nsCString wgslFeature;
@@ -93,10 +88,6 @@ Instance::Instance(nsIGlobalObject* aOwner)
   }
 }
 
-Instance::~Instance() { Cleanup(); }
-
-void Instance::Cleanup() {}
-
 JSObject* Instance::WrapObject(JSContext* cx,
                                JS::Handle<JSObject*> givenProto) {
   return dom::GPU_Binding::Wrap(cx, this, givenProto);
@@ -104,34 +95,44 @@ JSObject* Instance::WrapObject(JSContext* cx,
 
 already_AddRefed<dom::Promise> Instance::RequestAdapter(
     const dom::GPURequestAdapterOptions& aOptions, ErrorResult& aRv) {
-  RefPtr<dom::Promise> promise = dom::Promise::Create(mOwner, aRv);
+  RefPtr<dom::Promise> promise = dom::Promise::Create(mGlobal, aRv);
   if (NS_WARN_IF(aRv.Failed())) {
     return nullptr;
+  }
+
+  if (NS_IsMainThread()) {
+    JSObject* obj = mGlobal->GetGlobalJSObject();
+    if (obj) {
+      dom::SetUseCounter(obj, eUseCounter_custom_WebgpuRequestAdapter);
+    }
+  } else {
+    dom::SetUseCounter(UseCounterWorker::Custom_WebgpuRequestAdapter);
   }
 
   // -
   // Check if we should allow the request.
 
   std::optional<std::string_view> rejectionMessage = {};
-  const auto rejectIf = [&rejectionMessage](bool condition,
-                                            const char* message) {
+  const auto rejectIf = [&rejectionMessage, &promise, this](
+                            bool condition, const char* message) {
     if (condition && !rejectionMessage.has_value()) {
       rejectionMessage = message;
+      promise->MaybeResolve(JS::NullValue());
+      dom::AutoJSAPI api;
+      if (api.Init(mGlobal)) {
+        JS::WarnUTF8(api.cx(), "%s", rejectionMessage.value().data());
+      }
     }
   };
 
-#ifndef EARLY_BETA_OR_EARLIER
-  if (dom::WorkerPrivate* wp = dom::GetCurrentThreadWorkerPrivate()) {
-    rejectIf(wp->IsServiceWorker(),
-             "WebGPU in service workers is not yet available in Release or "
-             "late Beta builds; see "
-             "<https://bugzilla.mozilla.org/show_bug.cgi?id=1942431>.");
-  }
-#endif
   rejectIf(!gfx::gfxVars::AllowWebGPU(), "WebGPU is disabled by blocklist.");
   rejectIf(!StaticPrefs::dom_webgpu_enabled(),
            "WebGPU is disabled because the `dom.webgpu.enabled` pref. is set "
            "to `false`.");
+#ifndef HAVE_64BIT_BUILD
+  rejectIf(true, "WebGPU is only available on 64-bit architectures.");
+#endif
+
 #ifdef WIN32
 #  ifndef MOZ_DXCOMPILER
   rejectIf(true,
@@ -143,12 +144,12 @@ already_AddRefed<dom::Promise> Instance::RequestAdapter(
   // Check if WebGPU is blocked for this global's domain.
   {
     const auto prefLock = mozilla::StaticPrefs::dom_webgpu_blocked_domains();
-    rejectIf(nsContentUtils::IsURIInList(mOwner->GetBaseURI(), *prefLock),
-             "WebGPU is blocked for this domain by the `dom.webgpu.blocked-domains` pref.");
+    rejectIf(nsContentUtils::IsURIInList(mGlobal->GetBaseURI(), *prefLock),
+             "WebGPU is blocked for this domain by the "
+             "`dom.webgpu.blocked-domains` pref.");
   }
 
   if (rejectionMessage) {
-    promise->MaybeRejectWithNotSupportedError(ToCString(*rejectionMessage));
     return promise.forget();
   }
 
@@ -156,15 +157,14 @@ already_AddRefed<dom::Promise> Instance::RequestAdapter(
   // Make the request.
 
   auto* const canvasManager = gfx::CanvasManagerChild::Get();
-  if (!canvasManager) {
-    promise->MaybeRejectWithInvalidStateError(
-        "Failed to create CanvasManagerChild");
+  rejectIf(!canvasManager, "Failed to create CanvasManagerChild");
+  if (rejectionMessage) {
     return promise.forget();
   }
 
-  RefPtr<WebGPUChild> bridge = canvasManager->GetWebGPUChild();
-  if (!bridge) {
-    promise->MaybeRejectWithInvalidStateError("Failed to create WebGPUChild");
+  RefPtr<WebGPUChild> child = canvasManager->GetWebGPUChild();
+  rejectIf(!child, "Failed to create WebGPUChild");
+  if (rejectionMessage) {
     return promise.forget();
   }
 
@@ -172,7 +172,7 @@ already_AddRefed<dom::Promise> Instance::RequestAdapter(
     // Good! That's all we support.
   } else if (aOptions.mFeatureLevel.EqualsASCII("compatibility")) {
     dom::AutoJSAPI api;
-    if (api.Init(mOwner)) {
+    if (api.Init(mGlobal)) {
       JS::WarnUTF8(api.cx(),
                    "User requested a WebGPU adapter with `featureLevel: "
                    "\"compatibility\"`, which is not yet supported; returning "
@@ -183,7 +183,7 @@ already_AddRefed<dom::Promise> Instance::RequestAdapter(
   } else {
     NS_ConvertUTF16toUTF8 featureLevel(aOptions.mFeatureLevel);
     dom::AutoJSAPI api;
-    if (api.Init(mOwner)) {
+    if (api.Init(mGlobal)) {
       JS::WarnUTF8(api.cx(),
                    "expected one of `\"core\"` or `\"compatibility\"` for "
                    "`GPUAdapter.featureLevel`, got %s",
@@ -195,7 +195,7 @@ already_AddRefed<dom::Promise> Instance::RequestAdapter(
 
   if (aOptions.mXrCompatible) {
     dom::AutoJSAPI api;
-    if (api.Init(mOwner)) {
+    if (api.Init(mGlobal)) {
       JS::WarnUTF8(
           api.cx(),
           "User requested a WebGPU adapter with `xrCompatible: true`, "
@@ -208,18 +208,25 @@ already_AddRefed<dom::Promise> Instance::RequestAdapter(
 
   ffi::WGPUPowerPreference power_preference;
   if (aOptions.mPowerPreference.WasPassed()) {
-    power_preference = static_cast<ffi::WGPUPowerPreference>(
-        aOptions.mPowerPreference.Value());
+    switch (aOptions.mPowerPreference.Value()) {
+      case dom::GPUPowerPreference::Low_power:
+        power_preference = ffi::WGPUPowerPreference_LowPower;
+        break;
+      case dom::GPUPowerPreference::High_performance:
+        power_preference = ffi::WGPUPowerPreference_HighPerformance;
+        break;
+      default:
+        MOZ_CRASH("Unexpected `dom::GPUPowerPreference`");
+    }
   } else {
-    power_preference = ffi::WGPUPowerPreference_LowPower;
+    power_preference = ffi::WGPUPowerPreference_None;
   }
 
   RawId adapter_id = ffi::wgpu_client_request_adapter(
-      bridge->GetClient(), power_preference, aOptions.mForceFallbackAdapter);
+      child->GetClient(), power_preference, aOptions.mForceFallbackAdapter);
 
-  auto pending_promise = WebGPUChild::PendingRequestAdapterPromise{
-      RefPtr(promise), RefPtr(this), adapter_id};
-  bridge->mPendingRequestAdapterPromises.push_back(std::move(pending_promise));
+  child->EnqueueRequestAdapterPromise(
+      PendingRequestAdapterPromise{promise, this, adapter_id});
 
   return promise.forget();
 }

@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,6 +7,10 @@
 #include "mozilla/AppShutdown.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/gtest/MozHelpers.h"
+
+#ifdef XP_MACOSX
+#  include "gfxPlatformMac.h"
+#endif
 
 using namespace mozilla;
 using namespace mozilla::gtest;
@@ -68,6 +71,10 @@ void DoCreateTicketBeforeAppShutdownOnMain() {
   AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownTelemetry);
 
   NS_ShutdownXPCOM(nullptr);
+
+#  ifdef XP_MACOSX
+  gfxPlatformMac::WaitForFontRegistration();
+#  endif
 }
 
 void DoCreateTicketAfterAppShutdownOnMain() {
@@ -85,6 +92,10 @@ void DoCreateTicketAfterAppShutdownOnMain() {
   AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownTelemetry);
 
   NS_ShutdownXPCOM(nullptr);
+
+#  ifdef XP_MACOSX
+  gfxPlatformMac::WaitForFontRegistration();
+#  endif
 }
 
 void DoCreateTicketBeforeAppShutdownOffMain() {
@@ -143,6 +154,10 @@ void DoCreateTicketBeforeAppShutdownOffMain() {
   AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownTelemetry);
 
   NS_ShutdownXPCOM(nullptr);
+
+#  ifdef XP_MACOSX
+  gfxPlatformMac::WaitForFontRegistration();
+#  endif
 }
 
 void DoCreateTicketAfterAppShutdownOffMain() {
@@ -168,6 +183,10 @@ void DoCreateTicketAfterAppShutdownOffMain() {
   AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownTelemetry);
 
   NS_ShutdownXPCOM(nullptr);
+
+#  ifdef XP_MACOSX
+  gfxPlatformMac::WaitForFontRegistration();
+#  endif
 }
 
 void DoTwoTicketsWithSameNameBothBlockShutdown() {
@@ -192,7 +211,8 @@ void DoTwoTicketsWithSameNameBothBlockShutdown() {
   TimeStamp before = TimeStamp::Now();
   auto timerResult = NS_NewTimerWithCallback(
       [t = std::move(ticket2Holder)](nsITimer* aTimer) {},
-      waitBeforeDestroyingTicket, nsITimer::TYPE_ONE_SHOT, __func__);
+      waitBeforeDestroyingTicket, nsITimer::TYPE_ONE_SHOT,
+      "DoTwoTicketsWithSameNameBothBlockShutdown"_ns);
   ASSERT_TRUE(timerResult.isOk());
 
   AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownNetTeardown);
@@ -202,6 +222,11 @@ void DoTwoTicketsWithSameNameBothBlockShutdown() {
   AppShutdown::AdvanceShutdownPhase(ShutdownPhase::AppShutdownTelemetry);
 
   NS_ShutdownXPCOM(nullptr);
+
+#  ifdef XP_MACOSX
+  gfxPlatformMac::WaitForFontRegistration();
+#  endif
+
   TimeStamp after = TimeStamp::Now();
   EXPECT_GT((after - before).ToMilliseconds(),
             waitBeforeDestroyingTicket.ToMilliseconds());

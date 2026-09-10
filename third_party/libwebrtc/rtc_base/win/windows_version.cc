@@ -12,7 +12,8 @@
 
 #include <windows.h>
 
-#include <memory>
+#include <cstddef>
+#include <string>
 
 #include "rtc_base/checks.h"
 #include "rtc_base/string_utils.h"
@@ -22,6 +23,8 @@
 #endif
 
 #if !defined(WINUWP)
+
+namespace webrtc {
 
 namespace {
 
@@ -166,6 +169,8 @@ class RegKey {
 
 }  // namespace
 
+}  // namespace webrtc
+
 #endif  // !defined(WINUWP)
 
 namespace webrtc {
@@ -221,10 +226,17 @@ Version MajorMinorBuildToVersion(int major, int minor, int build) {
       return VERSION_WIN10_21H2;
     } else if (build < 22000) {
       return VERSION_SERVER_2022;
-    } else {
+    } else if (build < 22621) {
       return VERSION_WIN11;
+    } else if (build < 22631) {
+      return VERSION_WIN11_22H2;
+    } else if (build < 26100) {
+      return VERSION_WIN11_23H2;
+    } else {
+      return VERSION_WIN11_24H2;
     }
   } else if (major == 11) {
+    RTC_DCHECK_NOTREACHED();
     return VERSION_WIN11;
   } else if (major > 6) {
     RTC_DCHECK_NOTREACHED();

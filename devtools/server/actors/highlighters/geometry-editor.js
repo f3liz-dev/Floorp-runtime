@@ -99,10 +99,10 @@ var GeoProp = {
  * non-positioned itself, we just return null to let consumers know the node is
  * actually positioned relative to the viewport.
  *
- * @return {Object}
+ * @return {object}
  */
 function getOffsetParent(node) {
-  const win = node.ownerGlobal;
+  const win = node.documentGlobal;
 
   let offsetParent = node.offsetParent;
   if (offsetParent && getComputedStyle(offsetParent).position === "static") {
@@ -412,7 +412,7 @@ class GeometryEditorHighlighter extends AutoRefreshHighlighter {
         }
 
         break;
-      case "mousedown":
+      case "mousedown": {
         // The mousedown event is intended only for the handler
         if (!id) {
           return;
@@ -460,6 +460,7 @@ class GeometryEditorHighlighter extends AutoRefreshHighlighter {
           "true"
         );
         break;
+      }
       case "mouseup":
         // If we're dragging, drop it.
         if (this[_dragging]) {
@@ -471,7 +472,7 @@ class GeometryEditorHighlighter extends AutoRefreshHighlighter {
           this[_dragging] = null;
         }
         break;
-      case "mousemove":
+      case "mousemove": {
         if (!this[_dragging]) {
           return;
         }
@@ -498,6 +499,7 @@ class GeometryEditorHighlighter extends AutoRefreshHighlighter {
         );
 
         break;
+      }
     }
   }
 
@@ -743,7 +745,7 @@ class GeometryEditorHighlighter extends AutoRefreshHighlighter {
       }
       return (
         -1 *
-        this.currentNode.ownerGlobal[
+        this.currentNode.documentGlobal[
           "scroll" + GeoProp.axis(side).toUpperCase()
         ]
       );

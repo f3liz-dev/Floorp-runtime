@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,9 +7,9 @@
 #ifndef mozilla_ServoCSSParser_h
 #define mozilla_ServoCSSParser_h
 
+#include "NonCustomCSSPropertyId.h"
 #include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/gfx/Matrix.h"
-#include "nsCSSPropertyID.h"
 #include "nsColor.h"
 #include "nsDOMCSSDeclaration.h"
 #include "nsStringFwd.h"
@@ -22,18 +20,17 @@ class RefPtr;
 
 namespace mozilla {
 
-struct AnimatedPropertyID;
+struct CSSPropertyId;
 class ServoStyleSet;
 struct URLExtraData;
 struct StyleAbsoluteColor;
 struct StyleFontFamilyList;
-struct StyleFontStretch;
+struct StyleFontWidth;
 struct StyleFontWeight;
 struct StyleFontStyle;
 struct StyleLockedDeclarationBlock;
 struct StyleParsingMode;
 struct StylePerDocumentStyleData;
-union StyleComputedFontStyleDescriptor;
 enum class StyleColorSpace : uint8_t;
 
 template <typename Integer, typename Number, typename LinearStops>
@@ -41,6 +38,12 @@ struct StyleTimingFunction;
 struct StylePiecewiseLinearFunction;
 using StyleComputedTimingFunction =
     StyleTimingFunction<int32_t, float, StylePiecewiseLinearFunction>;
+
+template <typename LengthPercent>
+struct StyleGenericViewTimelineInset;
+struct StyleLengthPercentage;
+using StyleViewTimelineInset =
+    StyleGenericViewTimelineInset<StyleLengthPercentage>;
 
 namespace css {
 class Loader;
@@ -61,6 +64,12 @@ class ServoCSSParser {
    * This includes Mozilla-specific keywords such as -moz-default-color.
    */
   static bool IsValidCSSColor(const nsACString& aValue);
+
+  /**
+   * Returns whether the specified string can be parsed as a valid CSS
+   * <image> value.
+   */
+  static bool IsValidCSSImage(const nsACString& aValue);
 
   /**
    * Computes an nscolor from the given CSS <color> value.
@@ -84,20 +93,16 @@ class ServoCSSParser {
                            css::Loader* aLoader = nullptr);
 
   /**
-   * Computes a StyleAbsoluteColor from the given CSS <color> value, following
-   * the HTML spec:
-   * https://html.spec.whatwg.org/#update-a-color-well-control-color
+   * Computes a StyleAbsoluteColor from the given CSS <color> value.
    *
    * @param aStyleData The style data to compute system colors and other special
    *   color values.
    * @param aValue The CSS <color> value.
-   * @param aToColorSpace The color space to convert the color into.
    * @return The resulting computed color value. For invalid color value,
    *   Nothing() will be returned.
    */
-  static Maybe<StyleAbsoluteColor> ComputeColorWellControlColor(
-      const StylePerDocumentStyleData* aStyleData, const nsACString& aValue,
-      StyleColorSpace aToColorSpace);
+  static Maybe<StyleAbsoluteColor> ComputeAbsoluteColor(
+      const StylePerDocumentStyleData* aStyleData, const nsACString& aValue);
 
   /**
   * Takes a CSS <color> and convert it to another color space.
@@ -133,16 +138,16 @@ class ServoCSSParser {
    *   in Servo.
    */
   static already_AddRefed<StyleLockedDeclarationBlock> ParseProperty(
-      nsCSSPropertyID aProperty, const nsACString& aValue,
+      NonCustomCSSPropertyId aProperty, const nsACString& aValue,
       const ParsingEnvironment& aParsingEnvironment,
       const StyleParsingMode& aParsingMode);
   static already_AddRefed<StyleLockedDeclarationBlock> ParseProperty(
-      const AnimatedPropertyID& aProperty, const nsACString& aValue,
+      const CSSPropertyId& aProperty, const nsACString& aValue,
       const ParsingEnvironment& aParsingEnvironment,
       const StyleParsingMode& aParsingMode);
 
   /**
-   * Parse a animation timing function.
+   * Parse an animation timing function.
    *
    * @param aValue The specified value.
    * @param aResult The output timing function. (output)
@@ -150,6 +155,34 @@ class ServoCSSParser {
    */
   static bool ParseEasing(const nsACString& aValue,
                           StyleComputedTimingFunction& aResult);
+
+  /**
+   * Parse a view timeline inset, as the syntax of <view-timeline-inset>, and
+   * then compute it as StyleViewTimelineInset.
+   * https://drafts.csswg.org/scroll-animations-1/#view-timeline-inset
+   *
+   * Only accept absolute lengths and percentages, so we don't need the style
+   * context to compute it.
+   * https://github.com/w3c/csswg-drafts/issues/13852
+   *
+   * @param aValue The specified value.
+   * @param aResult The output view timeline inset. (output)
+   * @return Whether the value was successfully parsed.
+   */
+  static bool ParseViewTimelineInset(const nsACString& aValue,
+                                     StyleViewTimelineInset& aResult);
+
+  /**
+   * Parse a length percentage but accept absolute lenghts only, and then
+   * compute it as StyleLengthPercentage.
+   * https://github.com/w3c/csswg-drafts/issues/13852
+   *
+   * @param aValue The specified value.
+   * @param aResult The output as StyleLengthPercentage. (output)
+   * @return Whether the value was successfully parsed.
+   */
+  static bool ParseLengthPercentageForAbsoluteLengths(
+      const nsACString& aValue, StyleLengthPercentage& aResult);
 
   /**
    * Parse a specified transform list into a gfx matrix.
@@ -166,13 +199,13 @@ class ServoCSSParser {
 
   /**
    * Parse a font shorthand for FontFaceSet matching, so we only care about
-   * FontFamily, FontStyle, FontStretch, and FontWeight.
+   * FontFamily, FontStyle, FontWidth, and FontWeight.
    *
    * @param aValue The specified value.
    * @param aUrl The parser url extra data.
    * @param aList The parsed FontFamily list. (output)
    * @param aStyle The parsed FontStyle. (output)
-   * @param aStretch The parsed FontStretch. (output)
+   * @param aWidth The parsed FontWidth. (output)
    * @param aWeight The parsed FontWeight. (output)
    * @param aSize If non-null, returns the parsed font size. (output)
    * @param aSmallCaps If non-null, whether small-caps was specified (output)
@@ -180,9 +213,8 @@ class ServoCSSParser {
    */
   static bool ParseFontShorthandForMatching(
       const nsACString& aValue, URLExtraData* aUrl, StyleFontFamilyList& aList,
-      StyleFontStyle& aStyle, StyleFontStretch& aStretch,
-      StyleFontWeight& aWeight, float* aSize = nullptr,
-      bool* aSmallCaps = nullptr);
+      StyleFontStyle& aStyle, StyleFontWidth& aWidth, StyleFontWeight& aWeight,
+      float* aSize = nullptr, bool* aSmallCaps = nullptr);
 
   /**
    * Get a URLExtraData from a document.

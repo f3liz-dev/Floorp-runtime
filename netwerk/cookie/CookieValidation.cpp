@@ -1,14 +1,14 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "CookieValidation.h"
+
 #include "CookieLogging.h"
-#include "CookieService.h"
 #include "CookiePrefixes.h"
-#include "mozilla/dom/nsMixedContentBlocker.h"
+#include "CookieService.h"
 #include "mozilla/StaticPrefs_network.h"
+#include "mozilla/dom/nsMixedContentBlocker.h"
 
 constexpr uint32_t kMaxBytesPerCookie = 4096;
 constexpr uint32_t kMaxBytesPerDomain = 1024;
@@ -115,9 +115,10 @@ void CookieValidation::ValidateInternal() {
   // This part checks if the caleers have set the expiry value to max 400 days.
   if (!mCookieData.isSession()) {
     int64_t maxageCap = StaticPrefs::network_cookie_maxageCap();
-    int64_t currentTimeInMSec = PR_Now() / PR_USEC_PER_MSEC;
-    int64_t expiry = mCookieData.expiry();
-    if (maxageCap && expiry > currentTimeInMSec + maxageCap * 1000) {
+    int64_t creationTimeInMSec =
+        mCookieData.updateTimeInUSec() / PR_USEC_PER_MSEC;
+    int64_t expiryInMSec = mCookieData.expiryInMSec();
+    if (maxageCap && expiryInMSec > creationTimeInMSec + maxageCap * 1000) {
       mResult = eRejectedAttributeExpiryOversize;
       return;
     }
@@ -137,6 +138,12 @@ void CookieValidation::ValidateForHostInternal(nsIURI* aHostURI,
 
   if (!aBaseDomain.IsEmpty() &&
       !CheckDomain(mCookieData, aHostURI, aBaseDomain, aRequireHostMatch)) {
+    mResult = eRejectedInvalidDomain;
+    return;
+  }
+
+  if ((mCookieData.schemeMap() & nsICookie::SCHEME_FILE) &&
+      !mCookieData.host().IsEmpty()) {
     mResult = eRejectedInvalidDomain;
     return;
   }
@@ -449,7 +456,7 @@ CookieValidation::GetErrorString(nsAString& aResult) {
   RetrieveErrorLogData(&flags, category, key, params);
 
   return nsContentUtils::FormatLocalizedString(
-      nsContentUtils::eNECKO_PROPERTIES_en_US, key.get(), params, aResult);
+      PropertiesFile::NECKO_PROPERTIES_en_US, key.get(), params, aResult);
 }
 
 // static
@@ -462,6 +469,11 @@ bool CookieValidation::CheckNameAndValueSize(const CookieStruct& aCookieData) {
 bool CookieValidation::CheckName(const CookieStruct& aCookieData) {
   if (!aCookieData.name().IsEmpty() && (aCookieData.name().First() == 0x20 ||
                                         aCookieData.name().Last() == 0x20)) {
+    return false;
+  }
+
+  if (StaticPrefs::network_cookie_valueless_cookie() &&
+      aCookieData.name().IsEmpty()) {
     return false;
   }
 

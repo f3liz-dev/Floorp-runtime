@@ -173,11 +173,11 @@ add_task(async function bookmark() {
 });
 
 add_task(async function test_disabledPageAction_hidden_in_protonOverflowMenu() {
-  // Make sure the overflow menu urlbar button is visible (indipendently from
+  // Make sure the overflow menu urlbar button is visible (independently from
   // the current size of the Firefox window).
-  BrowserPageActions.mainButtonNode.style.visibility = "visible";
+  BrowserPageActions.mainButtonNode.style.display = "flex";
   registerCleanupFunction(() => {
-    BrowserPageActions.mainButtonNode.style.removeProperty("visibility");
+    BrowserPageActions.mainButtonNode.style.removeProperty("display");
   });
 
   const extension = ExtensionTestUtils.loadExtension({
@@ -205,9 +205,9 @@ add_task(async function test_disabledPageAction_hidden_in_protonOverflowMenu() {
     },
   });
 
-  // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+  // eslint-disable-next-line sdl/no-insecure-url
   await BrowserTestUtils.withNewTab("http://example.com", async browser => {
-    const win = browser.ownerGlobal;
+    const win = browser.documentGlobal;
     const promisePageActionPanelClosed = async () => {
       let popupHiddenPromise = promisePageActionPanelHidden(win);
       win.BrowserPageActions.panelNode.hidePopup();
@@ -234,7 +234,7 @@ add_task(async function test_disabledPageAction_hidden_in_protonOverflowMenu() {
     extension.sendMessage("hide-pageAction");
     await extension.awaitMessage("hide-pageAction:done");
 
-    await BrowserTestUtils.waitForCondition(
+    await TestUtils.waitForCondition(
       () => !win.BrowserPageActions.panelButtonNodeForActionID(widgetId),
       "Wait for the disabled pageAction to be removed from the urlbar overflow menu"
     );

@@ -1,18 +1,14 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ColorPickerParent.h"
 
-#include "mozilla/Unused.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"
 #include "nsComponentManagerUtils.h"
 
-using mozilla::Unused;
 using namespace mozilla::dom;
 
 NS_IMPL_ISUPPORTS(ColorPickerParent::ColorPickerShownCallback,
@@ -21,7 +17,7 @@ NS_IMPL_ISUPPORTS(ColorPickerParent::ColorPickerShownCallback,
 NS_IMETHODIMP
 ColorPickerParent::ColorPickerShownCallback::Update(const nsAString& aColor) {
   if (mColorPickerParent) {
-    Unused << mColorPickerParent->SendUpdate(aColor);
+    (void)mColorPickerParent->SendUpdate(aColor);
   }
   return NS_OK;
 }
@@ -29,7 +25,7 @@ ColorPickerParent::ColorPickerShownCallback::Update(const nsAString& aColor) {
 NS_IMETHODIMP
 ColorPickerParent::ColorPickerShownCallback::Done(const nsAString& aColor) {
   if (mColorPickerParent) {
-    Unused << ColorPickerParent::Send__delete__(mColorPickerParent, aColor);
+    (void)ColorPickerParent::Send__delete__(mColorPickerParent, aColor);
   }
   return NS_OK;
 }
@@ -54,7 +50,7 @@ bool ColorPickerParent::CreateColorPicker() {
 
 mozilla::ipc::IPCResult ColorPickerParent::RecvOpen() {
   if (!CreateColorPicker()) {
-    Unused << Send__delete__(this, mInitialColor);
+    (void)Send__delete__(this, mInitialColor);
     return IPC_OK();
   }
 

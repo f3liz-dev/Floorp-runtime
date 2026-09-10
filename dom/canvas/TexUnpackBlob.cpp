@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 20; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -380,20 +379,41 @@ static bool HasColorAndAlpha(const WebGLTexelFormat format) {
 }
 
 bool TexUnpackBlob::ConvertIfNeeded(
-    const WebGLContext* const webgl, const uint32_t rowLength,
-    const uint32_t rowCount, WebGLTexelFormat srcFormat,
+    const WebGLContext* const webgl, const size_t rowLength,
+    const size_t rowCount, WebGLTexelFormat srcFormat,
     const uint8_t* const srcBegin, const ptrdiff_t srcStride,
     WebGLTexelFormat dstFormat, const ptrdiff_t dstStride,
     const uint8_t** const out_begin,
     UniqueBuffer* const out_anchoredBuffer) const {
-  MOZ_ASSERT(srcFormat != WebGLTexelFormat::FormatNotSupportingAnyConversion);
-  MOZ_ASSERT(dstFormat != WebGLTexelFormat::FormatNotSupportingAnyConversion);
-
   *out_begin = srcBegin;
+
+  // TexelBytesForFormat() has no size for these, so the stride validation below
+  // would be vacuous. Bail before it rather than relying on ConvertImage() to
+  // reject them.
+  if (srcFormat == WebGLTexelFormat::FormatNotSupportingAnyConversion ||
+      dstFormat == WebGLTexelFormat::FormatNotSupportingAnyConversion) {
+    webgl->ErrorImplementationBug("Unconvertible texel format.");
+    return false;
+  }
 
   const auto& unpacking = mDesc.unpacking;
 
   if (!rowLength || !rowCount) return true;
+
+  auto minSrcStride =
+      CheckedInt<size_t>(
+          WebGLTexelConversions::TexelBytesForFormat(srcFormat)) *
+      rowLength;
+  auto minDstStride =
+      CheckedInt<size_t>(
+          WebGLTexelConversions::TexelBytesForFormat(dstFormat)) *
+      rowLength;
+  if (srcStride <= 0 || dstStride <= 0 || !minSrcStride.isValid() ||
+      !minDstStride.isValid() || size_t(srcStride) < minSrcStride.value() ||
+      size_t(dstStride) < minDstStride.value()) {
+    webgl->ErrorInvalidOperation("Invalid stride.");
+    return false;
+  }
 
   const auto srcIsPremult = (mDesc.srcAlphaType == gfxAlphaType::Premult);
   auto dstIsPremult = unpacking.premultiplyAlpha;
@@ -443,7 +463,7 @@ bool TexUnpackBlob::ConvertIfNeeded(
 
   ////
 
-  const auto dstTotalBytes = CheckedUint32(rowCount) * dstStride;
+  const auto dstTotalBytes = CheckedInt<size_t>(rowCount) * dstStride;
   if (!dstTotalBytes.isValid()) {
     webgl->ErrorOutOfMemory("Calculation failed.");
     return false;
@@ -554,7 +574,7 @@ bool TexUnpackBytes::TexOrSubImage(bool isSubImage, bool needsRespec,
     const auto& unpacking = unpackingRes.inspect();
     const auto stride = unpacking.metrics.bytesPerRowStride;
     // clang-format off
-    if (!ConvertIfNeeded(webgl, unpacking.state.rowLength,
+    if (!ConvertIfNeeded(webgl, unpacking.metrics.usedPixelsPerRow,
                          unpacking.metrics.totalRows,
                          format, uploadPtr, AutoAssertCast(stride),
                          format, AutoAssertCast(stride), &uploadPtr, &tempBuffer)) {
@@ -641,7 +661,10 @@ bool TexUnpackBytes::TexOrSubImage(bool isSubImage, bool needsRespec,
 
   const auto lastRowOffset =
       unpacking.metrics.totalBytesStrided - unpacking.metrics.bytesPerRowStride;
-  const auto lastRowPtr = uploadPtr + lastRowOffset;
+  const auto lastRowPtr =
+      mDesc.pboOffset
+          ? reinterpret_cast<const uint8_t*>(*mDesc.pboOffset + lastRowOffset)
+          : (uploadPtr ? uploadPtr + lastRowOffset : nullptr);
 
   gl->fPixelStorei(LOCAL_GL_UNPACK_ALIGNMENT, 1);    // No stride padding.
   gl->fPixelStorei(LOCAL_GL_UNPACK_ROW_LENGTH, 0);   // No padding in general.
@@ -1084,9 +1107,20 @@ bool TexUnpackSurface::TexOrSubImage(bool isSubImage, bool needsRespec,
       const auto& data = sdb.data();
       MOZ_ASSERT(data.type() == layers::MemoryOrShmem::TShmem);
       const auto& shmem = data.get_Shmem();
-      surf = gfx::Factory::CreateWrappingDataSourceSurface(
-          shmem.get<uint8_t>(), layers::ImageDataSerializer::GetRGBStride(rgb),
+      size_t shmemSize = shmem.Size<uint8_t>();
+      auto stride = layers::ImageDataSerializer::GetRGBStride(rgb);
+      if (stride.isNothing()) {
+        gfxCriticalError() << "TexUnpackSurface failed to get rgb stride";
+        return false;
+      }
+      Maybe<size_t> bufSize = layers::ImageDataSerializer::ComputeRGBBufferSize(
           rgb.size(), rgb.format());
+      if (bufSize.isNothing() || bufSize.value() > shmemSize) {
+        gfxCriticalError() << "TexUnpackSurface failed to get rgb buffer size";
+        return false;
+      }
+      surf = gfx::Factory::CreateWrappingDataSourceSurface(
+          shmem.get<uint8_t>(), stride.value(), rgb.size(), rgb.format());
     } else if (SDIsNullRemoteDecoder(sd)) {
       const auto& sdrd = sd.get_SurfaceDescriptorGPUVideo()
                              .get_SurfaceDescriptorRemoteDecoder();
@@ -1114,7 +1148,8 @@ bool TexUnpackSurface::TexOrSubImage(bool isSubImage, bool needsRespec,
         gfxCriticalNote << "TexUnpackSurface failed to get ExternalImage";
         return false;
       }
-    } else if (AllowBlitSd(webgl, mDesc.imageTarget, level,
+    } else if (webgl->IsUploadableSdType(sd) &&
+               AllowBlitSd(webgl, mDesc.imageTarget, level,
                            {xOffset, yOffset, zOffset}, dui->internalFormat,
                            dstPI, false, true, true, true) &&
                BlitSd(sd, isSubImage, needsRespec, tex, level, dui, xOffset,
@@ -1128,8 +1163,8 @@ bool TexUnpackSurface::TexOrSubImage(bool isSubImage, bool needsRespec,
       surf = mDesc.sourceSurf->GetDataSurface();
     }
     if (!surf) {
-      gfxCriticalError() << "TexUnpackSurface failed to create wrapping "
-                            "DataSourceSurface for Shmem.";
+      gfxCriticalNote << "TexUnpackSurface failed to create wrapping "
+                         "DataSourceSurface.";
       return false;
     }
   } else if (mDesc.sourceSurf) {
@@ -1142,6 +1177,8 @@ bool TexUnpackSurface::TexOrSubImage(bool isSubImage, bool needsRespec,
   }
 
   ////
+
+  const auto surfSize = surf->GetSize();
 
   WebGLTexelFormat srcFormat;
   uint8_t srcBPP;
@@ -1166,12 +1203,10 @@ bool TexUnpackSurface::TexOrSubImage(bool isSubImage, bool needsRespec,
   // -
 
   const auto dstFormat = FormatForPackingInfo(dstPI);
-  const auto dstBpp = BytesPerPixel(dstPI);
-  const size_t dstUsedBytesPerRow = dstBpp * surf->GetSize().width;
-  auto dstStride = dstUsedBytesPerRow;
-  if (dstFormat == srcFormat) {
-    dstStride = srcStride;  // Try to match.
-  }
+  const size_t dstBpp = BytesPerPixel(dstPI);
+  const size_t dstUsedBytesPerRow = dstBpp * surfSize.width;
+  size_t dstStride = dstFormat == srcFormat ? srcStride  // Try To match
+                                            : dstUsedBytesPerRow;
 
   // -
 
@@ -1195,12 +1230,18 @@ bool TexUnpackSurface::TexOrSubImage(bool isSubImage, bool needsRespec,
   const auto& dstUnpacking = dstUnpackingRes.inspect();
   MOZ_ASSERT(dstUnpacking.metrics.bytesPerRowStride == dstStride);
 
+  if (uint32_t(surfSize.width) < dstUnpacking.metrics.usedPixelsPerRow ||
+      uint32_t(surfSize.height) < dstUnpacking.metrics.totalRows) {
+    gfxCriticalError() << "Source surface size too small for upload.";
+    return false;
+  }
+
   // -
 
   const uint8_t* dstBegin = srcBegin;
   UniqueBuffer tempBuffer;
   // clang-format off
-  if (!ConvertIfNeeded(webgl, surf->GetSize().width, surf->GetSize().height,
+  if (!ConvertIfNeeded(webgl, surfSize.width, surfSize.height,
                        srcFormat, srcBegin, AutoAssertCast(srcStride),
                        dstFormat, AutoAssertCast(dstUnpacking.metrics.bytesPerRowStride), &dstBegin,
                        &tempBuffer)) {

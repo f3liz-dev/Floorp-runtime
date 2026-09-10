@@ -35,13 +35,13 @@ add_task(async function test_newtab_tab_close_sends_ping() {
     false // waitForLoad; about:newtab is cached so this would never resolve
   );
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => sendTriggerMessageSpy.called,
     "After about:newtab finishes loading"
   );
   sendTriggerMessageSpy.resetHistory();
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => !!Glean.newtab.opened.testGetValue("newtab"),
     "We expect the newtab open to be recorded"
   );
@@ -63,15 +63,16 @@ add_task(async function test_newtab_tab_close_sends_ping() {
     );
     Assert.ok(Glean.newtabSearch.enabled.testGetValue());
     Assert.ok(Glean.topsites.enabled.testGetValue());
+    // Highlights ("Recent Activity") is off by default.
+    Assert.ok(!Glean.newtab.highlightsEnabled.testGetValue());
     // Sponsored topsites are turned off in tests to avoid making remote requests.
     Assert.ok(!Glean.topsites.sponsoredEnabled.testGetValue());
     Assert.ok(Glean.pocket.enabled.testGetValue());
     Assert.ok(Glean.pocket.sponsoredStoriesEnabled.testGetValue());
-    Assert.equal(false, Glean.pocket.isSignedIn.testGetValue());
   });
 
   BrowserTestUtils.removeTab(tab);
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => pingSubmitted,
     "We expect the ping to have submitted."
   );
@@ -94,13 +95,13 @@ add_task(async function test_newtab_tab_nav_sends_ping() {
     false // waitForLoad; about:newtab is cached so this would never resolve
   );
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => sendTriggerMessageSpy.called,
     "After about:newtab finishes loading"
   );
   sendTriggerMessageSpy.resetHistory();
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => !!Glean.newtab.opened.testGetValue("newtab"),
     "We expect the newtab open to be recorded"
   );
@@ -122,15 +123,16 @@ add_task(async function test_newtab_tab_nav_sends_ping() {
     );
     Assert.ok(Glean.newtabSearch.enabled.testGetValue());
     Assert.ok(Glean.topsites.enabled.testGetValue());
+    // Highlights ("Recent Activity") is off by default.
+    Assert.ok(!Glean.newtab.highlightsEnabled.testGetValue());
     // Sponsored topsites are turned off in tests to avoid making remote requests.
     Assert.ok(!Glean.topsites.sponsoredEnabled.testGetValue());
     Assert.ok(Glean.pocket.enabled.testGetValue());
     Assert.ok(Glean.pocket.sponsoredStoriesEnabled.testGetValue());
-    Assert.equal(false, Glean.pocket.isSignedIn.testGetValue());
   });
 
   BrowserTestUtils.startLoadingURIString(tab.linkedBrowser, "about:mozilla");
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => pingSubmitted,
     "We expect the ping to have submitted."
   );
@@ -158,13 +160,13 @@ add_task(async function test_newtab_doesnt_send_pref() {
     false // waitForLoad; about:newtab is cached so this would never resolve
   );
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => sendTriggerMessageSpy.called,
     "After about:newtab finishes loading"
   );
   sendTriggerMessageSpy.resetHistory();
 
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     () => !!Glean.newtab.opened.testGetValue("newtab"),
     "We expect the newtab open to be recorded"
   );
@@ -178,7 +180,7 @@ add_task(async function test_newtab_doesnt_send_pref() {
   });
   BrowserTestUtils.startLoadingURIString(tab.linkedBrowser, "about:mozilla");
   BrowserTestUtils.removeTab(tab);
-  await BrowserTestUtils.waitForCondition(() => {
+  await TestUtils.waitForCondition(() => {
     let { sessions } =
       AboutNewTab.activityStream.store.feeds.get("feeds.telemetry");
     return !Array.from(sessions.entries()).filter(
@@ -205,6 +207,135 @@ add_task(async function test_newtab_categorization_sends_ping() {
   });
   await TelemetryFeed.sendPageTakeoverData();
   Assert.ok(pingSent, "ping was sent");
+
+  await SpecialPowers.popPrefEnv();
+});
+
+/**
+ * Tests that we set Glean.newtab.highlightsEnabled to true if the highlights
+ * section is enabled.
+ */
+add_task(async function test_newtab_highlights_enabled_pref() {
+  Services.fog.testResetFOG();
+  sendTriggerMessageSpy.resetHistory();
+  await GleanPings.newtab.testSubmission(
+    () => {
+      Assert.ok(
+        Glean.newtab.highlightsEnabled.testGetValue(),
+        "Highlights are reported as being enabled."
+      );
+    },
+    async () => {
+      await SpecialPowers.pushPrefEnv({
+        set: [
+          ["browser.newtabpage.activity-stream.feeds.section.highlights", true],
+          ["browser.newtabpage.activity-stream.telemetry", true],
+        ],
+      });
+      let tab = await BrowserTestUtils.openNewForegroundTab(
+        gBrowser,
+        "about:newtab",
+        false // waitForLoad; about:newtab is cached so this would never resolve
+      );
+
+      await TestUtils.waitForCondition(
+        () => sendTriggerMessageSpy.called,
+        "After about:newtab finishes loading"
+      );
+      sendTriggerMessageSpy.resetHistory();
+
+      await TestUtils.waitForCondition(
+        () => !!Glean.newtab.opened.testGetValue("newtab"),
+        "We expect the newtab open to be recorded"
+      );
+
+      BrowserTestUtils.removeTab(tab);
+    },
+    5000 /* timeout to send the ping */
+  );
+
+  await SpecialPowers.popPrefEnv();
+});
+
+/**
+ * Tests that active time on a newtab reaches the newtab ping. Asserts at
+ * submission time because testGetValue() alone cannot tell a value that rode
+ * along in the ping from one recorded too late and cleared by the submit.
+ *
+ * This is the only coverage of the real isSessionInForeground path, everything
+ * else stubs it out.
+ */
+add_task(async function test_newtab_dwell_time_in_ping() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.newtabpage.activity-stream.telemetry", true]],
+  });
+
+  Services.fog.testResetFOG();
+  sendTriggerMessageSpy.resetHistory();
+  let TelemetryFeed =
+    AboutNewTab.activityStream.store.feeds.get("feeds.telemetry");
+  TelemetryFeed.init();
+
+  // Leave the feed's idea of the user idle again, so a later test does not
+  // inherit a running stopwatch.
+  registerCleanupFunction(() => {
+    Services.obs.notifyObservers(
+      null,
+      "user-interaction-inactive-non-synthesized"
+    );
+  });
+
+  // Dwell only accrues for the selected tab of the frontmost window. Assert it
+  // here so a focus problem in CI fails with the reason rather than as a
+  // missing metric later on.
+  await SimpleTest.promiseFocus(window);
+  Assert.equal(
+    TelemetryFeed.getActiveChromeWindow(),
+    window,
+    "The test window holds focus"
+  );
+
+  await GleanPings.newtab.testSubmission(
+    () => {
+      let dwell = Glean.newtab.dwellTime.testGetValue("newtab");
+      Assert.ok(dwell, "dwell_time is in the newtab ping");
+      Assert.equal(dwell.count, 1, "One sample for the one visit");
+      Assert.greater(dwell.sum, 0, "Some active time was measured");
+    },
+    async () => {
+      let tab = await BrowserTestUtils.openNewForegroundTab(
+        gBrowser,
+        "about:newtab",
+        false // waitForLoad. about:newtab is cached so this would never resolve
+      );
+
+      await TestUtils.waitForCondition(
+        () => sendTriggerMessageSpy.called,
+        "After about:newtab finishes loading"
+      );
+      sendTriggerMessageSpy.resetHistory();
+
+      await TestUtils.waitForCondition(
+        () => !!Glean.newtab.opened.testGetValue("newtab"),
+        "Expect the newtab open to be recorded"
+      );
+
+      // Fire the notification directly rather than waiting out the real
+      // EventStateManager interval.
+      Services.obs.notifyObservers(
+        null,
+        "user-interaction-active-non-synthesized"
+      );
+
+      // A real wait: the tab must stay focused long enough to measure a
+      // non-zero duration.
+      // eslint-disable-next-line mozilla/no-arbitrary-setTimeout
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      BrowserTestUtils.removeTab(tab);
+    },
+    5000 /* timeout to send the ping */
+  );
 
   await SpecialPowers.popPrefEnv();
 });

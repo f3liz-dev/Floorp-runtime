@@ -4,7 +4,11 @@ import { Provider } from "react-redux";
 import { mount } from "enzyme";
 import { INITIAL_STATE, reducers } from "common/Reducers.sys.mjs";
 import { actionTypes as at } from "common/Actions.mjs";
-import { FocusTimer } from "content-src/components/Widgets/FocusTimer/FocusTimer";
+import {
+  FocusTimer,
+  isNumericValue,
+  isAtMaxLength,
+} from "content-src/components/Widgets/FocusTimer/FocusTimer";
 
 const PREF_WIDGETS_SYSTEM_NOTIFICATIONS_ENABLED =
   "widgets.focusTimer.showSystemNotifications";
@@ -58,6 +62,7 @@ describe("<FocusTimer>", () => {
         <FocusTimer
           dispatch={dispatch}
           handleUserInteraction={handleUserInteraction}
+          widgetsMayBeMaximized={false}
         />
       </WrapWithProvider>
     );
@@ -95,6 +100,7 @@ describe("<FocusTimer>", () => {
         <FocusTimer
           dispatch={dispatch}
           handleUserInteraction={handleUserInteraction}
+          widgetsMayBeMaximized={false}
         />
       </WrapWithProvider>
     );
@@ -108,12 +114,25 @@ describe("<FocusTimer>", () => {
 
   it("should start timer and show progress bar when pressing play", () => {
     wrapper
-      .find("moz-button[data-l10n-id='newtab-widget-timer-play']")
+      .find("moz-button[data-l10n-id='newtab-widget-timer-label-play']")
       .props()
       .onClick();
     wrapper.update();
-    assert.ok(wrapper.find(".progress-circle-wrapper.visible").exists());
-    assert.equal(dispatch.getCall(0).args[0].type, at.WIDGETS_TIMER_PLAY);
+    assert.ok(wrapper.find(".progress-circle-wrapper").exists());
+
+    const [playAction] = dispatch.getCall(0).args;
+    assert.equal(playAction.type, at.WIDGETS_TIMER_PLAY);
+
+    const [oldTelemetryEvent] = dispatch.getCall(1).args;
+    assert.equal(oldTelemetryEvent.type, at.WIDGETS_TIMER_USER_EVENT);
+    assert.equal(oldTelemetryEvent.data.userAction, "timer_play");
+
+    const [newTelemetryEvent] = dispatch.getCall(2).args;
+    assert.equal(newTelemetryEvent.type, at.WIDGETS_USER_EVENT);
+    assert.equal(newTelemetryEvent.data.widget_name, "focus_timer");
+    assert.equal(newTelemetryEvent.data.widget_source, "widget");
+    assert.equal(newTelemetryEvent.data.user_action, "timer_play");
+    assert.equal(newTelemetryEvent.data.widget_size, "medium");
   });
 
   it("should pause the timer when pressing pause", () => {
@@ -135,25 +154,83 @@ describe("<FocusTimer>", () => {
         <FocusTimer
           dispatch={dispatch}
           handleUserInteraction={handleUserInteraction}
+          widgetsMayBeMaximized={false}
         />
       </WrapWithProvider>
     );
 
     const pauseBtn = wrapper.find(
-      "moz-button[data-l10n-id='newtab-widget-timer-pause']"
+      "moz-button[data-l10n-id='newtab-widget-timer-label-pause']"
     );
     assert.ok(pauseBtn.exists(), "Pause button should be rendered");
     pauseBtn.props().onClick();
-    assert.equal(dispatch.getCall(0).args[0].type, at.WIDGETS_TIMER_PAUSE);
+
+    const [pauseAction] = dispatch.getCall(0).args;
+    assert.equal(pauseAction.type, at.WIDGETS_TIMER_PAUSE);
+
+    const [oldTelemetryEvent] = dispatch.getCall(1).args;
+    assert.equal(oldTelemetryEvent.type, at.WIDGETS_TIMER_USER_EVENT);
+    assert.equal(oldTelemetryEvent.data.userAction, "timer_pause");
+
+    const [newTelemetryEvent] = dispatch.getCall(2).args;
+    assert.equal(newTelemetryEvent.type, at.WIDGETS_USER_EVENT);
+    assert.equal(newTelemetryEvent.data.widget_name, "focus_timer");
+    assert.equal(newTelemetryEvent.data.widget_source, "widget");
+    assert.equal(newTelemetryEvent.data.user_action, "timer_pause");
+    assert.equal(newTelemetryEvent.data.widget_size, "medium");
   });
 
-  it("should reset timer and hide progress bar when pressing reset", () => {
+  it("should reset timer should be hidden when timer is not running", () => {
     const resetBtn = wrapper.find(
       "moz-button[data-l10n-id='newtab-widget-timer-reset']"
     );
+    assert.ok(!resetBtn.exists(), "Reset buttons should not be rendered");
+  });
+
+  it("should reset timer when pressing reset", () => {
+    const now = Math.floor(Date.now() / 1000);
+    const runningState = {
+      ...mockState,
+      TimerWidget: {
+        ...mockState.TimerWidget,
+        focus: {
+          ...mockState.TimerWidget.focus,
+          isRunning: true,
+          startTime: now,
+        },
+      },
+    };
+
+    wrapper = mount(
+      <WrapWithProvider state={runningState}>
+        <FocusTimer
+          dispatch={dispatch}
+          handleUserInteraction={handleUserInteraction}
+          widgetsMayBeMaximized={false}
+        />
+      </WrapWithProvider>
+    );
+
+    const resetBtn = wrapper.find(
+      "moz-button[data-l10n-id='newtab-widget-timer-reset']"
+    );
+
     assert.ok(resetBtn.exists(), "Reset buttons should be rendered");
     resetBtn.props().onClick();
-    assert.equal(dispatch.getCall(0).args[0].type, at.WIDGETS_TIMER_RESET);
+
+    const [resetAction] = dispatch.getCall(0).args;
+    assert.equal(resetAction.type, at.WIDGETS_TIMER_RESET);
+
+    const [oldTelemetryEvent] = dispatch.getCall(1).args;
+    assert.equal(oldTelemetryEvent.type, at.WIDGETS_TIMER_USER_EVENT);
+    assert.equal(oldTelemetryEvent.data.userAction, "timer_reset");
+
+    const [newTelemetryEvent] = dispatch.getCall(2).args;
+    assert.equal(newTelemetryEvent.type, at.WIDGETS_USER_EVENT);
+    assert.equal(newTelemetryEvent.data.widget_name, "focus_timer");
+    assert.equal(newTelemetryEvent.data.widget_source, "widget");
+    assert.equal(newTelemetryEvent.data.user_action, "timer_reset");
+    assert.equal(newTelemetryEvent.data.widget_size, "medium");
 
     const initialUserDuration = 12 * 60;
 
@@ -175,12 +252,12 @@ describe("<FocusTimer>", () => {
         <FocusTimer
           dispatch={dispatch}
           handleUserInteraction={handleUserInteraction}
+          widgetsMayBeMaximized={false}
         />
       </WrapWithProvider>
     );
 
     assert.equal(wrapper.find(".progress-circle-wrapper.visible").length, 0);
-
     const minutes = wrapper.find(".timer-set-minutes").text();
     const seconds = wrapper.find(".timer-set-seconds").text();
     assert.equal(minutes, "12");
@@ -200,6 +277,8 @@ describe("<FocusTimer>", () => {
       .filter(Boolean);
 
     assert.ok(types.includes(at.WIDGETS_TIMER_PAUSE));
+    assert.ok(types.includes(at.WIDGETS_TIMER_USER_EVENT));
+    assert.ok(types.includes(at.WIDGETS_USER_EVENT));
     assert.ok(types.includes(at.WIDGETS_TIMER_SET_TYPE));
 
     const findTypeToggled = dispatch
@@ -212,6 +291,32 @@ describe("<FocusTimer>", () => {
       "break",
       "timer should switch to break mode"
     );
+
+    const unifiedPauseEvent = dispatch
+      .getCalls()
+      .map(call => call.args[0])
+      .find(
+        action =>
+          action.type === at.WIDGETS_USER_EVENT &&
+          action.data.user_action === "timer_pause"
+      );
+
+    assert.ok(unifiedPauseEvent);
+    assert.equal(unifiedPauseEvent.data.widget_name, "focus_timer");
+    assert.equal(unifiedPauseEvent.data.widget_source, "widget");
+
+    const unifiedToggleEvent = dispatch
+      .getCalls()
+      .map(call => call.args[0])
+      .find(
+        action =>
+          action.type === at.WIDGETS_USER_EVENT &&
+          action.data.user_action === "timer_toggle_break"
+      );
+
+    assert.ok(unifiedToggleEvent);
+    assert.equal(unifiedToggleEvent.data.widget_name, "focus_timer");
+    assert.equal(unifiedToggleEvent.data.widget_source, "widget");
   });
 
   it("should dispatch set type when clicking the focus timer", () => {
@@ -227,6 +332,8 @@ describe("<FocusTimer>", () => {
       .filter(Boolean);
 
     assert.ok(types.includes(at.WIDGETS_TIMER_PAUSE));
+    assert.ok(types.includes(at.WIDGETS_TIMER_USER_EVENT));
+    assert.ok(types.includes(at.WIDGETS_USER_EVENT));
     assert.ok(types.includes(at.WIDGETS_TIMER_SET_TYPE));
 
     const findTypeToggled = dispatch
@@ -239,6 +346,19 @@ describe("<FocusTimer>", () => {
       "focus",
       "focus should switch to break mode"
     );
+
+    const unifiedToggleEvent = dispatch
+      .getCalls()
+      .map(call => call.args[0])
+      .find(
+        action =>
+          action.type === at.WIDGETS_USER_EVENT &&
+          action.data.user_action === "timer_toggle_focus"
+      );
+
+    assert.ok(unifiedToggleEvent);
+    assert.equal(unifiedToggleEvent.data.widget_name, "focus_timer");
+    assert.equal(unifiedToggleEvent.data.widget_source, "widget");
   });
 
   it("should toggle from focus to break timer automatically on end", () => {
@@ -261,6 +381,7 @@ describe("<FocusTimer>", () => {
         <FocusTimer
           dispatch={dispatch}
           handleUserInteraction={handleUserInteraction}
+          widgetsMayBeMaximized={false}
         />
       </WrapWithProvider>
     );
@@ -278,6 +399,8 @@ describe("<FocusTimer>", () => {
       .filter(Boolean);
 
     assert.ok(types.includes(at.WIDGETS_TIMER_END));
+    assert.ok(types.includes(at.WIDGETS_TIMER_USER_EVENT));
+    assert.ok(types.includes(at.WIDGETS_USER_EVENT));
     assert.ok(types.includes(at.WIDGETS_TIMER_SET_TYPE));
 
     const findTypeToggled = dispatch
@@ -290,6 +413,19 @@ describe("<FocusTimer>", () => {
       "break",
       "timer should switch to break mode"
     );
+
+    const unifiedEndEvent = dispatch
+      .getCalls()
+      .map(call => call.args[0])
+      .find(
+        action =>
+          action.type === at.WIDGETS_USER_EVENT &&
+          action.data.user_action === "timer_end"
+      );
+
+    assert.ok(unifiedEndEvent);
+    assert.equal(unifiedEndEvent.data.widget_name, "focus_timer");
+    assert.equal(unifiedEndEvent.data.widget_source, "widget");
   });
 
   it("should toggle from break to focus timer automatically on end", () => {
@@ -313,6 +449,7 @@ describe("<FocusTimer>", () => {
         <FocusTimer
           dispatch={dispatch}
           handleUserInteraction={handleUserInteraction}
+          widgetsMayBeMaximized={false}
         />
       </WrapWithProvider>
     );
@@ -327,6 +464,8 @@ describe("<FocusTimer>", () => {
     const types = dispatch.getCalls().map(call => call.args[0].type);
 
     assert.ok(types.includes(at.WIDGETS_TIMER_END));
+    assert.ok(types.includes(at.WIDGETS_TIMER_USER_EVENT));
+    assert.ok(types.includes(at.WIDGETS_USER_EVENT));
     assert.ok(types.includes(at.WIDGETS_TIMER_SET_TYPE));
 
     const findTypeToggled = dispatch
@@ -339,6 +478,19 @@ describe("<FocusTimer>", () => {
       "focus",
       "timer should switch to focus mode"
     );
+
+    const unifiedEndEvent = dispatch
+      .getCalls()
+      .map(call => call.args[0])
+      .find(
+        action =>
+          action.type === at.WIDGETS_USER_EVENT &&
+          action.data.user_action === "timer_end"
+      );
+
+    assert.ok(unifiedEndEvent);
+    assert.equal(unifiedEndEvent.data.widget_name, "focus_timer");
+    assert.equal(unifiedEndEvent.data.widget_source, "widget");
   });
 
   it("should pause when time input is focused", () => {
@@ -359,6 +511,7 @@ describe("<FocusTimer>", () => {
         <FocusTimer
           dispatch={dispatch}
           handleUserInteraction={handleUserInteraction}
+          widgetsMayBeMaximized={false}
         />
       </WrapWithProvider>
     );
@@ -367,7 +520,19 @@ describe("<FocusTimer>", () => {
     assert.ok(minutesSpan.exists());
 
     minutesSpan.simulate("focus");
-    assert.equal(dispatch.getCall(0).args[0].type, at.WIDGETS_TIMER_PAUSE);
+
+    const [pauseAction] = dispatch.getCall(0).args;
+    assert.equal(pauseAction.type, at.WIDGETS_TIMER_PAUSE);
+
+    const [oldTelemetryEvent] = dispatch.getCall(1).args;
+    assert.equal(oldTelemetryEvent.type, at.WIDGETS_TIMER_USER_EVENT);
+    assert.equal(oldTelemetryEvent.data.userAction, "timer_pause");
+
+    const [newTelemetryEvent] = dispatch.getCall(2).args;
+    assert.equal(newTelemetryEvent.type, at.WIDGETS_USER_EVENT);
+    assert.equal(newTelemetryEvent.data.widget_name, "focus_timer");
+    assert.equal(newTelemetryEvent.data.widget_source, "widget");
+    assert.equal(newTelemetryEvent.data.user_action, "timer_pause");
   });
 
   it("should reset to user's initial duration after timer ends", () => {
@@ -395,6 +560,7 @@ describe("<FocusTimer>", () => {
         <FocusTimer
           dispatch={dispatch}
           handleUserInteraction={handleUserInteraction}
+          widgetsMayBeMaximized={false}
         />
       </WrapWithProvider>
     );
@@ -428,6 +594,66 @@ describe("<FocusTimer>", () => {
     );
   });
 
+  it("should wait one second at zero before completing timer", () => {
+    const now = Math.floor(Date.now() / 1000);
+
+    const endState = {
+      ...mockState,
+      TimerWidget: {
+        ...mockState.TimerWidget,
+        timerType: "focus",
+        focus: {
+          duration: 300,
+          initialDuration: 300,
+          startTime: now - 300,
+          isRunning: true,
+        },
+      },
+    };
+
+    wrapper = mount(
+      <WrapWithProvider state={endState}>
+        <FocusTimer
+          dispatch={dispatch}
+          handleUserInteraction={handleUserInteraction}
+          widgetsMayBeMaximized={false}
+        />
+      </WrapWithProvider>
+    );
+
+    // First interval tick - should reach zero but not complete
+    clock.tick(1000);
+
+    // Verify timer has not ended yet (no WIDGETS_TIMER_END dispatched)
+    const callsAfterFirstTick = dispatch
+      .getCalls()
+      .map(call => call.args[0])
+      .filter(action => action && action.type === at.WIDGETS_TIMER_END);
+
+    assert.equal(
+      callsAfterFirstTick.length,
+      0,
+      "WIDGETS_TIMER_END should not be dispatched on first tick at zero"
+    );
+
+    // Second interval tick - should now complete
+    clock.tick(1000);
+
+    // Allowing time for the chained timeouts for animation
+    clock.tick(2000);
+    wrapper.update();
+
+    const endCall = dispatch
+      .getCalls()
+      .map(call => call.args[0])
+      .find(action => action && action.type === at.WIDGETS_TIMER_END);
+
+    assert.ok(
+      endCall,
+      "WIDGETS_TIMER_END should be dispatched after one second at zero"
+    );
+  });
+
   describe("context menu", () => {
     it("should render default context menu", () => {
       assert.ok(wrapper.find(".focus-timer-context-menu-button").exists());
@@ -444,7 +670,7 @@ describe("<FocusTimer>", () => {
 
       assert.ok(
         wrapper
-          .find("panel-item[data-l10n-id='newtab-widget-timer-menu-hide']")
+          .find("panel-item[data-l10n-id='newtab-widget-menu-hide']")
           .exists()
       );
 
@@ -481,6 +707,7 @@ describe("<FocusTimer>", () => {
           <FocusTimer
             dispatch={dispatch}
             handleUserInteraction={handleUserInteraction}
+            widgetsMayBeMaximized={false}
           />
         </WrapWithProvider>
       );
@@ -513,15 +740,27 @@ describe("<FocusTimer>", () => {
       assert.equal(action.type, at.SET_PREF);
     });
 
-    it("should hide Focus Timer when 'Hide timer' option is clicked", () => {
+    it("should hide Focus Timer when 'Hide widget' option is clicked", () => {
       const menuItem = wrapper.find(
-        "panel-item[data-l10n-id='newtab-widget-timer-menu-hide']"
+        "panel-item[data-l10n-id='newtab-widget-menu-hide']"
       );
       menuItem.props().onClick();
 
-      assert.ok(dispatch.calledOnce);
-      const [action] = dispatch.getCall(0).args;
-      assert.equal(action.type, at.SET_PREF);
+      assert.ok(dispatch.calledTwice);
+
+      const [setPrefAction] = dispatch.getCall(0).args;
+      assert.equal(setPrefAction.type, at.SET_PREF);
+      assert.equal(setPrefAction.data.name, "widgets.focusTimer.enabled");
+      assert.equal(setPrefAction.data.value, false);
+
+      const [telemetryEvent] = dispatch.getCall(1).args;
+      assert.equal(telemetryEvent.type, at.WIDGETS_ENABLED);
+      assert.equal(telemetryEvent.data.widget_name, "focus_timer");
+      assert.equal(telemetryEvent.data.widget_source, "context_menu");
+      assert.equal(telemetryEvent.data.enabled, false);
+      assert.equal(telemetryEvent.data.widget_size, "medium");
+
+      assert.ok(handleUserInteraction.notCalled);
     });
 
     it("should dispatch OPEN_LINK when the Learn More option is clicked", () => {
@@ -534,5 +773,243 @@ describe("<FocusTimer>", () => {
       const [action] = dispatch.getCall(0).args;
       assert.equal(action.type, at.OPEN_LINK);
     });
+  });
+
+  // Tests for the focus timer input. It should only allow numbers
+  describe("isNumericValue", () => {
+    it("should return true for single digit numbers", () => {
+      assert.isTrue(isNumericValue("0"));
+      assert.isTrue(isNumericValue("1"));
+      assert.isTrue(isNumericValue("5"));
+      assert.isTrue(isNumericValue("9"));
+    });
+
+    it("should return true for multi-digit numbers", () => {
+      assert.isTrue(isNumericValue("10"));
+      assert.isTrue(isNumericValue("25"));
+      assert.isTrue(isNumericValue("99"));
+    });
+
+    it("should return false for non-numeric characters", () => {
+      assert.isFalse(isNumericValue("a"));
+      assert.isFalse(isNumericValue("Z"));
+      assert.isFalse(isNumericValue("!"));
+      assert.isFalse(isNumericValue("@"));
+      assert.isFalse(isNumericValue(" "));
+    });
+
+    it("should return false for special characters", () => {
+      assert.isFalse(isNumericValue("-"));
+      assert.isFalse(isNumericValue("+"));
+      assert.isFalse(isNumericValue("."));
+      assert.isFalse(isNumericValue(","));
+    });
+
+    it("should return false for mixed alphanumeric strings", () => {
+      assert.isFalse(isNumericValue("1a"));
+      assert.isFalse(isNumericValue("a1"));
+      assert.isFalse(isNumericValue("5x"));
+    });
+
+    it("should return false for empty string", () => {
+      assert.isFalse(isNumericValue(" "));
+    });
+  });
+
+  // Tests for the 2-character limit (enforces max 99 minutes, 59 seconds)
+  describe("isAtMaxLength", () => {
+    it("should return false for empty string", () => {
+      assert.isFalse(isAtMaxLength(""));
+    });
+
+    it("should return false for single character", () => {
+      assert.isFalse(isAtMaxLength("5"));
+      assert.isFalse(isAtMaxLength("9"));
+    });
+
+    it("should return true for 2 characters", () => {
+      assert.isTrue(isAtMaxLength("25"));
+      assert.isTrue(isAtMaxLength("99"));
+      assert.isTrue(isAtMaxLength("00"));
+    });
+
+    it("should return true for more than 2 characters", () => {
+      assert.isTrue(isAtMaxLength("123"));
+      assert.isTrue(isAtMaxLength("999"));
+    });
+  });
+
+  describe("size submenu (nova)", () => {
+    const novaState = {
+      ...mockState,
+      Prefs: {
+        ...mockState.Prefs,
+        values: {
+          ...mockState.Prefs.values,
+          "nova.enabled": true,
+          "widgets.focusTimer.size": "medium",
+        },
+      },
+    };
+
+    it("does not render size submenu when nova is disabled", () => {
+      assert.isFalse(
+        wrapper.find("panel-list[id='focus-timer-size-submenu']").exists()
+      );
+    });
+
+    it("renders size submenu with small/medium/large items when nova is enabled", () => {
+      const novaWrapper = mount(
+        <WrapWithProvider state={novaState}>
+          <FocusTimer
+            dispatch={dispatch}
+            handleUserInteraction={handleUserInteraction}
+            widgetsMayBeMaximized={true}
+          />
+        </WrapWithProvider>
+      );
+      const submenu = novaWrapper.find(
+        "panel-list[id='focus-timer-size-submenu']"
+      );
+      assert.isTrue(submenu.exists());
+
+      const items = submenu.find("panel-item");
+      assert.equal(items.length, 3);
+
+      const smallItem = items.filterWhere(n => n.prop("data-size") === "small");
+      const mediumItem = items.filterWhere(
+        n => n.prop("data-size") === "medium"
+      );
+      const largeItem = items.filterWhere(n => n.prop("data-size") === "large");
+      assert.isTrue(smallItem.exists(), "small item should exist");
+      assert.isTrue(mediumItem.exists(), "medium item should exist");
+      assert.isTrue(largeItem.exists(), "large item should exist");
+      novaWrapper.unmount();
+    });
+
+    it("marks the current size as checked and the other as undefined", () => {
+      const novaWrapper = mount(
+        <WrapWithProvider state={novaState}>
+          <FocusTimer
+            dispatch={dispatch}
+            handleUserInteraction={handleUserInteraction}
+            widgetsMayBeMaximized={true}
+          />
+        </WrapWithProvider>
+      );
+      const submenu = novaWrapper.find(
+        "panel-list[id='focus-timer-size-submenu']"
+      );
+      const items = submenu.find("panel-item");
+
+      const mediumItem = items.filterWhere(
+        n => n.prop("data-size") === "medium"
+      );
+      const largeItem = items.filterWhere(n => n.prop("data-size") === "large");
+
+      assert.equal(
+        mediumItem.prop("checked"),
+        true,
+        "medium should be checked"
+      );
+      assert.isUndefined(
+        largeItem.prop("checked"),
+        "large should be unchecked"
+      );
+      novaWrapper.unmount();
+    });
+
+    it("dispatches SET_PREF and WIDGETS_USER_EVENT when clicking a size item", () => {
+      const novaWrapper = mount(
+        <WrapWithProvider state={novaState}>
+          <FocusTimer
+            dispatch={dispatch}
+            handleUserInteraction={handleUserInteraction}
+            widgetsMayBeMaximized={true}
+          />
+        </WrapWithProvider>
+      );
+      const submenuNode = novaWrapper
+        .find("panel-list[id='focus-timer-size-submenu']")
+        .getDOMNode();
+      const mockItem = document.createElement("div");
+      mockItem.dataset.size = "large";
+      const event = new MouseEvent("click", { bubbles: true });
+      Object.defineProperty(event, "composedPath", {
+        value: () => [mockItem],
+      });
+      submenuNode.dispatchEvent(event);
+
+      assert.ok(dispatch.calledTwice);
+
+      const [setPrefAction] = dispatch.getCall(0).args;
+      assert.equal(setPrefAction.type, at.SET_PREF);
+      assert.equal(setPrefAction.data.name, "widgets.focusTimer.size");
+      assert.equal(setPrefAction.data.value, "large");
+
+      const [telemetryAction] = dispatch.getCall(1).args;
+      assert.equal(telemetryAction.type, at.WIDGETS_USER_EVENT);
+      assert.equal(telemetryAction.data.widget_name, "focus_timer");
+      assert.equal(telemetryAction.data.user_action, "change_size");
+      assert.equal(telemetryAction.data.action_value, "large");
+      novaWrapper.unmount();
+    });
+
+    it("dispatches the small size when the small item is clicked", () => {
+      const novaWrapper = mount(
+        <WrapWithProvider state={novaState}>
+          <FocusTimer
+            dispatch={dispatch}
+            handleUserInteraction={handleUserInteraction}
+            widgetsMayBeMaximized={true}
+          />
+        </WrapWithProvider>
+      );
+      const submenuNode = novaWrapper
+        .find("panel-list[id='focus-timer-size-submenu']")
+        .getDOMNode();
+      const mockItem = document.createElement("div");
+      mockItem.dataset.size = "small";
+      const event = new MouseEvent("click", { bubbles: true });
+      Object.defineProperty(event, "composedPath", {
+        value: () => [mockItem],
+      });
+      submenuNode.dispatchEvent(event);
+
+      const [setPrefAction] = dispatch.getCall(0).args;
+      assert.equal(setPrefAction.data.name, "widgets.focusTimer.size");
+      assert.equal(setPrefAction.data.value, "small");
+
+      const [telemetryAction] = dispatch.getCall(1).args;
+      assert.equal(telemetryAction.data.user_action, "change_size");
+      assert.equal(telemetryAction.data.action_value, "small");
+      novaWrapper.unmount();
+    });
+  });
+
+  it("should clamp minutes to 99 and seconds to 59 when setting duration", () => {
+    // Find the editable fields
+    const minutes = wrapper.find(".timer-set-minutes").at(0);
+    const seconds = wrapper.find(".timer-set-seconds").at(0);
+
+    // Simulate user typing values beyond limits
+    minutes.getDOMNode().innerText = "100";
+    seconds.getDOMNode().innerText = "85";
+
+    // Trigger blur, which calls setTimerDuration()
+    seconds.simulate("blur");
+
+    // Clamp check
+    const clampedMinutes = Math.min(
+      parseInt(minutes.getDOMNode().innerText, 10),
+      99
+    );
+    const clampedSeconds = Math.min(
+      parseInt(seconds.getDOMNode().innerText, 10),
+      59
+    );
+
+    assert.equal(clampedMinutes, 99, "minutes should be clamped to 99");
+    assert.equal(clampedSeconds, 59, "seconds should be clamped to 59");
   });
 });

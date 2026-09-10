@@ -15,7 +15,8 @@ const ALLOW_LIST_CONVENIENCE_PREF =
 /**
  * Convert a JS object from RemoteSettings to an nsIUrlClassifierExceptionListEntry.
  * Copied from UrlClassifierExceptionListService.sys.mjs with modifications.
- * @param {Object} rsObject - The JS object from RemoteSettings to convert.
+ *
+ * @param {object} rsObject - The JS object from RemoteSettings to convert.
  * @returns {nsIUrlClassifierExceptionListEntry} The converted nsIUrlClassifierExceptionListEntry.
  */
 function rsObjectToEntry(rsObject) {
@@ -316,4 +317,49 @@ add_task(async function test_exception_list_lookups_with_category_prefs() {
 
   Services.prefs.clearUserPref(ALLOW_LIST_BASELINE_PREF);
   Services.prefs.clearUserPref(ALLOW_LIST_CONVENIENCE_PREF);
+});
+
+/**
+ * Test exception list allows specifying URL patterns that match more
+ * than a site.
+ */
+add_task(async function test_exception_site_specific_pattern() {
+  let list = Cc["@mozilla.org/url-classifier/exception-list;1"].createInstance(
+    Ci.nsIUrlClassifierExceptionList
+  );
+
+  info("Add multi-layer public suffix list entry to exception");
+  list.addEntry(
+    rsObjectToEntry({
+      category: "internal-pref",
+      urlPattern: "*://*.co.uk/*",
+      topLevelUrlPattern: "*://example.com/*",
+    })
+  );
+
+  info("Add normal tld to exception");
+  list.addEntry(
+    rsObjectToEntry({
+      category: "internal-pref",
+      urlPattern: "*://*.org/*",
+      topLevelUrlPattern: "*://*.example.com/*",
+    })
+  );
+
+  Assert.ok(
+    list.matches(
+      Services.io.newURI("https://tracker.org/bar"),
+      Services.io.newURI("https://example.com/foo"),
+      false
+    ),
+    "Exception list should match tracker.org under example.com."
+  );
+  Assert.ok(
+    list.matches(
+      Services.io.newURI("https://sub.tracker.co.uk/bar"),
+      Services.io.newURI("https://example.com/foo"),
+      false
+    ),
+    "Exception list should match sub.tracker.co.uk under example.com."
+  );
 });

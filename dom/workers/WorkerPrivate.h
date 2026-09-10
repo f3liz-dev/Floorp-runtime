@@ -1,16 +1,14 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef mozilla_dom_workers_workerprivate_h__
-#define mozilla_dom_workers_workerprivate_h__
+#ifndef mozilla_dom_workers_workerprivate_h_
+#define mozilla_dom_workers_workerprivate_h_
 
 #include <bitset>
 
+#include "FontVisibilityProvider.h"
 #include "MainThreadUtils.h"
-#include "ScriptLoader.h"
 #include "js/ContextOptions.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
@@ -25,8 +23,8 @@
 #include "mozilla/Result.h"
 #include "mozilla/StaticPrefs_extensions.h"
 #include "mozilla/StorageAccess.h"
+#include "mozilla/TargetShutdownTaskSet.h"
 #include "mozilla/ThreadBound.h"
-#include "mozilla/ThreadSafeWeakPtr.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/UseCounter.h"
 #include "mozilla/dom/ClientSource.h"
@@ -45,7 +43,6 @@
 #include "mozilla/dom/workerinternals/Queue.h"
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/net/NeckoChannelParams.h"
-#include "nsContentUtils.h"
 #include "nsIChannel.h"
 #include "nsIContentPolicy.h"
 #include "nsID.h"
@@ -60,7 +57,8 @@ class nsIThreadInternal;
 
 namespace JS {
 struct RuntimeStats;
-}
+class Dispatchable;
+}  // namespace JS
 
 namespace mozilla {
 class ThrottledEventQueue;
@@ -147,7 +145,8 @@ nsString ComputeWorkerPrivateId();
 
 class WorkerPrivate final
     : public RelativeTimeline,
-      public SupportsCheckedUnsafePtr<CheckIf<DiagnosticAssertEnabled>> {
+      public SupportsCheckedUnsafePtr<CheckIf<DiagnosticAssertEnabled>>,
+      public FontVisibilityProvider {
  public:
   // Callback invoked on the parent thread when the worker's cancellation is
   // about to be requested.  This covers both calls to
@@ -234,6 +233,8 @@ class WorkerPrivate final
   };
 
   NS_INLINE_DECL_REFCOUNTING(WorkerPrivate)
+
+  FONT_VISIBILITY_PROVIDER_IMPL
 
   static already_AddRefed<WorkerPrivate> Constructor(
       JSContext* aCx, const nsAString& aScriptURL, bool aIsChromeWorker,
@@ -443,8 +444,8 @@ class WorkerPrivate final
                    JSErrorReport* aReport);
 
   static void ReportErrorToConsole(
-      uint32_t aErrorFlags, const nsCString& aCategory,
-      nsContentUtils::PropertiesFile aFile, const nsCString& aMessageName,
+      uint32_t aErrorFlags, const nsCString& aCategory, PropertiesFile aFile,
+      const nsCString& aMessageName,
       const nsTArray<nsString>& aParams = nsTArray<nsString>(),
       const mozilla::SourceLocation& aLocation =
           mozilla::JSCallingLocation::Get());
@@ -458,7 +459,14 @@ class WorkerPrivate final
   void UpdateContextOptionsInternal(JSContext* aCx,
                                     const JS::ContextOptions& aContextOptions);
 
+  void UpdateTimezoneOverrideInternal(JSContext* aCx,
+                                      const nsAString& aTimezone);
+
   void UpdateLanguagesInternal(const nsTArray<nsString>& aLanguages);
+
+  void UpdateLanguageOverrideInternal(
+      const nsCString& aLanguageOverride,
+      const nsTArray<nsString>& aResolvedLanguages);
 
   void UpdateJSWorkerMemoryParameterInternal(JSContext* aCx, JSGCParamKey key,
                                              Maybe<uint32_t> aValue);
@@ -579,6 +587,30 @@ class WorkerPrivate final
   MOZ_CAN_RUN_SCRIPT void ProcessSingleDebuggerRunnable();
   void ClearDebuggerEventQueue();
 
+  // True if the debugger queue holds any RemoteWorkerDebugger IPC handshake
+  // runnable that a nested sync loop should service right now
+  // (mProcessDebuggerIPCHandshake is set and this worker uses the remote
+  // debugger). Scans the whole queue, not just the front: an IPC handshake
+  // reply can sit behind a deferred debugger script/message runnable, and it
+  // must still run so the blocked parent thread proceeds. See bug 2053827.
+  bool HasPendingDebuggerIPCHandshakeRunnable() MOZ_REQUIRES(mMutex);
+
+  // Remove and return the first (FIFO) RemoteWorkerDebugger IPC handshake
+  // runnable in the debugger queue, leaving every other runnable queued in its
+  // original relative order (so deferred debugger script/message runnables stay
+  // deferred). Returns nullptr if there is none; the caller owns the result.
+  WorkerRunnable* TakeFirstDebuggerIPCHandshakeRunnable() MOZ_REQUIRES(mMutex);
+
+  // Run a single debugger IPC handshake runnable (see above) if one is queued.
+  // RunCurrentSyncLoop calls this one runnable at a time, re-checking control
+  // runnables between each, so IPC handshake runnables take priority over
+  // deferred debugger runnables without starving control runnables.
+  //
+  // Deliberately not MOZ_CAN_RUN_SCRIPT: IPC handshake runnables only mutate
+  // debugger state and dispatch follow-up work, never running script, so this
+  // can be called from RunCurrentSyncLoop (which is not MOZ_CAN_RUN_SCRIPT).
+  void ProcessNextDebuggerIPCHandshakeRunnable();
+
   void OnProcessNextEvent();
 
   void AfterProcessNextEvent();
@@ -617,23 +649,26 @@ class WorkerPrivate final
   nsISerialEventTarget* MainThreadEventTargetForMessaging();
 
   nsresult DispatchToMainThreadForMessaging(
-      nsIRunnable* aRunnable, uint32_t aFlags = NS_DISPATCH_NORMAL);
+      nsIRunnable* aRunnable,
+      nsIEventTarget::DispatchFlags aFlags = NS_DISPATCH_NORMAL);
 
   nsresult DispatchToMainThreadForMessaging(
       already_AddRefed<nsIRunnable> aRunnable,
-      uint32_t aFlags = NS_DISPATCH_NORMAL);
+      nsIEventTarget::DispatchFlags aFlags = NS_DISPATCH_NORMAL);
 
   nsISerialEventTarget* MainThreadEventTarget();
 
-  nsresult DispatchToMainThread(nsIRunnable* aRunnable,
-                                uint32_t aFlags = NS_DISPATCH_NORMAL);
+  nsresult DispatchToMainThread(
+      nsIRunnable* aRunnable,
+      nsIEventTarget::DispatchFlags aFlags = NS_DISPATCH_NORMAL);
 
-  nsresult DispatchToMainThread(already_AddRefed<nsIRunnable> aRunnable,
-                                uint32_t aFlags = NS_DISPATCH_NORMAL);
+  nsresult DispatchToMainThread(
+      already_AddRefed<nsIRunnable> aRunnable,
+      nsIEventTarget::DispatchFlags aFlags = NS_DISPATCH_NORMAL);
 
   nsresult DispatchDebuggeeToMainThread(
       already_AddRefed<WorkerRunnable> aRunnable,
-      uint32_t aFlags = NS_DISPATCH_NORMAL);
+      nsIEventTarget::DispatchFlags aFlags = NS_DISPATCH_NORMAL);
 
   // Get an event target that will dispatch runnables as control runnables on
   // the worker thread.  Implement nsICancelableRunnable if you wish to take
@@ -728,6 +763,7 @@ class WorkerPrivate final
   void CopyJSSettings(workerinternals::JSSettings& aSettings) {
     mozilla::MutexAutoLock lock(mMutex);
     aSettings = mJSSettings;
+    aSettings.CopyOverrideStrings();
   }
 
   void CopyJSRealmOptions(JS::RealmOptions& aOptions) {
@@ -744,6 +780,11 @@ class WorkerPrivate final
   // worker, so WorkerPrivate* should be safe in the moment of calling.
   // We would like to have stronger type-system annotated/enforced handling.
   WorkerPrivate* GetParent() const { return mParent; }
+
+  nsISerialEventTarget* GetSchedulingEventTarget() {
+    WorkerPrivate* parent = GetParent();
+    return parent ? parent->ControlEventTarget() : MainThreadEventTarget();
+  }
 
   // Returns the top level worker. It can be the current worker if it's the top
   // level one.
@@ -818,6 +859,14 @@ class WorkerPrivate final
 
   uint64_t AssociatedBrowsingContextID() const {
     return mLoadInfo.mAssociatedBrowsingContextID;
+  }
+
+  const nsTArray<nsString>& GetLanguageOverride() const {
+    return mLoadInfo.mLanguageOverride;
+  }
+
+  const nsCString& GetLanguageOverrideLocale() const {
+    return mLoadInfo.mLanguageOverrideLocale;
   }
 
   uint64_t ServiceWorkerID() const { return GetServiceWorkerDescriptor().Id(); }
@@ -947,13 +996,13 @@ class WorkerPrivate final
   nsresult SetCSPFromHeaderValues(const nsACString& aCSPHeaderValue,
                                   const nsACString& aCSPReportOnlyHeaderValue);
 
-  void StoreCSPOnClient();
+  void StorePolicyContainerArgsOnClient();
 
   const mozilla::ipc::CSPInfo& GetCSPInfo() const {
     return mLoadInfo.mCSPContext->CSPInfo();
   }
 
-  WorkerCSPContext* GetCSPContext() const {
+  OffThreadCSPContext* GetCSPContext() const {
     return mLoadInfo.mCSPContext.get();
   }
 
@@ -995,6 +1044,11 @@ class WorkerPrivate final
     return mLoadInfo.mUsingStorageAccess;
   }
 
+  bool SerialAllowed() const {
+    AssertIsOnWorkerThread();
+    return mLoadInfo.mSerialAllowed;
+  }
+
   nsICookieJarSettings* CookieJarSettings() const {
     // Any thread.
     MOZ_ASSERT(mLoadInfo.mCookieJarSettings);
@@ -1020,14 +1074,16 @@ class WorkerPrivate final
 
   bool IsWatchedByDevTools() const { return mLoadInfo.mWatchedByDevTools; }
 
-  bool ShouldResistFingerprinting(RFPTarget aTarget) const;
-
   const Maybe<RFPTargetSet>& GetOverriddenFingerprintingSettings() const {
     return mLoadInfo.mOverriddenFingerprintingSettings;
   }
 
   bool IsOn3PCBExceptionList() const {
     return mLoadInfo.mIsOn3PCBExceptionList;
+  }
+
+  const nsString& TimezoneOverride() const {
+    return mLoadInfo.mTimezoneOverride;
   }
 
   RemoteWorkerChild* GetRemoteWorkerController();
@@ -1043,8 +1099,6 @@ class WorkerPrivate final
   bool Thaw(const nsPIDOMWindowInner* aWindow);
 
   void PropagateStorageAccessPermissionGranted();
-
-  void NotifyStorageKeyUsed();
 
   void EnableDebugger();
 
@@ -1063,6 +1117,13 @@ class WorkerPrivate final
   void DisableRemoteDebugger();
 
   void DisableRemoteDebuggerOnWorkerThread(const bool& aForShutdown = false);
+
+  // Whether this worker exposes its debugger through the parent-process
+  // RemoteWorkerDebugger mechanism (true) or registers its nsIWorkerDebugger on
+  // the local main thread (false). Latched at construction from
+  // dom.worker.remoteDebugger.enabled; always false in the parent process. The
+  // two mechanisms are mutually exclusive for a given worker.
+  bool UseRemoteDebugger() const { return mUseRemoteDebugger; }
 
   void SetIsQueued(const bool& aQueued);
 
@@ -1104,7 +1165,12 @@ class WorkerPrivate final
 
   void UpdateContextOptions(const JS::ContextOptions& aContextOptions);
 
+  void UpdateTimezoneOverride(const nsAString& aTimezone);
+
   void UpdateLanguages(const nsTArray<nsString>& aLanguages);
+
+  void UpdateLanguageOverride(const nsACString& aLanguageOverride,
+                              const nsTArray<nsString>& aResolvedLanguages);
 
   void UpdateJSWorkerMemoryParameter(JSGCParamKey key, Maybe<uint32_t> value);
 
@@ -1202,6 +1268,9 @@ class WorkerPrivate final
   }
   void IncreaseWorkerFinishedRunnableCount() { ++mWorkerFinishedRunnableCount; }
   void DecreaseWorkerFinishedRunnableCount() { --mWorkerFinishedRunnableCount; }
+
+  void JSAsyncTaskStarted(JS::Dispatchable* aDispatchable);
+  void JSAsyncTaskFinished(JS::Dispatchable* aDispatchable);
 
   void RunShutdownTasks();
 
@@ -1326,6 +1395,12 @@ class WorkerPrivate final
  public:
   void CancelGCTimers() { SetGCTimerMode(NoTimer); }
 
+  // Initialize global's endpoint list with the processed header result
+  // in mLoadInfo
+  void InitializeGlobalReportingEndpoints();
+
+  void SetReportingEndpointsHeader(const nsACString& aHeader);
+
  private:
   void ShutdownGCTimers();
 
@@ -1344,6 +1419,16 @@ class WorkerPrivate final
   nsresult RegisterShutdownTask(nsITargetShutdownTask* aTask);
 
   nsresult UnregisterShutdownTask(nsITargetShutdownTask* aTask);
+
+  // Shutdown tasks registered via the debugger-only event target (i.e. the
+  // RemoteWorkerDebugger's MessageChannel). These run on worker shutdown like
+  // regular shutdown tasks, but are tracked separately so they do NOT keep the
+  // worker ineligible for CC: an idle, otherwise-unreferenced worker that only
+  // has a remote debugger registered must still be collectable, otherwise the
+  // Worker<->WorkerPrivate cycle never breaks (bug 1944240).
+  nsresult RegisterDebuggerShutdownTask(nsITargetShutdownTask* aTask);
+
+  nsresult UnregisterDebuggerShutdownTask(nsITargetShutdownTask* aTask);
 
   // Internal logic to dispatch a runnable. This is separate from Dispatch()
   // to allow runnables to be atomically dispatched in bulk.
@@ -1438,6 +1523,16 @@ class WorkerPrivate final
   workerinternals::Queue<WorkerRunnable*, 4> mDebuggerQueue
       MOZ_GUARDED_BY(mMutex);
 
+  // This counts the numbers of dispatching WorkerControlRunnables.
+  // This is used to decouple the lock sequence between WorkerPrivate::mMutex
+  // and FutexThread::Lock. If this count is not zero, it means there are some
+  // WorkerControlRunnables are dispatching, and WorkerControlRunables might
+  // unlock WorkerPrivate::mMutex to request JS execution interrupt on the
+  // Worker thread.
+  // When a Worker starts shutdown, before releasing mJSContext, this value must
+  // be ensured to be zero.
+  uint32_t mDispatchingControlRunnables MOZ_GUARDED_BY(mMutex);
+
   // Touched on multiple threads, protected with mMutex. Only modified on the
   // worker thread
   JSContext* mJSContext MOZ_GUARDED_BY(mMutex);
@@ -1505,7 +1600,19 @@ class WorkerPrivate final
   mozilla::ipc::Endpoint<PRemoteWorkerDebuggerParent> mDebuggerParentEp;
   bool mRemoteDebuggerRegistered MOZ_GUARDED_BY(mMutex);
   bool mRemoteDebuggerReady MOZ_GUARDED_BY(mMutex);
+  // True while the parent thread is blocked in Enable/DisableRemoteDebugger
+  // waiting for the register/unregister handshake reply (RecvRegisterDone /
+  // RecvUnregisterDone) to run on the worker thread. That reply is delivered on
+  // the worker's debugger queue, which a nested sync loop (RunCurrentSyncLoop)
+  // does not otherwise drain, so if the worker is in such a loop the parent
+  // thread would block forever (bug 2053827). While this is set,
+  // RunCurrentSyncLoop services the debugger queue's IPC-message runnables so
+  // the handshake can complete. Set/cleared on the parent thread and read on
+  // the worker thread, both under mMutex.
+  bool mProcessDebuggerIPCHandshake MOZ_GUARDED_BY(mMutex);
   bool mIsQueued;  // Should only touched on parent thread.
+  // Immutable after construction, safe to read from any thread.
+  const bool mUseRemoteDebugger;
   mozilla::CondVar mDebuggerBindingCondVar MOZ_GUARDED_BY(mMutex);
   RefPtr<WorkerEventTarget> mWorkerDebuggerEventTarget;
 
@@ -1700,8 +1807,14 @@ class WorkerPrivate final
   Atomic<uint32_t> mTopLevelWorkerFinishedRunnableCount;
   Atomic<uint32_t> mWorkerFinishedRunnableCount;
 
-  nsTArray<nsCOMPtr<nsITargetShutdownTask>> mShutdownTasks
-      MOZ_GUARDED_BY(mMutex);
+  // A set of active JS async tasks that should prevent idle shutdown.
+  HashMap<JS::Dispatchable*, RefPtr<StrongWorkerRef>> mPendingJSAsyncTasks;
+
+  TargetShutdownTaskSet mShutdownTasks MOZ_GUARDED_BY(mMutex);
+  // Shutdown tasks from the RemoteWorkerDebugger's MessageChannel. Kept out of
+  // mShutdownTasks so they don't block CC eligibility (see
+  // RegisterDebuggerShutdownTask); still run on shutdown.
+  TargetShutdownTaskSet mDebuggerShutdownTasks MOZ_GUARDED_BY(mMutex);
   bool mShutdownTasksRun MOZ_GUARDED_BY(mMutex) = false;
 
   bool mCCFlagSaysEligible MOZ_GUARDED_BY(mMutex){true};
@@ -1709,11 +1822,9 @@ class WorkerPrivate final
   // The flag indicates if the worke is idle for events in the main event loop.
   bool mWorkerLoopIsIdle MOZ_GUARDED_BY(mMutex){false};
 
-  // This flag is used to ensure we only call NotifyStorageKeyUsed once per
-  // global.
-  bool hasNotifiedStorageKeyUsed{false};
-
   RefPtr<WorkerParentRef> mParentRef;
+
+  FontVisibility mFontVisibility;
 };
 
 class AutoSyncLoopHolder {
@@ -1773,4 +1884,4 @@ class WorkerParentRef final {
 }  // namespace dom
 }  // namespace mozilla
 
-#endif /* mozilla_dom_workers_workerprivate_h__ */
+#endif /* mozilla_dom_workers_workerprivate_h_ */

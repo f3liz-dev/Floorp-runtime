@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -44,7 +42,8 @@ already_AddRefed<Text> Text::SplitText(uint32_t aOffset, ErrorResult& aRv) {
   CharacterDataChangeInfo::Details details = {
       CharacterDataChangeInfo::Details::eSplit, newContent};
   nsresult rv =
-      SetTextInternal(cutStartOffset, cutLength, nullptr, 0, true, &details);
+      SetTextInternal(cutStartOffset, cutLength, nullptr, 0, true,
+                      MutationEffectOnScript::KeepTrustWorthiness, &details);
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
     return nullptr;
@@ -53,7 +52,9 @@ already_AddRefed<Text> Text::SplitText(uint32_t aOffset, ErrorResult& aRv) {
   nsCOMPtr<nsINode> parent = GetParentNode();
   if (parent) {
     nsCOMPtr<nsIContent> beforeNode = GetNextSibling();
-    parent->InsertChildBefore(newContent, beforeNode, true, IgnoreErrors());
+    parent->InsertChildBefore(newContent, beforeNode, true, IgnoreErrors(),
+                              nullptr,
+                              MutationEffectOnScript::KeepTrustWorthiness);
   }
 
   return newContent.forget();
@@ -66,7 +67,7 @@ static Text* FirstLogicallyAdjacentTextNode(Text* aNode) {
       return aNode;
     }
     aNode = static_cast<Text*>(sibling);
-  } while (1);  // Must run out of previous siblings eventually!
+  } while (true);  // Must run out of previous siblings eventually!
 }
 
 static Text* LastLogicallyAdjacentTextNode(Text* aNode) {
@@ -77,7 +78,7 @@ static Text* LastLogicallyAdjacentTextNode(Text* aNode) {
     }
 
     aNode = static_cast<Text*>(sibling);
-  } while (1);  // Must run out of next siblings eventually!
+  } while (true);  // Must run out of next siblings eventually!
 }
 
 void Text::GetWholeText(nsAString& aWholeText) {
@@ -129,7 +130,7 @@ nsresult Text::BindToTree(BindContext& aContext, nsINode& aParent) {
   nsresult rv = CharacterData::BindToTree(aContext, aParent);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  SetDirectionFromNewTextNode(this);
+  SetDirectionFromNewTextNode(this, &aParent);
 
   return NS_OK;
 }

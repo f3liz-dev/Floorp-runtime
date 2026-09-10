@@ -202,6 +202,8 @@ PK11_GetKeyMechanism(CK_KEY_TYPE type)
             return CKM_EDDSA;
         case CKK_HKDF:
             return CKM_HKDF_DERIVE;
+        case CKK_ML_DSA:
+            return CKM_ML_DSA;
         case CKK_GENERIC_SECRET:
         default:
             return CKM_SHA_1_HMAC;
@@ -433,6 +435,9 @@ PK11_GetKeyType(CK_MECHANISM_TYPE type, unsigned long len)
             return CKK_NSS_KYBER;
         case CKM_NSS_ML_KEM_KEY_PAIR_GEN:
             return CKK_NSS_ML_KEM;
+        case CKM_ML_DSA_KEY_PAIR_GEN:
+        case CKM_ML_DSA:
+            return CKK_ML_DSA;
         default:
             return pk11_lookup(type)->keyType;
     }
@@ -666,6 +671,8 @@ PK11_GetKeyGenWithSize(CK_MECHANISM_TYPE type, int size)
         case CKM_PBE_SHA1_DES2_EDE_CBC:
         case CKM_PKCS5_PBKD2:
             return type;
+        case CKM_ML_DSA:
+            return CKM_ML_DSA_KEY_PAIR_GEN;
         default:
             return pk11_lookup(type)->keyGen;
     }
@@ -795,6 +802,11 @@ PK11_GetIVLength(CK_MECHANISM_TYPE type)
         case CKM_CAST_ECB:
         case CKM_CAST3_ECB:
         case CKM_CAST5_ECB:
+        case CKM_AES_KEY_WRAP:
+        case CKM_AES_KEY_WRAP_PAD:
+        case CKM_AES_KEY_WRAP_KWP:
+        case CKM_NSS_AES_KEY_WRAP:
+        case CKM_NSS_AES_KEY_WRAP_PAD:
             return 0;
         case CKM_RC2_CBC:
         case CKM_DES_CBC:
@@ -902,6 +914,11 @@ pk11_ParamFromIVWithLen(CK_MECHANISM_TYPE type, SECItem *iv, int keyLen)
         case CKM_CAST3_ECB:
         case CKM_CAST5_ECB:
         case CKM_RC4:
+        case CKM_AES_KEY_WRAP:
+        case CKM_AES_KEY_WRAP_PAD:
+        case CKM_AES_KEY_WRAP_KWP:
+        case CKM_NSS_AES_KEY_WRAP:
+        case CKM_NSS_AES_KEY_WRAP_PAD:
             break;
         case CKM_RC2_ECB:
             rc2_ecb_params = (CK_RC2_PARAMS *)PORT_Alloc(sizeof(CK_RC2_PARAMS));
@@ -914,13 +931,17 @@ pk11_ParamFromIVWithLen(CK_MECHANISM_TYPE type, SECItem *iv, int keyLen)
             break;
         case CKM_RC2_CBC:
         case CKM_RC2_CBC_PAD:
+            if (!iv || !iv->data || iv->len < sizeof(rc2_params->iv)) {
+                PORT_SetError(SEC_ERROR_INPUT_LEN);
+                PORT_Free(param);
+                return NULL;
+            }
             rc2_params = (CK_RC2_CBC_PARAMS *)PORT_Alloc(sizeof(CK_RC2_CBC_PARAMS));
             if (rc2_params == NULL)
                 break;
             /* Maybe we should pass the key size in too to get this value? */
             rc2_params->ulEffectiveBits = keyLen ? keyLen * 8 : 128;
-            if (iv && iv->data)
-                PORT_Memcpy(rc2_params->iv, iv->data, sizeof(rc2_params->iv));
+            PORT_Memcpy(rc2_params->iv, iv->data, sizeof(rc2_params->iv));
             param->data = (unsigned char *)rc2_params;
             param->len = sizeof(CK_RC2_CBC_PARAMS);
             break;
@@ -1064,6 +1085,18 @@ PK11_IVFromParam(CK_MECHANISM_TYPE type, SECItem *param, int *len)
             rc5_cbc_params = (CK_RC5_CBC_PARAMS *)param->data;
             *len = rc5_cbc_params->ulIvLen;
             return rc5_cbc_params->pIv;
+        case CKM_AES_GCM:
+            if (param->len == sizeof(CK_GCM_PARAMS_V3)) {
+                CK_GCM_PARAMS_V3 *gcm_params = (CK_GCM_PARAMS_V3 *)param->data;
+                *len = gcm_params->ulIvLen;
+                return gcm_params->pIv;
+            }
+            if (param->len == sizeof(CK_NSS_GCM_PARAMS)) {
+                CK_NSS_GCM_PARAMS *gcm_params = (CK_NSS_GCM_PARAMS *)param->data;
+                *len = gcm_params->ulIvLen;
+                return gcm_params->pIv;
+            }
+            return NULL;
         case CKM_SEED_CBC:
         case CKM_CAMELLIA_CBC:
         case CKM_AES_CBC:
@@ -1201,7 +1234,22 @@ rc2_unmap(unsigned long x)
     return 58;
 }
 
-/* Generate a mechaism param from a type, and iv. */
+PRBool
+PK11_IsAEAD(CK_MECHANISM_TYPE type)
+{
+    switch (type) {
+        case CKM_AES_GCM:
+        case CKM_AES_CCM:
+        case CKM_CHACHA20_POLY1305:
+        case CKM_NSS_CHACHA20_POLY1305:
+        case CKM_SALSA20_POLY1305:
+            return PR_TRUE;
+        default:
+            return PR_FALSE;
+    }
+}
+
+/* Generate a mechanism param from a type, and iv. */
 SECItem *
 PK11_ParamFromAlgid(SECAlgorithmID *algid)
 {
@@ -1322,6 +1370,7 @@ PK11_ParamFromAlgid(SECAlgorithmID *algid)
         case CKM_PBE_SHA1_RC4_40:
         case CKM_PBE_SHA1_RC4_128:
         case CKM_PKCS5_PBKD2:
+        case CKM_AES_GCM:
             rv = pbe_PK11AlgidToParam(algid, mech);
             if (rv != SECSuccess) {
                 goto loser;
@@ -1939,7 +1988,22 @@ PK11_MapSignKeyType(KeyType keyType)
             return CKM_ECDSA;
         case edKey:
             return CKM_EDDSA;
+        case mldsaKey:
+            return CKM_ML_DSA;
         case dhKey:
+        case kyberKey:
+        default:
+            break;
+    }
+    return CKM_INVALID_MECHANISM;
+}
+
+CK_MECHANISM_TYPE
+pk11_mapKemKeyType(KeyType keyType)
+{
+    switch (keyType) {
+        case kyberKey:
+            return CKM_ML_KEM;
         default:
             break;
     }
@@ -1952,7 +2016,23 @@ pk11_mapWrapKeyType(KeyType keyType)
     switch (keyType) {
         case rsaKey:
             return CKM_RSA_PKCS;
-        /* Add fortezza?? */
+        default:
+            break;
+    }
+    return CKM_INVALID_MECHANISM;
+}
+
+CK_MECHANISM_TYPE
+pk11_mapDeriveKeyType(KeyType keyType)
+{
+    switch (keyType) {
+        case dhKey:
+            return CKM_DH_PKCS_DERIVE;
+        case ecMontKey:
+        case ecKey:
+            return CKM_ECDH1_DERIVE;
+        /* not adding fortezza here
+         * only because forezza is dead */
         default:
             break;
     }

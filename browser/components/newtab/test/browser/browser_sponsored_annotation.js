@@ -6,9 +6,9 @@
 // Test whether a visit information is annotated correctly when clicking a tile.
 
 if (AppConstants.platform === "macosx") {
-  requestLongerTimeout(4);
+  requestLongerTimeout(5);
 } else {
-  requestLongerTimeout(2);
+  requestLongerTimeout(3);
 }
 
 ChromeUtils.defineESModuleGetters(this, {
@@ -28,17 +28,6 @@ const OPEN_TYPE = {
   NEWTAB_BY_CONTEXTMENU: 3,
   NEWWINDOW_BY_CONTEXTMENU: 4,
   NEWWINDOW_BY_CONTEXTMENU_OF_TILE: 5,
-};
-
-const FRECENCY = {
-  TYPED: 2000,
-  VISITED: 100,
-  SPONSORED: -1,
-  BOOKMARKED: 2075,
-  MIDDLECLICK_TYPED: 100,
-  MIDDLECLICK_BOOKMARKED: 175,
-  NEWWINDOW_TYPED: 100,
-  NEWWINDOW_BOOKMARKED: 175,
 };
 
 const {
@@ -76,13 +65,6 @@ async function waitForVisitNotification(href) {
 }
 
 async function assertDatabase({ targetURL, expected }) {
-  const frecency = await PlacesTestUtils.getDatabaseValue(
-    "moz_places",
-    "frecency",
-    { url: targetURL }
-  );
-  Assert.equal(frecency, expected.frecency, "Frecency is correct");
-
   const placesId = await PlacesTestUtils.getDatabaseValue("moz_places", "id", {
     url: targetURL,
   });
@@ -158,15 +140,30 @@ async function openAndTest({
   expected,
 }) {
   const destinationURL = redirectTo || linkURL;
+  const expectedIsSponsoredLink =
+    linkSelector === ".top-site-button"
+      ? expected.source === VISIT_SOURCE_SPONSORED
+      : null;
 
   // Wait for content is ready.
   await SpecialPowers.spawn(
     gBrowser.selectedBrowser,
-    [linkSelector, linkURL],
-    async (selector, link) => {
-      await ContentTaskUtils.waitForCondition(
-        () => content.document.querySelector(selector).href === link
-      );
+    [linkSelector, linkURL, expectedIsSponsoredLink],
+    async (selector, link, isSponsoredLink) => {
+      await ContentTaskUtils.waitForCondition(() => {
+        let target = content.document.querySelector(selector);
+        if (!target || target.href !== link) {
+          return false;
+        }
+        // Sponsored and organic tiles in this test share a URL, so also
+        // verify the rendered tile type before clicking it.
+        if (isSponsoredLink === null) {
+          return true;
+        }
+        let isRenderedAsSponsored =
+          target.getAttribute("data-is-sponsored-link") === "true";
+        return isSponsoredLink ? isRenderedAsSponsored : !isRenderedAsSponsored;
+      }, "Waiting for the expected link to be rendered");
     }
   );
 
@@ -284,6 +281,11 @@ async function openAndTest({
         const list = link.closest("li");
         const contextMenu = list.querySelector(".context-menu-button");
         contextMenu.click();
+        await ContentTaskUtils.waitForCondition(
+          () =>
+            list.querySelector("[data-l10n-id=newtab-menu-open-new-window]"),
+          "Should find open-new-window menu item after clicking button"
+        );
         const target = list.querySelector(
           "[data-l10n-id=newtab-menu-open-new-window]"
         );
@@ -309,9 +311,10 @@ async function pin(link) {
   // Setup test tile.
   NewTabUtils.pinnedLinks.pin(link, 0);
   await toggleTopsitesPref();
-  await BrowserTestUtils.waitForCondition(() => {
+  await TestUtils.waitForCondition(() => {
     const sites = AboutNewTab.getTopSites();
     return (
+      sites?.[0]?.isPinned &&
       sites?.[0]?.url === link.url &&
       sites[0].sponsored_tile_id === link.sponsored_tile_id
     );
@@ -322,38 +325,20 @@ function unpin(link) {
   NewTabUtils.pinnedLinks.unpin(link);
 }
 
+async function appendPlaceData(arr, url, description) {
+  let frecency = await PlacesTestUtils.getDatabaseValue(
+    "moz_places",
+    "frecency",
+    { url }
+  );
+  arr.push({ frecency, url, description });
+}
+
+function sortFrecencyValues(frecencyValues) {
+  return [...frecencyValues].sort((a, b) => b.frecency - a.frecency);
+}
+
 add_setup(async function () {
-  // Bug 1570686 renamed UrlbarController.addQueryListener and
-  // UrlbarController.removeQueryListener to addListener and removeListener,
-  // respectively. This happened in 141, and the UrlbarTestUtils was updated
-  // to call those methods. UrlbarTestUtils is included in the test package
-  // that we download when doing trainhop tests, so when we run our trainhop
-  // automated tests, UrlbarTestUtils calls UrlbarController.addListener
-  // and UrlbarController.removeListener when those methods don't exist (since
-  // 140 is still using addQueryListener and removeQueryListener).
-  //
-  // We workaround this temporarily by checking the app version, and
-  // monkey-patching a redirect of addListener and removeListener to
-  // addQueryListener and removeQueryListener.
-  if (AppConstants.MOZ_APP_VERSION === "140.0") {
-    let { UrlbarController } = ChromeUtils.importESModule(
-      "resource:///modules/UrlbarController.sys.mjs"
-    );
-
-    UrlbarController.prototype.addListener = function (...args) {
-      this.addQueryListener(...args);
-    };
-
-    UrlbarController.prototype.removeListener = function (...args) {
-      this.removeQueryListener(...args);
-    };
-
-    registerCleanupFunction(() => {
-      delete UrlbarController.prototype.addListener;
-      delete UrlbarController.prototype.removeListener;
-    });
-  }
-
   await clearHistoryAndBookmarks();
   registerCleanupFunction(async () => {
     await clearHistoryAndBookmarks();
@@ -387,7 +372,6 @@ add_task(async function basic() {
       link: SPONSORED_LINK,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         protection: true,
       },
     },
@@ -397,7 +381,6 @@ add_task(async function basic() {
       openType: OPEN_TYPE.NEWTAB_BY_CLICK,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         protection: true,
       },
     },
@@ -407,7 +390,6 @@ add_task(async function basic() {
       openType: OPEN_TYPE.NEWTAB_BY_MIDDLECLICK,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         protection: true,
       },
     },
@@ -417,7 +399,6 @@ add_task(async function basic() {
       openType: OPEN_TYPE.NEWTAB_BY_CONTEXTMENU,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         protection: true,
       },
     },
@@ -427,7 +408,6 @@ add_task(async function basic() {
       openType: OPEN_TYPE.NEWWINDOW_BY_CONTEXTMENU,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         protection: true,
       },
     },
@@ -437,7 +417,6 @@ add_task(async function basic() {
       openType: OPEN_TYPE.NEWWINDOW_BY_CONTEXTMENU_OF_TILE,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         protection: true,
       },
     },
@@ -447,7 +426,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_BOOKMARKED,
-        frecency: FRECENCY.BOOKMARKED,
         protection: false,
       },
     },
@@ -458,7 +436,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_BOOKMARKED,
-        frecency: FRECENCY.BOOKMARKED,
         protection: false,
       },
     },
@@ -469,7 +446,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_BOOKMARKED,
-        frecency: FRECENCY.MIDDLECLICK_BOOKMARKED,
         protection: false,
       },
     },
@@ -480,7 +456,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_BOOKMARKED,
-        frecency: FRECENCY.MIDDLECLICK_BOOKMARKED,
         protection: false,
       },
     },
@@ -491,7 +466,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_BOOKMARKED,
-        frecency: FRECENCY.NEWWINDOW_BOOKMARKED,
         protection: false,
       },
     },
@@ -502,7 +476,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_BOOKMARKED,
-        frecency: FRECENCY.BOOKMARKED,
         protection: false,
       },
     },
@@ -512,7 +485,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.BOOKMARKED,
         protection: true,
       },
     },
@@ -524,7 +496,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.BOOKMARKED,
         protection: true,
       },
     },
@@ -535,7 +506,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.MIDDLECLICK_BOOKMARKED,
         protection: true,
       },
     },
@@ -546,7 +516,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.MIDDLECLICK_BOOKMARKED,
         protection: true,
       },
     },
@@ -558,7 +527,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.NEWWINDOW_BOOKMARKED,
         protection: true,
       },
     },
@@ -570,7 +538,6 @@ add_task(async function basic() {
       bookmarks: BOOKMARKS,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.BOOKMARKED,
         protection: true,
       },
     },
@@ -579,7 +546,6 @@ add_task(async function basic() {
       link: NORMAL_LINK,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.TYPED,
         protection: false,
       },
     },
@@ -589,7 +555,6 @@ add_task(async function basic() {
       openType: OPEN_TYPE.NEWTAB_BY_CLICK,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.TYPED,
         protection: false,
       },
     },
@@ -599,7 +564,6 @@ add_task(async function basic() {
       openType: OPEN_TYPE.NEWTAB_BY_MIDDLECLICK,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.MIDDLECLICK_TYPED,
         protection: false,
       },
     },
@@ -609,7 +573,6 @@ add_task(async function basic() {
       openType: OPEN_TYPE.NEWTAB_BY_CONTEXTMENU,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.MIDDLECLICK_TYPED,
         protection: false,
       },
     },
@@ -619,7 +582,6 @@ add_task(async function basic() {
       openType: OPEN_TYPE.NEWWINDOW_BY_CONTEXTMENU,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.NEWWINDOW_TYPED,
         protection: false,
       },
     },
@@ -629,7 +591,6 @@ add_task(async function basic() {
       openType: OPEN_TYPE.NEWWINDOW_BY_CONTEXTMENU_OF_TILE,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.TYPED,
         protection: false,
       },
     },
@@ -653,9 +614,8 @@ add_task(async function basic() {
         expected,
       });
 
-      await clearHistoryAndBookmarks();
-
       unpin(link);
+      await clearHistoryAndBookmarks();
     });
   }
 });
@@ -683,7 +643,6 @@ add_task(async function redirection() {
       openType: OPEN_TYPE.NEWTAB_BY_CLICK,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
         protection: true,
       },
@@ -694,9 +653,9 @@ add_task(async function redirection() {
       targetURL: link.url,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
       },
     });
+
     await clearHistoryAndBookmarks();
 
     // Test with same tab.
@@ -707,7 +666,6 @@ add_task(async function redirection() {
       openType: OPEN_TYPE.NEWTAB_BY_CLICK,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
         protection: true,
       },
@@ -718,11 +676,10 @@ add_task(async function redirection() {
       targetURL: link.url,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
       },
     });
-    await clearHistoryAndBookmarks();
     unpin(link);
+    await clearHistoryAndBookmarks();
   });
 });
 
@@ -754,7 +711,6 @@ add_task(async function inherit() {
       linkURL: link.url,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         protection: true,
       },
     });
@@ -766,7 +722,6 @@ add_task(async function inherit() {
       openType: OPEN_TYPE.NEWWINDOW_BY_CONTEXTMENU,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
         protection: true,
       },
@@ -782,7 +737,6 @@ add_task(async function inherit() {
       openType: OPEN_TYPE.NEWTAB_BY_CLICK,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
         protection: true,
       },
@@ -798,7 +752,6 @@ add_task(async function inherit() {
       openType: OPEN_TYPE.NEWTAB_BY_MIDDLECLICK,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
         protection: true,
       },
@@ -811,7 +764,6 @@ add_task(async function inherit() {
       linkURL: secondURL,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
         protection: true,
       },
@@ -824,7 +776,6 @@ add_task(async function inherit() {
       openType: OPEN_TYPE.NEWWINDOW_BY_CONTEXTMENU,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
         protection: true,
       },
@@ -840,7 +791,6 @@ add_task(async function inherit() {
       openType: OPEN_TYPE.NEWTAB_BY_CONTEXTMENU,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
         protection: true,
       },
@@ -856,7 +806,6 @@ add_task(async function inherit() {
       openType: OPEN_TYPE.NEWTAB_BY_MIDDLECLICK,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
         protection: true,
       },
@@ -869,7 +818,6 @@ add_task(async function inherit() {
       linkURL: thirdURL,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
         protection: true,
       },
@@ -881,7 +829,6 @@ add_task(async function inherit() {
       linkURL: outsideURL,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.VISITED,
         protection: true,
       },
     });
@@ -890,23 +837,24 @@ add_task(async function inherit() {
     const onLoad = BrowserTestUtils.browserLoaded(
       gBrowser.selectedBrowser,
       false,
-      host
+      "https://www.example.com/"
     );
+
     await UrlbarTestUtils.promiseAutocompleteResultPopup({
       window,
       value: host,
       waitForFocus: SimpleTest.waitForFocus,
     });
-    let promiseVisited = waitForVisitNotification(host);
+
+    let promiseVisited = waitForVisitNotification("https://www.example.com/");
     EventUtils.synthesizeKey("KEY_Enter");
     await onLoad;
     await promiseVisited;
 
     await assertDatabase({
-      targetURL: host,
+      targetURL: "https://www.example.com/",
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         triggerURL: link.url,
       },
     });
@@ -941,7 +889,6 @@ add_task(async function timeout() {
       linkURL: link.url,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
         protection: true,
       },
     });
@@ -962,7 +909,6 @@ add_task(async function timeout() {
       openType: OPEN_TYPE.NEWWINDOW_BY_CONTEXTMENU,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.VISITED,
         protection: true,
       },
     });
@@ -977,7 +923,6 @@ add_task(async function timeout() {
       openType: OPEN_TYPE.NEWTAB_BY_CLICK,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.VISITED,
         protection: true,
       },
     });
@@ -992,7 +937,6 @@ add_task(async function timeout() {
       openType: OPEN_TYPE.NEWTAB_BY_MIDDLECLICK,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.VISITED,
         protection: true,
       },
     });
@@ -1004,13 +948,13 @@ add_task(async function timeout() {
       linkURL: secondURL,
       expected: {
         source: VISIT_SOURCE_ORGANIC,
-        frecency: FRECENCY.VISITED,
         protection: true,
       },
     });
 
     unpin(link);
     await clearHistoryAndBookmarks();
+    await SpecialPowers.popPrefEnv();
   });
 });
 
@@ -1051,7 +995,6 @@ add_task(async function fixup() {
       targetURL: destinationURL,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
       },
     });
 
@@ -1094,7 +1037,6 @@ add_task(async function noTriggeringURL() {
       targetURL,
       expected: {
         source: VISIT_SOURCE_SPONSORED,
-        frecency: FRECENCY.SPONSORED,
       },
     });
 
@@ -1108,4 +1050,105 @@ add_task(async function noTriggeringURL() {
 
     await clearHistoryAndBookmarks();
   });
+});
+
+add_task(async function basic_frecency_check() {
+  const SPONSORED_LINK = {
+    label: "test_label",
+    url: "https://example.com/",
+    sponsored_position: 1,
+    sponsored_tile_id: 12345,
+    sponsored_impression_url: "https://impression.example.com/",
+    sponsored_click_url: "https://click.example.com/",
+  };
+
+  const NORMAL_LINK = {
+    label: "test_label",
+    url: "https://example.com/",
+  };
+
+  const BOOKMARKS = [
+    {
+      parentGuid: PlacesUtils.bookmarks.toolbarGuid,
+      url: Services.io.newURI("https://example.com/"),
+      title: "test bookmark",
+    },
+  ];
+
+  // This is a basic, slim sanity check the frecency ordering is expected.
+  // Ties are broken by their order.
+  const testData = [
+    // Typed visits and bookmarked visits.
+    {
+      description: "Bookmarked result",
+      link: NORMAL_LINK,
+      bookmarks: BOOKMARKS,
+      expected: {
+        source: VISIT_SOURCE_BOOKMARKED,
+        protection: false,
+      },
+    },
+    {
+      description: "Organic tile",
+      link: NORMAL_LINK,
+      expected: {
+        source: VISIT_SOURCE_ORGANIC,
+        protection: false,
+      },
+    },
+    // Sponsored.
+    {
+      description: "Sponsored and bookmarked result",
+      link: SPONSORED_LINK,
+      bookmarks: BOOKMARKS,
+      expected: {
+        source: VISIT_SOURCE_SPONSORED,
+        protection: true,
+      },
+    },
+    {
+      description: "Sponsored tile",
+      link: SPONSORED_LINK,
+      expected: {
+        source: VISIT_SOURCE_SPONSORED,
+        protection: true,
+      },
+    },
+  ];
+
+  let frecencyResults = [];
+
+  for (const { description, link, openType, bookmarks, expected } of testData) {
+    info(description);
+
+    await BrowserTestUtils.withNewTab("about:home", async () => {
+      // Setup test tile.
+      await pin(link);
+
+      for (const bookmark of bookmarks || []) {
+        await PlacesUtils.bookmarks.insert(bookmark);
+      }
+
+      await openAndTest({
+        linkSelector: ".top-site-button",
+        linkURL: link.url,
+        openType,
+        expected,
+      });
+
+      await appendPlaceData(frecencyResults, link.url, description);
+
+      unpin(link);
+      await clearHistoryAndBookmarks();
+    });
+  }
+
+  let sortedByFrecency = sortFrecencyValues(frecencyResults);
+  for (let i = 0; i < testData.length; i++) {
+    Assert.equal(
+      sortedByFrecency[i].description,
+      frecencyResults[i].description,
+      `Expected "${frecencyResults[i].description}" to be at position ${i} when sorted by frecency`
+    );
+  }
 });

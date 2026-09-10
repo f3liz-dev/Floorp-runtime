@@ -14,15 +14,14 @@
 #include <stddef.h>
 
 #include <memory>
+#include <span>
 #include <vector>
 
-#include "api/array_view.h"
 #include "api/audio/audio_frame.h"
 #include "api/audio/audio_mixer.h"
 #include "api/scoped_refptr.h"
 #include "modules/audio_mixer/frame_combiner.h"
 #include "modules/audio_mixer/output_rate_calculator.h"
-#include "rtc_base/race_checker.h"
 #include "rtc_base/synchronization/mutex.h"
 #include "rtc_base/thread_annotations.h"
 
@@ -64,7 +63,7 @@ class AudioMixerImpl : public AudioMixer {
   void UpdateSourceCountStats() RTC_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // Fetches audio frames to mix from sources.
-  ArrayView<AudioFrame* const> GetAudioFromSources(int output_frequency)
+  std::span<AudioFrame* const> GetAudioFromSources(int output_frequency)
       RTC_EXCLUSIVE_LOCKS_REQUIRED(mutex_);
 
   // The critical section lock guards audio source insertion and

@@ -9,7 +9,8 @@
 #include <wtypes.h>
 
 #include "mozilla/Likely.h"
-#define INITGUID          // Enable DEFINE_PROPERTYKEY()
+#define INITGUID  // Enable DEFINE_PROPERTYKEY()
+#include <prinrval.h>
 #include <propkeydef.h>   // For DEFINE_PROPERTYKEY() definition
 #include <propvarutil.h>  // For InitPropVariantFrom*()
 
@@ -33,7 +34,9 @@
 #include "mozilla/ipc/UtilityMediaServiceChild.h"
 #include "mozilla/ipc/UtilityProcessManager.h"
 #include "mozilla/ipc/UtilityProcessParent.h"
+#include "nsFmtString.h"
 #include "nsTHashMap.h"
+#include "nsTextFormatter.h"
 
 #ifdef MOZ_WMF_CDM_LPAC_SANDBOX
 #  include "sandboxBroker.h"
@@ -52,53 +55,56 @@ DEFINE_PROPERTYKEY(EME_CONTENTDECRYPTIONMODULE_ORIGIN_ID, 0x1218a3e2, 0xcfb0,
                    PID_FIRST_USABLE);
 #endif
 
-#define MFCDM_PARENT_LOG(msg, ...)                                     \
-  EME_LOG("MFCDMParent[%p, Id=%" PRIu64 "]@%s: " msg, this, this->mId, \
+#define MFCDM_PARENT_LOG(msg, ...)                                      \
+  EME_LOG("MFCDMParent[{}, Id={}]@{}: " msg, fmt::ptr(this), this->mId, \
           __func__, ##__VA_ARGS__)
 #define MFCDM_PARENT_SLOG(msg, ...) \
-  EME_LOG("MFCDMParent@%s: " msg, __func__, ##__VA_ARGS__)
+  EME_LOG("MFCDMParent@{}: " msg, __func__, ##__VA_ARGS__)
 
-#define MFCDM_RETURN_IF_FAILED(x)                       \
-  do {                                                  \
-    HRESULT rv = x;                                     \
-    if (MOZ_UNLIKELY(FAILED(rv))) {                     \
-      MFCDM_PARENT_SLOG("(" #x ") failed, rv=%lx", rv); \
-      return rv;                                        \
-    }                                                   \
+#define MFCDM_RETURN_IF_FAILED(x)                   \
+  do {                                              \
+    HRESULT rv = x;                                 \
+    if (MOZ_UNLIKELY(FAILED(rv))) {                 \
+      MFCDM_PARENT_SLOG("(" #x ") failed, rv={:x}", \
+                        static_cast<uint32_t>(rv)); \
+      return rv;                                    \
+    }                                               \
   } while (false)
 
-#define MFCDM_RETURN_BOOL_IF_FAILED(x)                  \
-  do {                                                  \
-    HRESULT rv = x;                                     \
-    if (MOZ_UNLIKELY(FAILED(rv))) {                     \
-      MFCDM_PARENT_SLOG("(" #x ") failed, rv=%lx", rv); \
-      return false;                                     \
-    }                                                   \
+#define MFCDM_RETURN_BOOL_IF_FAILED(x)              \
+  do {                                              \
+    HRESULT rv = x;                                 \
+    if (MOZ_UNLIKELY(FAILED(rv))) {                 \
+      MFCDM_PARENT_SLOG("(" #x ") failed, rv={:x}", \
+                        static_cast<uint32_t>(rv)); \
+      return false;                                 \
+    }                                               \
   } while (false)
 
-#define MFCDM_REJECT_IF(pred, rv)                                      \
-  do {                                                                 \
-    if (MOZ_UNLIKELY(pred)) {                                          \
-      MFCDM_PARENT_LOG("reject for [" #pred "], rv=%x", uint32_t(rv)); \
-      aResolver(rv);                                                   \
-      return IPC_OK();                                                 \
-    }                                                                  \
+#define MFCDM_REJECT_IF(pred, rv)                                        \
+  do {                                                                   \
+    if (MOZ_UNLIKELY(pred)) {                                            \
+      MFCDM_PARENT_LOG("reject for [" #pred "], rv={:x}", uint32_t(rv)); \
+      aResolver(rv);                                                     \
+      return IPC_OK();                                                   \
+    }                                                                    \
   } while (false)
 
-#define MFCDM_REJECT_IF_FAILED(op, rv)                                       \
-  do {                                                                       \
-    HRESULT hr = op;                                                         \
-    if (MOZ_UNLIKELY(FAILED(hr))) {                                          \
-      MFCDM_PARENT_LOG("(" #op ") failed(hr=%lx), rv=%x", hr, uint32_t(rv)); \
-      aResolver(rv);                                                         \
-      return IPC_OK();                                                       \
-    }                                                                        \
+#define MFCDM_REJECT_IF_FAILED(op, rv)                           \
+  do {                                                           \
+    HRESULT hr = op;                                             \
+    if (MOZ_UNLIKELY(FAILED(hr))) {                              \
+      MFCDM_PARENT_LOG("(" #op ") failed(hr={:x}), rv={:x}",     \
+                       static_cast<uint32_t>(hr), uint32_t(rv)); \
+      aResolver(rv);                                             \
+      return IPC_OK();                                           \
+    }                                                            \
   } while (false)
 
 MOZ_RUNINIT static StaticDataMutex<
     nsTHashMap<nsStringHashKey, ComPtr<IMFContentDecryptionModuleFactory>>>
     sFactoryMap("sFactoryMap");
-MOZ_RUNINIT static StaticDataMutex<CopyableTArray<MFCDMCapabilitiesIPDL>>
+constinit static StaticDataMutex<CopyableTArray<MFCDMCapabilitiesIPDL>>
     sCapabilities("sCapabilities");
 MOZ_RUNINIT static StaticDataMutex<ComPtr<IUnknown>> sMediaEngineClassFactory(
     "sMediaEngineClassFactory");
@@ -148,7 +154,7 @@ class AutoPropVar {
     if (mVar.vt != VT_EMPTY) {
       HRESULT hr = PropVariantClear(&mVar);
       MOZ_ASSERT(SUCCEEDED(hr));
-      Unused << hr;
+      (void)hr;
     }
   }
 
@@ -184,22 +190,12 @@ static inline LPCWSTR InitDataTypeToString(const nsAString& aInitDataType) {
   }
 }
 
-// The HDCP value follows the feature value in
-// https://docs.microsoft.com/en-us/uwp/api/windows.media.protection.protectioncapabilities.istypesupported?view=winrt-19041
-// - 1 (on without HDCP 2.2 Type 1 restriction)
-// - 2 (on with HDCP 2.2 Type 1 restriction)
-static nsString GetHdcpPolicy(const dom::HDCPVersion& aMinHdcpVersion) {
-  if (aMinHdcpVersion == dom::HDCPVersion::_2_2 ||
-      aMinHdcpVersion == dom::HDCPVersion::_2_3) {
-    return nsString(u"hdcp=2");
-  }
-  return nsString(u"hdcp=1");
-}
-
 static bool RequireClearLead(const nsString& aKeySystem) {
   return aKeySystem.EqualsLiteral(kWidevineExperiment2KeySystemName) ||
          aKeySystem.EqualsLiteral(kPlayReadyHardwareClearLeadKeySystemName);
 }
+
+bool MFCDMParent::IsClearLead() const { return RequireClearLead(mKeySystem); }
 
 static void BuildCapabilitiesArray(
     const nsTArray<MFCDMMediaCapability>& aCapabilities,
@@ -397,19 +393,30 @@ void MFCDMParent::SetWidevineL1Path(const char* aPath) {
   nsAutoCString path(aPath);
   path.AppendLiteral("\\Google.Widevine.CDM.dll");
   sWidevineL1Path = CreateBSTRFromConstChar(path.get());
-  MFCDM_PARENT_SLOG("Set Widevine L1 dll path=%ls\n", sWidevineL1Path);
+  MFCDM_PARENT_SLOG("Set Widevine L1 dll path={}\n",
+                    NS_ConvertUTF16toUTF8(sWidevineL1Path).get());
+}
+
+/* static */
+already_AddRefed<MFCDMParent> MFCDMParent::GetCDMById(uint64_t aId) {
+  StaticMutexAutoLock lock(sRegistryMutex);
+  RefPtr<MFCDMParent> cdm = sRegisteredCDMs.Get(aId);
+  return cdm.forget();
 }
 
 void MFCDMParent::Register() {
+  StaticMutexAutoLock lock(sRegistryMutex);
   MOZ_ASSERT(!sRegisteredCDMs.Contains(this->mId));
   sRegisteredCDMs.InsertOrUpdate(this->mId, this);
   MFCDM_PARENT_LOG("Registered!");
 }
 
 void MFCDMParent::Unregister() {
-  MOZ_ASSERT(sRegisteredCDMs.Contains(this->mId));
-  sRegisteredCDMs.Remove(this->mId);
-  MFCDM_PARENT_LOG("Unregistered!");
+  StaticMutexAutoLock lock(sRegistryMutex);
+  if (sRegisteredCDMs.Contains(this->mId)) {
+    sRegisteredCDMs.Remove(this->mId);
+    MFCDM_PARENT_LOG("Unregistered!");
+  }
 }
 
 MFCDMParent::MFCDMParent(const nsAString& aKeySystem,
@@ -437,10 +444,9 @@ MFCDMParent::MFCDMParent(const nsAString& aKeySystem,
   if (IsBeingProfiledOrLogEnabled()) {
     nsPrintfCString msg("MFCDMParent created for %s",
                         NS_ConvertUTF16toUTF8(aKeySystem).get());
-    MFCDM_PARENT_LOG("%s", msg.get());
+    MFCDM_PARENT_LOG("{}", msg.get());
     PROFILER_MARKER_TEXT("MFCDMParent::Ctor", MEDIA_PLAYBACK, {}, msg);
   }
-  mIPDLSelfRef = this;
   Register();
 
   mKeyMessageListener = mKeyMessageEvents.Connect(
@@ -455,6 +461,87 @@ MFCDMParent::MFCDMParent(const nsAString& aKeySystem,
   RETURN_VOID_IF_FAILED(GetOrCreateFactory(mKeySystem, mFactory));
 }
 
+void MFCDMParent::OnHardwareContextReset() {
+  ASSERT_CDM_ACCESS_ON_MANAGER_THREAD();
+  MFCDM_PARENT_LOG("OnHardwareContextReset");
+  // A hardware context change can change the HDCP status, so drop the cached
+  // pre-warm result and invalidate any in-flight query (its result predates the
+  // change); the next protected activation re-queries HDCP.
+  sHDCPSupported.reset();
+  sHDCPPrewarmQuery = nullptr;
+  ++sHDCPPrewarmGeneration;
+  // The engine actor is torn down and recreated by the recovery, so clear the
+  // engine-side readiness; the new engine re-establishes it. The CDM-side
+  // conditions persist with this surviving actor.
+  mReadinessMonitor.ResetEngineConditions();
+  // All CDM sessions are in an invalid state after a hardware context reset.
+  // Close them so the content process can re-request keys.
+  for (auto& iter : mSessions) {
+    iter.second->Close(
+        dom::MediaKeySessionClosedReason::Hardware_context_reset);
+  }
+  mSessions.clear();
+  if (MFCDMProxy* proxy = GetMFCDMProxy()) {
+    proxy->OnHardwareContextReset();
+  }
+  // The underlying CDM object is invalidated by the hardware reset. Recreate it
+  // so the new MFMediaEngineParent can attach to a valid CDM after recovery.
+  if (mInitParams.isSome()) {
+    HRESULT rv = RecreateCDM();
+    if (FAILED(rv)) {
+      MFCDM_PARENT_LOG("Failed to recreate CDM after hardware reset, hr={:x}",
+                       rv);
+    }
+  }
+}
+
+HRESULT MFCDMParent::RecreateCDM() {
+  ASSERT_CDM_ACCESS_ON_MANAGER_THREAD();
+  MOZ_ASSERT(mInitParams.isSome());
+  MFCDM_PARENT_LOG("Recreating CDM");
+
+  MutexAutoLock lock(Mutex());
+  mCDMAccessLock.NoteExclusiveAccess();
+  if (mCDM) {
+    auto rv = mCDM->SetPMPHostApp(nullptr);
+    if (FAILED(rv)) {
+      MFCDM_PARENT_LOG("Failed to clear PMP Host App, rv={:x}", rv);
+    }
+  }
+  mCDMProxy = nullptr;
+  mCDM.Reset();
+  mPMPHostWrapper.Reset();
+
+  MFCDM_RETURN_IF_FAILED(CreateContentDecryptionModule(
+      mFactory, MapKeySystem(mKeySystem), *mInitParams, mCDM));
+  if (!mCDM) {
+    return E_FAIL;
+  }
+  mCDMProxy = new MFCDMProxy(mCDM.Get(), mId);
+
+  MFCDM_RETURN_IF_FAILED(SetupPMPHostApp());
+
+  return S_OK;
+}
+
+HRESULT MFCDMParent::SetupPMPHostApp() {
+  if (!IsPlayReadyKeySystemAndSupported(mKeySystem)) {
+    return S_OK;
+  }
+  ComPtr<IMFPMPHost> pmpHost;
+  ComPtr<IMFGetService> cdmService;
+  MFCDM_RETURN_IF_FAILED(mCDM.As(&cdmService));
+  MFCDM_RETURN_IF_FAILED(cdmService->GetService(
+      MF_CONTENTDECRYPTIONMODULE_SERVICE, IID_PPV_ARGS(&pmpHost)));
+  MFCDM_RETURN_IF_FAILED(
+      SUCCEEDED(MakeAndInitialize<MFPMPHostWrapper>(&mPMPHostWrapper, pmpHost))
+          ? S_OK
+          : E_FAIL);
+  MFCDM_RETURN_IF_FAILED(mCDM->SetPMPHostApp(mPMPHostWrapper.Get()));
+  MFCDM_PARENT_LOG("Set PMPHostWrapper on CDM!");
+  return S_OK;
+}
+
 void MFCDMParent::ShutdownCDM() {
   ASSERT_CDM_ACCESS_ON_MANAGER_THREAD();
   MutexAutoLock lock(Mutex());
@@ -464,7 +551,7 @@ void MFCDMParent::ShutdownCDM() {
   }
   auto rv = mCDM->SetPMPHostApp(nullptr);
   if (FAILED(rv)) {
-    MFCDM_PARENT_LOG("Failed to clear PMP Host App, rv=%lx", rv);
+    MFCDM_PARENT_LOG("Failed to clear PMP Host App, rv={:x}", rv);
   }
   if (mCDMProxy) {
     mCDMProxy->Shutdown();
@@ -475,9 +562,9 @@ void MFCDMParent::ShutdownCDM() {
   MFCDM_PARENT_LOG("Shutdown CDM completed");
 }
 
-void MFCDMParent::Destroy() {
+void MFCDMParent::ActorDestroy(ActorDestroyReason aWhy) {
   ASSERT_CDM_ACCESS_READ_ONLY_ON_MANAGER_THREAD();
-  PROFILER_MARKER_UNTYPED("MFCDMParent::Destroy", MEDIA_PLAYBACK);
+  PROFILER_MARKER_UNTYPED("MFCDMParent::ActorDestroy", MEDIA_PLAYBACK);
   mKeyMessageEvents.DisconnectAll();
   mKeyChangeEvents.DisconnectAll();
   mExpirationEvents.DisconnectAll();
@@ -496,7 +583,7 @@ void MFCDMParent::Destroy() {
     iter.second->Close(dom::MediaKeySessionClosedReason::Closed_by_application);
   }
   mSessions.clear();
-  mIPDLSelfRef = nullptr;
+  Unregister();
 }
 
 MFCDMParent::~MFCDMParent() {
@@ -544,7 +631,7 @@ HRESULT MFCDMParent::GetOrCreateFactory(
   auto factoryMap = sFactoryMap.Lock();
   auto rv = factoryMap->MaybeGet(aKeySystem);
   if (!rv) {
-    MFCDM_PARENT_SLOG("No factory %s, creating...",
+    MFCDM_PARENT_SLOG("No factory {}, creating...",
                       NS_ConvertUTF16toUTF8(aKeySystem).get());
     ComPtr<IMFContentDecryptionModuleFactory> factory;
     MFCDM_RETURN_IF_FAILED(LoadFactory(aKeySystem, factory));
@@ -562,10 +649,11 @@ HRESULT MFCDMParent::LoadFactory(
     ComPtr<IMFContentDecryptionModuleFactory>& aFactoryOut) {
   LPCWSTR libraryName = GetCDMLibraryName(aKeySystem);
   const bool loadFromPlatform = wcslen(libraryName) == 0;
-  MFCDM_PARENT_SLOG("Load factory for %s (libraryName=%ls)",
-                    NS_ConvertUTF16toUTF8(aKeySystem).get(), libraryName);
+  MFCDM_PARENT_SLOG("Load factory for {} (libraryName={})",
+                    NS_ConvertUTF16toUTF8(aKeySystem).get(),
+                    NS_ConvertUTF16toUTF8(libraryName).get());
 
-  MFCDM_PARENT_SLOG("Create factory for %s",
+  MFCDM_PARENT_SLOG("Create factory for {}",
                     NS_ConvertUTF16toUTF8(aKeySystem).get());
   ComPtr<IMFContentDecryptionModuleFactory> cdmFactory;
   if (loadFromPlatform) {
@@ -586,25 +674,28 @@ HRESULT MFCDMParent::LoadFactory(
         nsPrintfCString msg(
             "CreateContentDecryptionModuleFactory succeeded, but still no "
             "factory?!");
-        MFCDM_PARENT_SLOG("%s", msg.get());
+        MFCDM_PARENT_SLOG("{}", msg.get());
         PROFILER_MARKER_TEXT("MFCDMParent::LoadFactoryFailed", MEDIA_PLAYBACK,
                              {}, msg);
       }
       return E_UNEXPECTED;
     }
     aFactoryOut.Swap(cdmFactory);
-    MFCDM_PARENT_SLOG("Created factory for %s from platform!",
+    MFCDM_PARENT_SLOG("Created factory for {} from platform!",
                       NS_ConvertUTF16toUTF8(aKeySystem).get());
     return S_OK;
   }
 
+  // The following path is used for testing, loading a clearkey lib. Widevine
+  // support will be soon removed.
   HMODULE handle = LoadLibraryW(libraryName);
   if (!handle) {
-    MFCDM_PARENT_SLOG("Failed to load library %ls! (error=%lx)", libraryName,
-                      GetLastError());
+    MFCDM_PARENT_SLOG("Failed to load library {}! (error={:x})",
+                      NS_ConvertUTF16toUTF8(libraryName).get(), GetLastError());
     return E_FAIL;
   }
-  MFCDM_PARENT_SLOG("Loaded external library '%ls'", libraryName);
+  MFCDM_PARENT_SLOG("Loaded external library '{}'",
+                    NS_ConvertUTF16toUTF8(libraryName).get());
 
   using DllGetActivationFactoryFunc =
       HRESULT(WINAPI*)(_In_ HSTRING, _COM_Outptr_ IActivationFactory**);
@@ -629,7 +720,7 @@ HRESULT MFCDMParent::LoadFactory(
     // the class Id.
     stringId.AppendLiteral("com.widevine.alpha.ContentDecryptionModuleFactory");
   }
-  MFCDM_PARENT_SLOG("Query factory by classId '%s'",
+  MFCDM_PARENT_SLOG("Query factory by classId '{}'",
                     NS_ConvertUTF16toUTF8(stringId).get());
   ScopedHString classId(stringId);
   ComPtr<IActivationFactory> pFactory = NULL;
@@ -639,8 +730,14 @@ HRESULT MFCDMParent::LoadFactory(
   ComPtr<IInspectable> pInspectable;
   MFCDM_RETURN_IF_FAILED(pFactory->ActivateInstance(&pInspectable));
   MFCDM_RETURN_IF_FAILED(pInspectable.As(&cdmFactory));
+  {
+    auto mediaEngineClassFactory = sMediaEngineClassFactory.Lock();
+    if (!*mediaEngineClassFactory) {
+      *mediaEngineClassFactory = pInspectable;
+    }
+  }
   aFactoryOut.Swap(cdmFactory);
-  MFCDM_PARENT_SLOG("Created factory for %s from external library!",
+  MFCDM_PARENT_SLOG("Created factory for {} from external library!",
                     NS_ConvertUTF16toUTF8(aKeySystem).get());
   return S_OK;
 }
@@ -664,12 +761,13 @@ static nsString GetRobustnessStringForKeySystem(const nsString& aKeySystem,
 // equivalent.
 // https://learn.microsoft.com/en-us/uwp/api/windows.media.protection.protectioncapabilities.istypesupported?view=winrt-22621
 // https://learn.microsoft.com/en-us/windows/win32/api/mfmediaengine/nf-mfmediaengine-imfextendeddrmtypesupport-istypesupportedex
-static bool FactorySupports(ComPtr<IMFContentDecryptionModuleFactory>& aFactory,
-                            const nsString& aKeySystem,
-                            const nsCString& aVideoCodec,
-                            const nsCString& aAudioCodec = nsCString(""),
-                            const nsString& aAdditionalFeatures = nsString(u""),
-                            bool aIsHWSecure = false) {
+static bool FactorySupports(
+    ComPtr<IMFContentDecryptionModuleFactory>& aFactory,
+    ComPtr<IMFExtendedDRMTypeSupport>& aExtendedDrmTypeSupport,
+    const nsString& aKeySystem, const nsCString& aVideoCodec,
+    const nsCString& aAudioCodec = nsCString(""),
+    const nsString& aAdditionalFeatures = nsString(u""),
+    bool aIsHWSecure = false) {
   // Create query string, MP4 is the only container supported.
   nsString contentType(u"video/mp4;codecs=\"");
   MOZ_ASSERT(!aVideoCodec.IsEmpty());
@@ -701,26 +799,22 @@ static bool FactorySupports(ComPtr<IMFContentDecryptionModuleFactory>& aFactory,
 
   // PlayReady doesn't implement IsTypeSupported properly, so it requires us to
   // use another way to check the capabilities.
-  if (IsPlayReadyKeySystemAndSupported(aKeySystem) &&
-      StaticPrefs::media_eme_playready_istypesupportedex()) {
-    ComPtr<IMFExtendedDRMTypeSupport> spDrmTypeSupport;
-    {
-      auto mediaEngineClassFactory = sMediaEngineClassFactory.Lock();
-      MFCDM_RETURN_BOOL_IF_FAILED(
-          (*mediaEngineClassFactory).As(&spDrmTypeSupport));
-    }
+  if (IsPlayReadyKeySystemAndSupported(aKeySystem)) {
+    MOZ_ASSERT(aExtendedDrmTypeSupport);
     BSTR keySystem = aIsHWSecure
                          ? CreateBSTRFromConstChar(kPlayReadyKeySystemHardware)
                          : CreateBSTRFromConstChar(kPlayReadyKeySystemName);
     MF_MEDIA_ENGINE_CANPLAY canPlay;
-    spDrmTypeSupport->IsTypeSupportedEx(SysAllocString(contentType.get()),
-                                        keySystem, &canPlay);
+    aExtendedDrmTypeSupport->IsTypeSupportedEx(
+        SysAllocString(contentType.get()), keySystem, &canPlay);
     bool support =
         canPlay !=
         MF_MEDIA_ENGINE_CANPLAY::MF_MEDIA_ENGINE_CANPLAY_NOT_SUPPORTED;
-    MFCDM_PARENT_SLOG("IsTypeSupportedEx=%d (key-system=%ls, content-type=%s)",
-                      support, keySystem,
-                      NS_ConvertUTF16toUTF8(contentType).get());
+    MFCDM_PARENT_SLOG(
+        "IsTypeSupportedEx={}, canPlay={} (key-system={}, content-type={})",
+        support, static_cast<int>(canPlay),
+        NS_ConvertUTF16toUTF8(keySystem).get(),
+        NS_ConvertUTF16toUTF8(contentType).get());
     if (aIsHWSecure && support) {
       // For HWDRM, `IsTypeSupportedEx` might still return the wrong answer on
       // certain devices, so we need to create a dummy CDM to see if the HWDRM
@@ -751,14 +845,15 @@ static bool FactorySupports(ComPtr<IMFContentDecryptionModuleFactory>& aFactory,
               keySystem, NS_ConvertUTF16toUTF8(contentType).get());
           PROFILER_MARKER_TEXT("MFCDMParent::FailedToUseHWDRM", MEDIA_PLAYBACK,
                                {}, msg);
-          MFCDM_PARENT_SLOG("%s", msg.get());
+          MFCDM_PARENT_SLOG("{}", msg.get());
         }
         support = false;
       }
       MFCDM_PARENT_SLOG(
-          "After HWDRM creation check, support=%d (key-system=%ls, "
-          "content-type=%s)",
-          support, keySystem, NS_ConvertUTF16toUTF8(contentType).get());
+          "After HWDRM creation check, support={} (key-system={}, "
+          "content-type={})",
+          support, NS_ConvertUTF16toUTF8(keySystem).get(),
+          NS_ConvertUTF16toUTF8(contentType).get());
       if (dummyCDM) {
         SHUTDOWN_IF_POSSIBLE(dummyCDM);
       }
@@ -769,23 +864,85 @@ static bool FactorySupports(ComPtr<IMFContentDecryptionModuleFactory>& aFactory,
   // Checking capabilies from CDM's IsTypeSupported. Widevine implements this
   // method well.
   bool support = IsTypeSupported(aFactory, aKeySystem, &contentType);
-  MFCDM_PARENT_SLOG("IsTypeSupport=%d (key-system=%s, content-type=%s)",
+  MFCDM_PARENT_SLOG("IsTypeSupport={} (key-system={}, content-type={})",
                     support, NS_ConvertUTF16toUTF8(aKeySystem).get(),
                     NS_ConvertUTF16toUTF8(contentType).get());
   return support;
 }
 
-static nsresult IsHDCPVersionSupported(
-    ComPtr<IMFContentDecryptionModuleFactory>& aFactory,
+static MF_MEDIA_ENGINE_CANPLAY RunHDCPSupportCheck(
     const nsString& aKeySystem, const dom::HDCPVersion& aMinHdcpVersion) {
-  nsresult rv = NS_OK;
-  // Codec doesn't matter when querying the HDCP policy, so use H264.
-  if (!FactorySupports(aFactory, aKeySystem, nsCString("avc1"),
-                       KeySystemConfig::EMECodecString(""),
-                       GetHdcpPolicy(aMinHdcpVersion))) {
-    rv = NS_ERROR_DOM_MEDIA_CDM_HDCP_NOT_SUPPORT;
+  const auto getHDCPPolicyValue = [](const dom::HDCPVersion& aMinHdcpVersion) {
+    // The HDCP value follows the feature value in
+    // https://docs.microsoft.com/en-us/uwp/api/windows.media.protection.protectioncapabilities.istypesupported?view=winrt-19041
+    // - 1 (on without HDCP 2.2 Type 1 restriction)
+    // - 2 (on with HDCP 2.2 Type 1 restriction)
+    return (aMinHdcpVersion == dom::HDCPVersion::_2_2 ||
+            aMinHdcpVersion == dom::HDCPVersion::_2_3)
+               ? 2
+               : 1;
+  };
+
+  // HDCP is indenpendent with codec usage, so we just use H264 in mp4.
+  const char16_t* kFmt = u"video/mp4;codecs=\"avc1\";features=\"hdcp=%d\"";
+  nsAutoString contentType;
+  nsTextFormatter::ssprintf(contentType, kFmt,
+                            getHDCPPolicyValue(aMinHdcpVersion));
+  MOZ_ASSERT(!contentType.IsEmpty());
+  ComPtr<IMFExtendedDRMTypeSupport> spDrmTypeSupport;
+  auto mediaEngineClassFactory = sMediaEngineClassFactory.Lock();
+  if (!*mediaEngineClassFactory ||
+      FAILED((*mediaEngineClassFactory).As(&spDrmTypeSupport))) {
+    MFCDM_PARENT_SLOG("Failed to get IMFExtendedDRMTypeSupport!");
+    return MF_MEDIA_ENGINE_CANPLAY_NOT_SUPPORTED;
   }
-  return rv;
+
+  // Remove clearlead postfix if needed.
+  nsCString keySystemWithoutPostfix =
+      NS_ConvertUTF16toUTF8(MapKeySystem(aKeySystem));
+  BSTR keySystem = CreateBSTRFromConstChar(keySystemWithoutPostfix.get());
+  MF_MEDIA_ENGINE_CANPLAY canPlay;
+  spDrmTypeSupport->IsTypeSupportedEx(SysAllocString(contentType.get()),
+                                      keySystem, &canPlay);
+  MFCDM_PARENT_SLOG(
+      "IsTypeSupportedEx for HDCP, canplay={} (key-system={}, "
+      "content-type={})",
+      static_cast<int32_t>(canPlay), NS_ConvertUTF16toUTF8(keySystem).get(),
+      NS_ConvertUTF16toUTF8(contentType).get());
+  return canPlay;
+}
+
+// Only one HDCP check should run at a time; otherwise, the request response
+// may become invalid.
+StaticMutex sHDCPMutex;
+
+static nsresult IsHDCPVersionSupported(const nsString& aKeySystem,
+                                       const dom::HDCPVersion& aMinHdcpVersion,
+                                       nsISerialEventTarget* aManagerThread) {
+  MOZ_ASSERT(!aManagerThread->IsOnCurrentThread(),
+             "Should not block the manager thread!");
+
+  StaticMutexAutoLock lock(sHDCPMutex);
+  // https://learn.microsoft.com/en-us/windows/win32/api/mfmediaengine/nf-mfmediaengine-imfextendeddrmtypesupport-istypesupportedex/
+  // HDCP query may initially return Maybe. It resolves to Probably or
+  // NotSupported within ~10s, where 10s is the maximum timeout (worst-case)
+  // rather than a common value. Microsoft recommends a minimum retry interval
+  // of 500ms.
+  constexpr auto kPollIntervalMs = 500;
+  constexpr auto kMaxWaitSec = 10;
+  const TimeStamp start = TimeStamp::Now();
+  while ((TimeStamp::Now() - start) < TimeDuration::FromSeconds(kMaxWaitSec)) {
+    MF_MEDIA_ENGINE_CANPLAY canplay =
+        RunHDCPSupportCheck(aKeySystem, aMinHdcpVersion);
+    if (canplay != MF_MEDIA_ENGINE_CANPLAY_MAYBE) {
+      return canplay == MF_MEDIA_ENGINE_CANPLAY_PROBABLY
+                 ? NS_OK
+                 : NS_ERROR_DOM_MEDIA_CDM_HDCP_NOT_SUPPORT;
+    }
+    MFCDM_PARENT_SLOG("HDCP support is MAYBE, waiting to check it again...");
+    PR_Sleep(PR_MillisecondsToInterval(kPollIntervalMs));
+  }
+  return NS_ERROR_DOM_MEDIA_CDM_HDCP_NOT_SUPPORT;
 }
 
 static bool IsKeySystemHWSecure(
@@ -825,7 +982,7 @@ MFCDMParent::GetAllKeySystemsCapabilities() {
 
   RefPtr<CapabilitiesPromise::Private> p =
       new CapabilitiesPromise::Private(__func__);
-  Unused << backgroundTaskQueue->Dispatch(NS_NewRunnableFunction(__func__, [p] {
+  (void)backgroundTaskQueue->Dispatch(NS_NewRunnableFunction(__func__, [p] {
     MFCDM_PARENT_SLOG("GetAllKeySystemsCapabilities");
     enum SecureLevel : bool {
       Software = false,
@@ -860,7 +1017,6 @@ MFCDMParent::GetAllKeySystemsCapabilities() {
         if (keySystem.second == SecureLevel::Hardware) {
           flags += CapabilitesFlag::HarewareDecryption;
         }
-        flags += CapabilitesFlag::NeedHDCPCheck;
         if (RequireClearLead(keySystem.first)) {
           flags += CapabilitesFlag::NeedClearLeadCheck;
         }
@@ -893,9 +1049,12 @@ void MFCDMParent::GetCapabilities(const nsString& aKeySystem,
     return;
   }
 
-  // HWDRM is blocked by gfx downloadable blocklist.
-  if (isHardwareDecryption && !gfx::gfxVars::UseWMFHWDWM()) {
-    MFCDM_PARENT_SLOG("Block HWDRM for %s",
+  // HWDRM is blocked by gfx downloadable blocklist. Skip the check when using
+  // the mock CDM for testing, since the blocklist doesn't apply there.
+  if (isHardwareDecryption && gfx::gfxVars::IsInitialized() &&
+      !gfx::gfxVars::UseWMFHWDWM() &&
+      !StaticPrefs::media_eme_wmf_use_mock_cdm_for_external_cdms()) {
+    MFCDM_PARENT_SLOG("Block HWDRM for {}",
                       NS_ConvertUTF16toUTF8(aKeySystem).get());
     return;
   }
@@ -906,34 +1065,34 @@ void MFCDMParent::GetCapabilities(const nsString& aKeySystem,
     return;
   }
 
-  ComPtr<IMFContentDecryptionModuleFactory> factory = aFactory;
-  if (!factory) {
-    RETURN_VOID_IF_FAILED(GetOrCreateFactory(aKeySystem, factory));
-  }
-
   auto capabilitiesUnlocked = sCapabilities.Lock();
   for (auto& capabilities : *capabilitiesUnlocked) {
     if (capabilities.keySystem().Equals(aKeySystem) &&
         capabilities.isHardwareDecryption() == isHardwareDecryption) {
       MFCDM_PARENT_SLOG(
-          "Return cached capabilities for %s (hardwareDecryption=%d)",
+          "Return cached capabilities for {} (hardwareDecryption={})",
           NS_ConvertUTF16toUTF8(aKeySystem).get(), isHardwareDecryption);
-      if (capabilities.isHDCP22Compatible().isNothing() &&
-          aFlags.contains(CapabilitesFlag::NeedHDCPCheck)) {
-        const bool rv = IsHDCPVersionSupported(factory, aKeySystem,
-                                               dom::HDCPVersion::_2_2) == NS_OK;
-        MFCDM_PARENT_SLOG(
-            "Check HDCP 2.2 compatible (%d) for the cached capabilites", rv);
-        capabilities.isHDCP22Compatible() = Some(rv);
-      }
       aCapabilitiesOut = capabilities;
       return;
     }
   }
 
   MFCDM_PARENT_SLOG(
-      "Query capabilities for %s from the factory (hardwareDecryption=%d)",
+      "Query capabilities for {} from the factory (hardwareDecryption={})",
       NS_ConvertUTF16toUTF8(aKeySystem).get(), isHardwareDecryption);
+
+  ComPtr<IMFContentDecryptionModuleFactory> factory = aFactory;
+  if (!factory) {
+    RETURN_VOID_IF_FAILED(GetOrCreateFactory(aKeySystem, factory));
+  }
+
+  ComPtr<IMFExtendedDRMTypeSupport> spDrmTypeSupport;
+  auto mediaEngineClassFactory = sMediaEngineClassFactory.Lock();
+  if (!*mediaEngineClassFactory ||
+      FAILED((*mediaEngineClassFactory).As(&spDrmTypeSupport))) {
+    MFCDM_PARENT_SLOG("Failed to get IMFExtendedDRMTypeSupport!");
+    return;
+  }
 
   // Widevine requires codec type to be four CC, PlayReady is fine with both.
   static auto convertCodecToFourCC =
@@ -1006,28 +1165,28 @@ void MFCDMParent::GetCapabilities(const nsString& aKeySystem,
         } else {
           additionalFeature.AppendLiteral(u"cbcs-clearlead,");
         }
-        bool rv = FactorySupports(factory, aKeySystem,
+        bool rv = FactorySupports(factory, spDrmTypeSupport, aKeySystem,
                                   convertCodecToFourCC(codec), nsCString(""),
                                   additionalFeature, isHardwareDecryption);
-        MFCDM_PARENT_SLOG("clearlead %s IV 8 bytes %s %s",
+        MFCDM_PARENT_SLOG("clearlead {} IV 8 bytes {} {}",
                           EnumValueToString(scheme), codec.get(),
                           rv ? "supported" : "not supported");
         if (rv) {
           supportedScheme += scheme;
-          break;
+          continue;
         }
         // Try 16 bytes IV.
         additionalFeature.AppendLiteral(u"encryption-iv-size=16,");
-        rv = FactorySupports(factory, aKeySystem, convertCodecToFourCC(codec),
-                             nsCString(""), additionalFeature,
-                             isHardwareDecryption);
-        MFCDM_PARENT_SLOG("clearlead %s IV 16 bytes %s %s",
+        rv = FactorySupports(factory, spDrmTypeSupport, aKeySystem,
+                             convertCodecToFourCC(codec), nsCString(""),
+                             additionalFeature, isHardwareDecryption);
+        MFCDM_PARENT_SLOG("clearlead {} IV 16 bytes {} {}",
                           EnumValueToString(scheme), codec.get(),
                           rv ? "supported" : "not supported");
 
         if (rv) {
           supportedScheme += scheme;
-          break;
+          continue;
         }
       }
       // Add a capability if supported scheme exists
@@ -1039,11 +1198,11 @@ void MFCDMParent::GetCapabilities(const nsString& aKeySystem,
             GetRobustnessStringForKeySystem(aKeySystem, isHardwareDecryption);
         if (supportedScheme.contains(CryptoScheme::Cenc)) {
           c->encryptionSchemes().AppendElement(CryptoScheme::Cenc);
-          MFCDM_PARENT_SLOG("%s: +video:%s (cenc)", __func__, codec.get());
+          MFCDM_PARENT_SLOG("{}: +video:{} (cenc)", __func__, codec.get());
         }
         if (supportedScheme.contains(CryptoScheme::Cbcs)) {
           c->encryptionSchemes().AppendElement(CryptoScheme::Cbcs);
-          MFCDM_PARENT_SLOG("%s: +video:%s (cbcs)", __func__, codec.get());
+          MFCDM_PARENT_SLOG("{}: +video:{} (cbcs)", __func__, codec.get());
         }
         supportedVideoCodecs.AppendElement(codec);
       }
@@ -1055,7 +1214,8 @@ void MFCDMParent::GetCapabilities(const nsString& aKeySystem,
           !StaticPrefs::media_hevc_enabled()) {
         continue;
       }
-      if (FactorySupports(factory, aKeySystem, convertCodecToFourCC(codec),
+      if (FactorySupports(factory, spDrmTypeSupport, aKeySystem,
+                          convertCodecToFourCC(codec),
                           KeySystemConfig::EMECodecString(""), nsString(u""),
                           isHardwareDecryption)) {
         MFCDMMediaCapability* c =
@@ -1066,15 +1226,16 @@ void MFCDMParent::GetCapabilities(const nsString& aKeySystem,
         // 'If value is unspecified, default value of "cenc" is used.' See
         // https://learn.microsoft.com/en-us/windows/win32/api/mfmediaengine/nf-mfmediaengine-imfextendeddrmtypesupport-istypesupportedex
         c->encryptionSchemes().AppendElement(CryptoScheme::Cenc);
-        MFCDM_PARENT_SLOG("%s: +video:%s (cenc)", __func__, codec.get());
+        MFCDM_PARENT_SLOG("{}: +video:{} (cenc)", __func__, codec.get());
         // Check cbcs scheme support
         if (FactorySupports(
-                factory, aKeySystem, convertCodecToFourCC(codec),
+                factory, spDrmTypeSupport, aKeySystem,
+                convertCodecToFourCC(codec),
                 KeySystemConfig::EMECodecString(""),
                 nsString(u"encryption-type=cbcs,encryption-iv-size=16,"),
                 isHardwareDecryption)) {
           c->encryptionSchemes().AppendElement(CryptoScheme::Cbcs);
-          MFCDM_PARENT_SLOG("%s: +video:%s (cbcs)", __func__, codec.get());
+          MFCDM_PARENT_SLOG("{}: +video:{} (cbcs)", __func__, codec.get());
         }
         supportedVideoCodecs.AppendElement(codec);
       }
@@ -1097,7 +1258,7 @@ void MFCDMParent::GetCapabilities(const nsString& aKeySystem,
     // the software capabilities for audio in order to save some time. As the
     // media foundation would create a new D3D device everytime when we check
     // hardware decryption, which takes way longer time.
-    if (FactorySupports(factory, aKeySystem,
+    if (FactorySupports(factory, spDrmTypeSupport, aKeySystem,
                         convertCodecToFourCC(supportedVideoCodecs[0]),
                         convertCodecToFourCC(codec), nsString(u""),
                         false /* aIsHWSecure */)) {
@@ -1107,18 +1268,8 @@ void MFCDMParent::GetCapabilities(const nsString& aKeySystem,
       c->robustness() = GetRobustnessStringForKeySystem(
           aKeySystem, false /* aIsHWSecure */, false /* isVideo */);
       c->encryptionSchemes().AppendElement(CryptoScheme::Cenc);
-      MFCDM_PARENT_SLOG("%s: +audio:%s", __func__, codec.get());
+      MFCDM_PARENT_SLOG("{}: +audio:{}", __func__, codec.get());
     }
-  }
-
-  // Only perform HDCP if necessary, "The hdcp query (item 4) has a
-  // computationally expensive first invocation cost". See
-  // https://learn.microsoft.com/en-us/windows/win32/api/mfmediaengine/nf-mfmediaengine-imfextendeddrmtypesupport-istypesupportedex
-  if (aFlags.contains(CapabilitesFlag::NeedHDCPCheck) &&
-      IsHDCPVersionSupported(factory, aKeySystem, dom::HDCPVersion::_2_2) ==
-          NS_OK) {
-    MFCDM_PARENT_SLOG("Capabilites is compatible with HDCP 2.2");
-    aCapabilitiesOut.isHDCP22Compatible() = Some(true);
   }
 
   // TODO: don't hardcode
@@ -1179,7 +1330,7 @@ mozilla::ipc::IPCResult MFCDMParent::RecvInit(
         NS_ConvertUTF16toUTF8(aParams.origin()).get(),
         RequirementToStr(aParams.distinctiveID()),
         RequirementToStr(aParams.persistentState()), isHWSecure);
-    MFCDM_PARENT_LOG("Creating a CDM %s", msg.get());
+    MFCDM_PARENT_LOG("Creating a CDM {}", msg.get());
     PROFILER_MARKER_TEXT("MFCDMParent::RecvInit(creating CDM)", MEDIA_PLAYBACK,
                          {}, msg);
   }
@@ -1202,24 +1353,13 @@ mozilla::ipc::IPCResult MFCDMParent::RecvInit(
     PROFILER_MARKER_UNTYPED("MFCDMParent::RecvInit(created CDM)",
                             MEDIA_PLAYBACK);
     // This is only required by PlayReady.
-    if (IsPlayReadyKeySystemAndSupported(mKeySystem)) {
-      ComPtr<IMFPMPHost> pmpHost;
-      ComPtr<IMFGetService> cdmService;
-      MFCDM_REJECT_IF_FAILED(mCDM.As(&cdmService), NS_ERROR_FAILURE);
-      MFCDM_REJECT_IF_FAILED(
-          cdmService->GetService(MF_CONTENTDECRYPTIONMODULE_SERVICE,
-                                 IID_PPV_ARGS(&pmpHost)),
-          NS_ERROR_FAILURE);
-      MFCDM_REJECT_IF_FAILED(SUCCEEDED(MakeAndInitialize<MFPMPHostWrapper>(
-                                 &mPMPHostWrapper, pmpHost)),
-                             NS_ERROR_FAILURE);
-      MFCDM_REJECT_IF_FAILED(mCDM->SetPMPHostApp(mPMPHostWrapper.Get()),
-                             NS_ERROR_FAILURE);
-      MFCDM_PARENT_LOG("Set PMPHostWrapper on CDM!");
-    }
+    MFCDM_REJECT_IF_FAILED(SetupPMPHostApp(), NS_ERROR_FAILURE);
   }
 
   mIsInited = true;
+  mIsHardwareDRM = isHWSecure;
+  mInitParams = Some(aParams);
+  PrewarmHDCP(isHWSecure);
   aResolver(MFCDMInitIPDL{mId});
   return IPC_OK();
 }
@@ -1245,7 +1385,7 @@ mozilla::ipc::IPCResult MFCDMParent::RecvCreateSessionAndGenerateRequest(
   if (IsBeingProfiledOrLogEnabled()) {
     nsPrintfCString msg("session for type '%s'",
                         SessionTypeToStr(aParams.sessionType()));
-    MFCDM_PARENT_LOG("Creating CDM %s", msg.get());
+    MFCDM_PARENT_LOG("Creating CDM {}", msg.get());
     PROFILER_MARKER_TEXT(
         "MFCDMParent::RecvCreateSessionAndGenerateRequest(creating)",
         MEDIA_PLAYBACK, {}, msg);
@@ -1277,7 +1417,7 @@ mozilla::ipc::IPCResult MFCDMParent::RecvCreateSessionAndGenerateRequest(
   }
 
   if (FAILED(hr)) {
-    MFCDM_PARENT_LOG("Failed to generate request (hr=%lx)!", hr);
+    MFCDM_PARENT_LOG("Failed to generate request (hr={:x})!", hr);
     aResolver(NS_ERROR_DOM_MEDIA_CDM_NO_SESSION_ERR);
     // No need to call session's close() because this is not an unrecoverable
     // error for CDM.
@@ -1294,7 +1434,7 @@ mozilla::ipc::IPCResult MFCDMParent::RecvCreateSessionAndGenerateRequest(
     nsPrintfCString msg("session for type '%s', sessionId=%s",
                         SessionTypeToStr(aParams.sessionType()),
                         NS_ConvertUTF16toUTF8(*sessionId).get());
-    MFCDM_PARENT_LOG("Created CDM %s", msg.get());
+    MFCDM_PARENT_LOG("Created CDM {}", msg.get());
     PROFILER_MARKER_TEXT(
         "MFCDMParent::RecvCreateSessionAndGenerateRequest(created)",
         MEDIA_PLAYBACK, {}, msg);
@@ -1319,7 +1459,7 @@ mozilla::ipc::IPCResult MFCDMParent::RecvLoadSession(
   if (IsBeingProfiledOrLogEnabled()) {
     nsPrintfCString msg("Load Session %s",
                         NS_ConvertUTF16toUTF8(aSessionId).get());
-    MFCDM_PARENT_LOG("%s", msg.get());
+    MFCDM_PARENT_LOG("{}", msg.get());
     PROFILER_MARKER_TEXT("MFCDMParent::RecvLoadSession", MEDIA_PLAYBACK, {},
                          msg);
   }
@@ -1343,7 +1483,7 @@ mozilla::ipc::IPCResult MFCDMParent::RecvUpdateSession(
   if (IsBeingProfiledOrLogEnabled()) {
     nsPrintfCString msg("Update Session %s",
                         NS_ConvertUTF16toUTF8(aSessionId).get());
-    MFCDM_PARENT_LOG("%s", msg.get());
+    MFCDM_PARENT_LOG("{}", msg.get());
     PROFILER_MARKER_TEXT("MFCDMParent::RecvUpdateSession", MEDIA_PLAYBACK, {},
                          msg);
   }
@@ -1366,7 +1506,7 @@ mozilla::ipc::IPCResult MFCDMParent::RecvCloseSession(
   if (IsBeingProfiledOrLogEnabled()) {
     nsPrintfCString msg("Close Session %s",
                         NS_ConvertUTF16toUTF8(aSessionId).get());
-    MFCDM_PARENT_LOG("%s", msg.get());
+    MFCDM_PARENT_LOG("{}", msg.get());
     PROFILER_MARKER_TEXT("MFCDMParent::RecvCloseSession", MEDIA_PLAYBACK, {},
                          msg);
   }
@@ -1390,7 +1530,7 @@ mozilla::ipc::IPCResult MFCDMParent::RecvRemoveSession(
   if (IsBeingProfiledOrLogEnabled()) {
     nsPrintfCString msg("Remove Session %s",
                         NS_ConvertUTF16toUTF8(aSessionId).get());
-    MFCDM_PARENT_LOG("%s", msg.get());
+    MFCDM_PARENT_LOG("{}", msg.get());
     PROFILER_MARKER_TEXT("MFCDMParent::RecvRemoveSession", MEDIA_PLAYBACK, {},
                          msg);
   }
@@ -1418,21 +1558,125 @@ mozilla::ipc::IPCResult MFCDMParent::RecvSetServerCertificate(
   return IPC_OK();
 }
 
+RefPtr<MFCDMParent::HDCPSupportPromise> MFCDMParent::QueryHDCPSupport(
+    const nsString& aKeySystem, dom::HDCPVersion aVersion,
+    nsISerialEventTarget* aManagerThread) {
+  nsCOMPtr<nsISerialEventTarget> backgroundTaskQueue;
+  if (NS_FAILED(NS_CreateBackgroundTaskQueue(
+          __func__, getter_AddRefs(backgroundTaskQueue)))) {
+    MFCDM_PARENT_SLOG("Failed to create background task queue for HDCP query");
+    return HDCPSupportPromise::CreateAndReject(NS_ERROR_FAILURE, __func__);
+  }
+  RefPtr<HDCPSupportPromise::Private> p =
+      new HDCPSupportPromise::Private(__func__);
+  nsAutoString keySystem(aKeySystem);
+  RefPtr<nsISerialEventTarget> managerThread = aManagerThread;
+  nsresult rv = backgroundTaskQueue->Dispatch(
+      NS_NewRunnableFunction(__func__, [keySystem, aVersion, managerThread, p] {
+        nsresult result =
+            IsHDCPVersionSupported(keySystem, aVersion, managerThread);
+        nsFmtCString msg("HDCP version={}, supported={}",
+                         static_cast<uint32_t>(aVersion),
+                         result == NS_OK ? "true" : "false");
+        MFCDM_PARENT_SLOG("{}", msg.get());
+        PROFILER_MARKER_TEXT("MFCDMParent::QueryHDCPSupport", MEDIA_PLAYBACK,
+                             {}, msg);
+        p->Resolve(result, __func__);
+      }));
+  if (NS_FAILED(rv)) {
+    MFCDM_PARENT_SLOG("Failed to dispatch HDCP query, rv={:x}",
+                      static_cast<uint32_t>(rv));
+    p->Reject(rv, __func__);
+  }
+  return p;
+}
+
 mozilla::ipc::IPCResult MFCDMParent::RecvGetStatusForPolicy(
     const dom::HDCPVersion& aMinHdcpVersion,
     GetStatusForPolicyResolver&& aResolver) {
   ASSERT_CDM_ACCESS_READ_ONLY_ON_MANAGER_THREAD();
-  auto rv = IsHDCPVersionSupported(mFactory, mKeySystem, aMinHdcpVersion);
-  if (IsBeingProfiledOrLogEnabled()) {
-    nsPrintfCString msg("HDCP version=%u, support=%s",
-                        static_cast<uint8_t>(aMinHdcpVersion),
-                        rv == NS_OK ? "true" : "false");
-    MFCDM_PARENT_LOG("%s", msg.get());
-    PROFILER_MARKER_TEXT("MFCDMParent::RecvGetStatusForPolicy", MEDIA_PLAYBACK,
-                         {}, msg);
-  }
-  aResolver(rv);
+  QueryHDCPSupport(mKeySystem, aMinHdcpVersion, mManagerThread)
+      ->Then(
+          mManagerThread, __func__,
+          [resolver =
+               aResolver](const HDCPSupportPromise::ResolveOrRejectValue& aRv) {
+            resolver(aRv.IsResolve() ? aRv.ResolveValue() : NS_ERROR_FAILURE);
+          });
   return IPC_OK();
+}
+
+void MFCDMParent::PrewarmHDCP(bool aIsHardwareDRM) {
+  ASSERT_CDM_ACCESS_ON_MANAGER_THREAD();
+  using Condition = MFProtectedPathReadinessMonitor::Condition;
+  if (!aIsHardwareDRM) {
+    // Non-hardware-DRM playback has no HDCP requirement, so the condition is
+    // satisfied without a query.
+    mReadinessMonitor.MarkReady(Condition::Hdcp);
+    return;
+  }
+  if (sHDCPSupported) {
+    // The per-display HDCP status was already queried for this process; reuse
+    // it rather than issuing a redundant query.
+    MarkHDCPCondition(*sHDCPSupported);
+    return;
+  }
+  if (!sHDCPPrewarmQuery) {
+    // First hardware-DRM actor for this process issues the single shared query;
+    // record the result and drop the query once it settles.
+    const uint32_t generation = sHDCPPrewarmGeneration;
+    sHDCPPrewarmQuery =
+        QueryHDCPSupport(mKeySystem, dom::HDCPVersion::_2_2, mManagerThread);
+    sHDCPPrewarmQuery->Then(
+        mManagerThread, __func__,
+        [generation](const HDCPSupportPromise::ResolveOrRejectValue& aRv) {
+          // A hardware-context reset since this query started already cleared
+          // the cache and began a new generation; ignore this stale result.
+          if (generation != sHDCPPrewarmGeneration) {
+            MFCDM_PARENT_SLOG(
+                "Ignoring stale HDCP pre-warm result (hardware reset since the "
+                "query started)");
+            return;
+          }
+          sHDCPSupported = Some(aRv.IsResolve() && aRv.ResolveValue() == NS_OK);
+          sHDCPPrewarmQuery = nullptr;
+        });
+  }
+  // Wait on the shared query (this actor's or another's) and mark this actor's
+  // monitor once it settles.
+  sHDCPPrewarmQuery->Then(
+      mManagerThread, __func__,
+      [self =
+           RefPtr{this}](const HDCPSupportPromise::ResolveOrRejectValue& aRv) {
+        self->MarkHDCPCondition(aRv.IsResolve() && aRv.ResolveValue() == NS_OK);
+      });
+}
+
+void MFCDMParent::MarkHDCPCondition(bool aSupported) {
+  ASSERT_CDM_ACCESS_ON_MANAGER_THREAD();
+  using Condition = MFProtectedPathReadinessMonitor::Condition;
+  if (aSupported) {
+    mReadinessMonitor.MarkReady(Condition::Hdcp);
+    return;
+  }
+  // HDCP could not be confirmed; mark failed so the gate still proceeds (a
+  // failed condition counts as settled) and Media Foundation rebuilds HDCP when
+  // it later builds the protected topology.
+  mReadinessMonitor.MarkFailed(Condition::Hdcp, E_FAIL);
+}
+
+RefPtr<GenericPromise> MFCDMParent::WaitForHDCPSettleAfterReset() {
+  ASSERT_CDM_ACCESS_READ_ONLY_ON_MANAGER_THREAD();
+  // Used only as a settle timing signal after a hardware reset; proceed
+  // regardless of whether HDCP is supported, and reject only if the query could
+  // not be dispatched.
+  return QueryHDCPSupport(mKeySystem, dom::HDCPVersion::_2_2, mManagerThread)
+      ->Then(mManagerThread, __func__,
+             [](const HDCPSupportPromise::ResolveOrRejectValue& aRv) {
+               return aRv.IsResolve()
+                          ? GenericPromise::CreateAndResolve(true, __func__)
+                          : GenericPromise::CreateAndReject(NS_ERROR_FAILURE,
+                                                            __func__);
+             });
 }
 
 void MFCDMParent::ConnectSessionEvents(MFCDMSession* aSession) {
@@ -1561,7 +1805,7 @@ void MFCDMService::UpdateWidevineL1Path(nsIFile* aFile) {
     NS_WARNING("Failed to get UtilityMediaServiceChild");
     return;
   }
-  Unused << umsc->SendUpdateWidevineL1Path(widevineL1Path);
+  (void)umsc->SendUpdateWidevineL1Path(widevineL1Path);
 #ifdef MOZ_WMF_CDM_LPAC_SANDBOX
   SandboxBroker::EnsureLpacPermsissionsOnDir(widevineL1Path);
 #endif

@@ -14,9 +14,9 @@ const DEFAULT_PROCESS_COUNT = Services.prefs
  * of stats was called more often than the max parameter.
  *
  * @param {Array}  stats - an array of [prefName, accessCount] tuples
- * @param {Number} max - the maximum number of times any of the prefs should
+ * @param {number} max - the maximum number of times any of the prefs should
  *                 have been called.
- * @param {Object} knownProblematicPrefs (optional) - an object that defines
+ * @param {object} knownProblematicPrefs (optional) - an object that defines
  *                 prefs that should be exempt from checking the
  *                 maximum access. It looks like the following:
  *
@@ -134,7 +134,7 @@ add_task(async function open_10_tabs() {
     tabs.push(
       await BrowserTestUtils.openNewForegroundTab(
         gBrowser,
-        // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+        // eslint-disable-next-line sdl/no-insecure-url
         "http://example.com",
         true,
         true
@@ -217,17 +217,17 @@ add_task(async function navigate_around() {
 
   let tab = await BrowserTestUtils.openNewForegroundTab(
     gBrowser,
-    // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+    // eslint-disable-next-line sdl/no-insecure-url
     "http://example.com",
     true,
     true
   );
 
   let urls = [
-    // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+    // eslint-disable-next-line sdl/no-insecure-url
     "http://example.com/",
     "https://example.com/",
-    // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+    // eslint-disable-next-line sdl/no-insecure-url
     "http://example.org/",
     "https://example.org/",
   ];

@@ -16,6 +16,11 @@ const { CustomizableUITestUtils } = ChromeUtils.importESModule(
 );
 let gCUITestUtils = new CustomizableUITestUtils(window);
 
+const FirefoxViewTestUtils = ChromeUtils.importESModule(
+  "resource://testing-common/FirefoxViewTestUtils.sys.mjs"
+);
+FirefoxViewTestUtils.init(this);
+
 const PERMISSIONS_PAGE =
   "https://example.com/browser/browser/base/content/test/permissions/permissions.html";
 const afterUrlBarButton = "fxa-toolbar-menu-button";
@@ -121,17 +126,17 @@ add_setup(async function () {
   await SpecialPowers.pushPrefEnv({
     set: [
       ["test.wait300msAfterTabSwitch", true],
-      // TODO: Reenable in https://bugzilla.mozilla.org/show_bug.cgi?id=1923388
-      ["browser.urlbar.scotchBonnet.enableOverride", false],
+      ["browser.urlbar.trustPanel.featureGate", true],
       ["browser.toolbars.keyboard_navigation", true],
       ["accessibility.tabfocus", 7],
-      // Bug 1968055 - Temporarily enabled pocket pref while we remove the pref entirely
-      ["extensions.pocket.enabled", true],
       // Taskbar Tabs' page action is controlled by a pref that differs across
       // platforms and by runtime checks. Patching around it is currently
       // onorous and creates issues with existing tests without improving test
       // coverage, so disable it herein.
       ["browser.taskbarTabs.enabled", false],
+      // The tab stops these tests walk are otherwise channel-dependent. The
+      // skipping variant is covered by testTabStopsSkippingSearchButton.
+      ["browser.urlbar.searchModeSwitcher.skipTabStop", false],
     ],
   });
   resetToolbarWithoutDevEditionButtons();
@@ -140,7 +145,7 @@ add_setup(async function () {
   // Add bookmarks.
   let bookmarks = new Array(BOOKMARKS_COUNT);
   for (let i = 0; i < BOOKMARKS_COUNT; ++i) {
-    // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+    // eslint-disable-next-line sdl/no-insecure-url
     bookmarks[i] = { url: `http://test.places.${i}y/` };
   }
   await PlacesUtils.bookmarks.insertTree({
@@ -153,17 +158,10 @@ add_setup(async function () {
     title: "Test",
     url: "https://example.com",
   });
-  // The page actions button is not normally visible, so we must
-  // unhide it.
-  BrowserPageActions.mainButtonNode.style.visibility = "visible";
 
   // Make sure the sidebar launcher is visible (when sidebar.revamp is true);
   // previous tests might have hidden it.
-  await SidebarController.initializeUIState({ launcherVisible: true });
-
-  registerCleanupFunction(() => {
-    BrowserPageActions.mainButtonNode.style.removeProperty("visibility");
-  });
+  await SidebarController.updateUIState({ launcherVisible: true });
 });
 
 // Test tab stops with no page loaded.
@@ -171,6 +169,11 @@ add_task(async function testTabStopsNoPageWithHomeButton() {
   AddHomeBesideReload();
   await withNewBlankTab(async function () {
     startFromUrlBar();
+    await expectFocusAfterKey(
+      "Shift+Tab",
+      "#urlbar-container .searchmode-switcher",
+      true
+    );
     if (sidebarRevampEnabled) {
       await expectFocusAfterKey("Shift+Tab", "sidebar-button");
       await expectFocusAfterKey("ArrowRight", "home-button");
@@ -186,6 +189,11 @@ add_task(async function testTabStopsNoPageWithHomeButton() {
     } else {
       await expectFocusAfterKey("Tab", "home-button");
     }
+    await expectFocusAfterKey(
+      "Tab",
+      "#urlbar-container .searchmode-switcher",
+      true
+    );
     await expectFocusAfterKey("Tab", gURLBar.inputField);
     await expectFocusAfterKey("Tab", afterUrlBarButton);
     if (sidebarRevampEnabled) {
@@ -201,16 +209,17 @@ add_task(async function testTabStopsNoPageWithHomeButton() {
 async function doTestTabStopsPageLoaded(aPageActionsVisible) {
   info(`doTestTabStopsPageLoaded(${aPageActionsVisible})`);
 
-  BrowserPageActions.mainButtonNode.style.visibility = aPageActionsVisible
-    ? "visible"
-    : "";
+  BrowserPageActions.mainButtonNode.style.display = aPageActionsVisible
+    ? "flex"
+    : "none";
   await BrowserTestUtils.withNewTab("https://example.com", async function () {
     let sidebar = document.querySelector("sidebar-main");
     await waitUntilReloadEnabled();
     startFromUrlBar();
     await expectFocusAfterKey(
       "Shift+Tab",
-      "tracking-protection-icon-container"
+      "#urlbar-container .searchmode-switcher",
+      true
     );
     if (sidebarRevampEnabled) {
       await expectFocusAfterKey("Shift+Tab", "sidebar-button");
@@ -227,7 +236,11 @@ async function doTestTabStopsPageLoaded(aPageActionsVisible) {
     } else {
       await expectFocusAfterKey("Tab", "reload-button");
     }
-    await expectFocusAfterKey("Tab", "tracking-protection-icon-container");
+    await expectFocusAfterKey(
+      "Tab",
+      "#urlbar-container .searchmode-switcher",
+      true
+    );
     await expectFocusAfterKey("Tab", gURLBar.inputField);
     await expectFocusAfterKey(
       "Tab",
@@ -240,17 +253,55 @@ async function doTestTabStopsPageLoaded(aPageActionsVisible) {
     }
     await expectFocusAfterKey("Tab", gBrowser.selectedBrowser);
   });
+  BrowserPageActions.mainButtonNode.style.removeProperty("display");
 }
 
 // Test tab stops with a page loaded.
 add_task(async function testTabStopsPageLoaded() {
-  is(
-    BrowserPageActions.mainButtonNode.style.visibility,
-    "visible",
-    "explicitly shown at the beginning of test"
-  );
   await doTestTabStopsPageLoaded(false);
   await doTestTabStopsPageLoaded(true);
+});
+
+// Test tab stops with the search button declining to be one.
+add_task(async function testTabStopsSkippingSearchButton() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.urlbar.searchModeSwitcher.skipTabStop", true]],
+  });
+  const searchButton = "#urlbar-container .searchmode-switcher";
+
+  AddHomeBesideReload();
+  await withNewBlankTab(async function () {
+    startFromUrlBar();
+    await expectFocusAfterKey("Shift+Tab", searchButton, true);
+    await expectFocusAfterKey("Tab", gURLBar.inputField);
+    await expectFocusAfterKey("Shift+Tab", searchButton, true);
+    if (sidebarRevampEnabled) {
+      await expectFocusAfterKey("Shift+Tab", "sidebar-button");
+      await expectFocusAfterKey("ArrowRight", "home-button");
+    } else {
+      await expectFocusAfterKey("Shift+Tab", "home-button");
+    }
+    await expectFocusAfterKey("Tab", gURLBar.inputField);
+  });
+  RemoveHomeButton();
+
+  await BrowserTestUtils.withNewTab("https://example.com", async function () {
+    await waitUntilReloadEnabled();
+    startFromUrlBar();
+    await expectFocusAfterKey("Shift+Tab", searchButton, true);
+    if (sidebarRevampEnabled) {
+      await expectFocusAfterKey("Shift+Tab", "sidebar-button");
+      await expectFocusAfterKey("ArrowRight", "reload-button");
+    } else {
+      await expectFocusAfterKey("Shift+Tab", "reload-button");
+    }
+    // The first site information button takes the tab stop the search button
+    // declined.
+    await expectFocusAfterKey("Tab", "trust-icon-container");
+    await expectFocusAfterKey("Tab", gURLBar.inputField);
+  });
+
+  await SpecialPowers.popPrefEnv();
 });
 
 // Test tab stops with a notification anchor visible.
@@ -268,10 +319,11 @@ add_task(async function testTabStopsWithNotification() {
       await popupShown;
       startFromUrlBar();
       // If the notification anchor were in the tab order, the next shift+tab
-      // would focus it instead of #tracking-protection-icon-container.
+      // would focus it instead of the expected element.
       await expectFocusAfterKey(
         "Shift+Tab",
-        "tracking-protection-icon-container"
+        "#urlbar-container .searchmode-switcher",
+        true
       );
     }
   );
@@ -329,7 +381,17 @@ add_task(async function testTabStopNoButtons() {
       CustomizableUI.removeWidgetFromArea("sidebar-button");
     }
     startFromUrlBar();
+    await expectFocusAfterKey(
+      "Shift+Tab",
+      "#urlbar-container .searchmode-switcher",
+      true
+    );
     await expectFocusAfterKey("Shift+Tab", "tabs-newtab-button");
+    await expectFocusAfterKey(
+      "Tab",
+      "#urlbar-container .searchmode-switcher",
+      true
+    );
     await expectFocusAfterKey("Tab", gURLBar.inputField);
     resetToolbarWithoutDevEditionButtons();
     AddHomeBesideReload();
@@ -337,6 +399,11 @@ add_task(async function testTabStopNoButtons() {
       CustomizableUI.addWidgetToArea("sidebar-button", "nav-bar", 0);
     }
     // Make sure the button is reachable now that it has been re-added.
+    await expectFocusAfterKey(
+      "Shift+Tab",
+      "#urlbar-container .searchmode-switcher",
+      true
+    );
     await expectFocusAfterKey("Shift+Tab", "sidebar-button", true);
     await expectFocusAfterKey("ArrowRight", "home-button");
     RemoveHomeButton();
@@ -386,12 +453,15 @@ add_task(async function testArrowsToolbarbuttons() {
 // Test that right/left arrows move through buttons which aren't toolbarbuttons
 // but have role="button".
 add_task(async function testArrowsRoleButton() {
+  BrowserPageActions.mainButtonNode.style.display = "flex";
+
   await BrowserTestUtils.withNewTab("https://example.com", async function () {
     startFromUrlBar();
     await expectFocusAfterKey("Tab", "pageActionButton");
     await expectFocusAfterKey("ArrowRight", "star-button-box");
     await expectFocusAfterKey("ArrowLeft", "pageActionButton");
   });
+  BrowserPageActions.mainButtonNode.style.removeProperty("display");
 });
 
 // Test that right/left arrows do not land on disabled buttons.
@@ -403,7 +473,8 @@ add_task(async function testArrowsDisabledButtons() {
       startFromUrlBar();
       await expectFocusAfterKey(
         "Shift+Tab",
-        "tracking-protection-icon-container"
+        "#urlbar-container .searchmode-switcher",
+        true
       );
       // Back and Forward buttons are disabled.
       if (sidebarRevampEnabled) {
@@ -433,7 +504,8 @@ add_task(async function testArrowsDisabledButtons() {
       startFromUrlBar();
       await expectFocusAfterKey(
         "Shift+Tab",
-        "tracking-protection-icon-container"
+        "#urlbar-container .searchmode-switcher",
+        true
       );
       if (sidebarRevampEnabled) {
         await expectFocusAfterKey("Shift+Tab", "sidebar-button");
@@ -574,7 +646,7 @@ add_task(async function testPanelCloseRestoresFocus() {
 });
 
 // Test that the arrow key works in the group of the
-// 'tracking-protection-icon-container' and the 'identity-box'.
+// 'trust-icon-container' and the 'identity-box'.
 add_task(async function testArrowKeyForTPIconContainerandIdentityBox() {
   await BrowserTestUtils.withNewTab(
     "https://example.com",
@@ -585,15 +657,12 @@ add_task(async function testArrowKeyForTPIconContainerandIdentityBox() {
       startFromUrlBar();
       await expectFocusAfterKey(
         "Shift+Tab",
-        "tracking-protection-icon-container"
+        "#urlbar-container .searchmode-switcher",
+        true
       );
-      await expectFocusAfterKey("ArrowRight", "identity-icon-box");
+      await expectFocusAfterKey("ArrowRight", "trust-icon-container");
       await expectFocusAfterKey("ArrowRight", "identity-permission-box");
-      await expectFocusAfterKey("ArrowLeft", "identity-icon-box");
-      await expectFocusAfterKey(
-        "ArrowLeft",
-        "tracking-protection-icon-container"
-      );
+      await expectFocusAfterKey("ArrowLeft", "trust-icon-container");
       gBrowser.updateBrowserSharing(browser, { geo: false });
     }
   );
@@ -606,7 +675,7 @@ add_task(async function testCharacterNavigation() {
   await BrowserTestUtils.withNewTab("https://example.com", async function () {
     await waitUntilReloadEnabled();
     startFromUrlBar();
-    await expectFocusAfterKey("Tab", "pageActionButton");
+    await expectFocusAfterKey("Tab", "star-button-box");
     await expectFocusAfterKey("h", "home-button");
     // There's no button starting with "hs", so pressing s should do nothing.
     EventUtils.synthesizeKey("s");
@@ -654,9 +723,19 @@ add_task(async function testTabStopsAfterSearchBarAdded() {
   await gCUITestUtils.addSearchBar();
   await withNewBlankTab(async function () {
     startFromUrlBar();
-    await expectFocusAfterKey("Tab", "searchbar", true);
+    await expectFocusAfterKey(
+      "Tab",
+      "#searchbar-new .searchmode-switcher",
+      true
+    );
+    await expectFocusAfterKey("Tab", "searchbar-new", true);
     await expectFocusAfterKey("Tab", "library-button");
-    await expectFocusAfterKey("Shift+Tab", "searchbar", true);
+    await expectFocusAfterKey("Shift+Tab", "searchbar-new", true);
+    await expectFocusAfterKey(
+      "Shift+Tab",
+      "#searchbar-new .searchmode-switcher",
+      true
+    );
     await expectFocusAfterKey("Shift+Tab", gURLBar.inputField);
   });
   gCUITestUtils.removeSearchBar();
@@ -679,6 +758,8 @@ add_task(async function testFirefoxViewButtonNavigation() {
   await BrowserTestUtils.withNewTab(
     PERMISSIONS_PAGE,
     async function (aBrowser) {
+      FirefoxViewTestUtils.enableFirefoxViewButton(window);
+
       await SpecialPowers.spawn(aBrowser, [], async () => {
         content.document.querySelector("#camera").focus();
       });

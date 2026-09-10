@@ -16,6 +16,7 @@ const {
 } = require("resource://devtools/server/actors/highlighters/utils/markup.js");
 const {
   PSEUDO_CLASSES,
+  ELEMENT_SPECIFIC_PSEUDO_CLASSES,
 } = require("resource://devtools/shared/css/constants.js");
 const {
   getCurrentZoom,
@@ -29,6 +30,7 @@ const nodeConstants = require("resource://devtools/shared/dom-node-constants.js"
 loader.lazyGetter(this, "HighlightersBundle", () => {
   return new Localization(["devtools/shared/highlighters.ftl"], true);
 });
+loader.lazyRequireGetter(this, "flags", "resource://devtools/shared/flags.js");
 
 // Note that the order of items in this array is important because it is used
 // for drawing the BoxModelHighlighter's path elements correctly.
@@ -50,18 +52,18 @@ const GUIDE_STROKE_WIDTH = 1;
  * h.hide();
  * h.destroy();
  *
- * @param {String} options.region
+ * @param {string} options.region
  *        Specifies the region that the guides should outline:
  *          "content" (default), "padding", "border" or "margin".
- * @param {Boolean} options.hideGuides
+ * @param {boolean} options.hideGuides
  *        Defaults to false
- * @param {Boolean} options.hideInfoBar
+ * @param {boolean} options.hideInfoBar
  *        Defaults to false
- * @param {String} options.showOnly
+ * @param {string} options.showOnly
  *        If set, only this region will be highlighted. Use with onlyRegionArea
  *        to only highlight the area of the region:
  *        "content", "padding", "border" or "margin"
- * @param {Boolean} options.onlyRegionArea
+ * @param {boolean} options.onlyRegionArea
  *        This can be set to true to make each region's box only highlight the
  *        area of the corresponding region rather than the area of nested
  *        regions too. This is useful when used with showOnly.
@@ -317,8 +319,9 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
   /**
    * Override the AutoRefreshHighlighter's _isNodeValid method to also return true for
    * text nodes since these can also be highlighted.
+   *
    * @param {DOMNode} node
-   * @return {Boolean}
+   * @return {boolean}
    */
   _isNodeValid(node) {
     return (
@@ -345,7 +348,7 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
    */
   _trackMutations() {
     if (isNodeValid(this.currentNode)) {
-      const win = this.currentNode.ownerGlobal;
+      const win = this.currentNode.documentGlobal;
       this.currentNodeObserver = new win.MutationObserver(this.update);
       this.currentNodeObserver.observe(this.currentNode, { attributes: true });
     }
@@ -369,17 +372,24 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
     setIgnoreLayoutChanges(true);
 
     if (this._updateBoxModel()) {
+      const isElementOrTextNode =
+        node.nodeType === node.ELEMENT_NODE || node.nodeType === node.TEXT_NODE;
       // Show the infobar only if configured to do so and the node is an element or a text
       // node.
-      if (
-        !this.options.hideInfoBar &&
-        (node.nodeType === node.ELEMENT_NODE ||
-          node.nodeType === node.TEXT_NODE)
-      ) {
-        this._showInfobar();
+      if (isElementOrTextNode) {
+        if (!this.options.hideInfoBar) {
+          this._showInfobar();
+        } else if (flags.testing) {
+          // Even if we don't want to show the info bar, update the infobar data (tag, id,
+          // classes, …) anyway so it's easier to debug/test
+          this._updateInfobarNodeData();
+        } else {
+          this._hideInfobar();
+        }
       } else {
         this._hideInfobar();
       }
+
       this._updateSimpleHighlighters();
       this._showBoxModel();
 
@@ -456,8 +466,9 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
    * This is useful to position the guides and infobar.
    * This may happen if the BoxModelHighlighter is used to highlight an inline
    * element that spans line breaks.
-   * @param {String} region The box-model region to get the outer quad for.
-   * @return {Object} A quad-like object {p1,p2,p3,p4,bounds}
+   *
+   * @param {string} region The box-model region to get the outer quad for.
+   * @return {object} A quad-like object {p1,p2,p3,p4,bounds}
    */
   _getOuterQuad(region) {
     const quads = this.currentQuads[region];
@@ -654,7 +665,8 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
 
   /**
    * Can the current node be highlighted? Does it have quads.
-   * @return {Boolean}
+   *
+   * @return {boolean}
    */
   _nodeNeedsHighlighting() {
     return (
@@ -696,7 +708,8 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
   /**
    * We only want to show guides for horizontal and vertical edges as this helps
    * to line them up. This method finds these edges and displays a guide there.
-   * @param {String} region The region around which the guides should be shown.
+   *
+   * @param {string} region The region around which the guides should be shown.
    */
   _showGuides(region) {
     const quad = this._getOuterQuad(region);
@@ -745,7 +758,7 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
    * Move a guide to the appropriate position and display it. If no point is
    * passed then the guide is hidden.
    *
-   * @param  {String} side
+   * @param  {string} side
    *         The guide to update
    * @param  {Integer} point
    *         x or y co-ordinate. If this is undefined we hide the guide.
@@ -783,23 +796,9 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
       return;
     }
 
-    const { bindingElement: node, pseudo } = getBindingElementAndPseudo(
+    const { bindingElement: node } = getBindingElementAndPseudo(
       this.currentNode
     );
-
-    // Update the tag, id, classes, pseudo-classes and dimensions
-    const displayName = getNodeDisplayName(node);
-
-    const id = node.id ? "#" + node.id : "";
-
-    const classList = (node.classList || []).length
-      ? "." + [...node.classList].join(".")
-      : "";
-
-    let pseudos = this._getPseudoClasses(node).join("");
-    if (pseudo) {
-      pseudos += pseudo;
-    }
 
     // We want to display the original `width` and `height`, instead of the ones affected
     // by any zoom. Since the infobar can be displayed also for text nodes, we can't
@@ -821,10 +820,8 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
     const gridLayoutTextType = this._getLayoutTextType("gridtype", gridType);
     const flexLayoutTextType = this._getLayoutTextType("flextype", flexType);
 
-    this.getElement("box-model-infobar-tagname").setTextContent(displayName);
-    this.getElement("box-model-infobar-id").setTextContent(id);
-    this.getElement("box-model-infobar-classes").setTextContent(classList);
-    this.getElement("box-model-infobar-pseudo-classes").setTextContent(pseudos);
+    // Update the tag, id, classes, pseudo-classes
+    this._updateInfobarNodeData();
     this.getElement("box-model-infobar-dimensions").setTextContent(dim);
     this.getElement("box-model-infobar-grid-type").setTextContent(
       gridLayoutTextType
@@ -834,6 +831,49 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
     );
 
     this._moveInfobar();
+  }
+
+  _updateInfobarNodeData() {
+    if (!this.currentNode) {
+      return;
+    }
+
+    // The binding element of a pseudo element can also be a pseudo element (for example
+    // ::before::marker), so walk up through the tree until we get a non pseudo binding
+    // element.
+    let node = this.currentNode,
+      pseudo = "";
+    while (true) {
+      const res = getBindingElementAndPseudo(node);
+
+      // Stop as soon as the binding element is the same as the passed node, meaning we
+      // found the ultimate originating element (https://drafts.csswg.org/selectors-4/#ultimate-originating-element).
+      if (res.bindingElement === node) {
+        break;
+      }
+
+      node = res.bindingElement;
+      pseudo = res.pseudo + pseudo;
+    }
+
+    // Update the tag, id, classes, pseudo-classes and dimensions
+    const displayName = getNodeDisplayName(node);
+
+    const id = node.id ? "#" + node.id : "";
+
+    const classList = node.classList?.length
+      ? "." + [...node.classList].join(".")
+      : "";
+
+    let pseudos = this._getPseudoClasses(node).join("");
+    if (pseudo) {
+      pseudos += pseudo;
+    }
+
+    this.getElement("box-model-infobar-tagname").setTextContent(displayName);
+    this.getElement("box-model-infobar-id").setTextContent(id);
+    this.getElement("box-model-infobar-classes").setTextContent(classList);
+    this.getElement("box-model-infobar-pseudo-classes").setTextContent(pseudos);
   }
 
   _getLayoutTextType(layoutTypeKey, { isContainer, isItem }) {
@@ -855,7 +895,10 @@ class BoxModelHighlighter extends AutoRefreshHighlighter {
       return [];
     }
 
-    return PSEUDO_CLASSES.filter(pseudo => hasPseudoClassLock(node, pseudo));
+    return [
+      ...PSEUDO_CLASSES,
+      ...Object.keys(ELEMENT_SPECIFIC_PSEUDO_CLASSES),
+    ].filter(pseudo => hasPseudoClassLock(node, pseudo));
   }
 
   /**

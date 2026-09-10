@@ -6,15 +6,16 @@
 //!
 //! [margin]: https://drafts.csswg.org/css-page-3/#margin-boxes
 
+use crate::derives::*;
 use crate::properties::PropertyDeclarationBlock;
 use crate::shared_lock::{DeepCloneWithLock, Locked};
 use crate::shared_lock::{SharedRwLock, SharedRwLockReadGuard, ToCssWithGuard};
-use crate::str::CssStringWriter;
-use cssparser::SourceLocation;
+use cssparser::{match_ignore_ascii_case, SourceLocation};
 #[cfg(feature = "gecko")]
 use malloc_size_of::{MallocSizeOf, MallocSizeOfOps, MallocUnconditionalShallowSizeOf};
 use servo_arc::Arc;
 use std::fmt::{self, Write};
+use style_traits::CssStringWriter;
 
 macro_rules! margin_rule_types {
     ($($(#[$($meta:tt)+])* $id:ident => $val:literal,)+) => {
@@ -38,7 +39,7 @@ macro_rules! margin_rule_types {
         impl MarginRuleType {
             /// Matches the rule type for this name. This does not expect a
             /// leading '@'.
-            pub fn match_name(name: &str) -> Option<Self> {
+            pub fn from_name(name: &str) -> Option<Self> {
                 Some(match_ignore_ascii_case! { name,
                     $( $val => MarginRuleType::$id, )+
                     _ => return None,

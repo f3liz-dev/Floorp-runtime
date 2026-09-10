@@ -14,10 +14,10 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
-#include "api/array_view.h"
 #include "rtc_base/buffer.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/sanitizer.h"
@@ -26,6 +26,9 @@
 namespace webrtc {
 
 namespace {
+
+// TODO(peah): Rationale
+static_assert(AudioDecoder::kMaxNumberOfChannels <= 255, "");
 
 class OldStyleEncodedFrame final : public AudioDecoder::EncodedAudioFrame {
  public:
@@ -38,14 +41,15 @@ class OldStyleEncodedFrame final : public AudioDecoder::EncodedAudioFrame {
   }
 
   std::optional<DecodeResult> Decode(
-      ArrayView<int16_t> decoded) const override {
+      std::span<int16_t> decoded) const override {
     auto speech_type = AudioDecoder::kSpeech;
     const int ret = decoder_->Decode(
         payload_.data(), payload_.size(), decoder_->SampleRateHz(),
         decoded.size() * sizeof(int16_t), decoded.data(), &speech_type);
     return ret < 0 ? std::nullopt
                    : std::optional<DecodeResult>(
-                         {static_cast<size_t>(ret), speech_type});
+                         {.num_decoded_samples = static_cast<size_t>(ret),
+                          .speech_type = speech_type});
   }
 
  private:
@@ -90,7 +94,7 @@ int AudioDecoder::Decode(const uint8_t* encoded,
                          int16_t* decoded,
                          SpeechType* speech_type) {
   TRACE_EVENT0("webrtc", "AudioDecoder::Decode");
-  MsanCheckInitialized(MakeArrayView(encoded, encoded_len));
+  MsanCheckInitialized(std::span(encoded, encoded_len));
   int duration = PacketDuration(encoded, encoded_len);
   if (duration >= 0 &&
       duration * Channels() * sizeof(int16_t) > max_decoded_bytes) {
@@ -107,7 +111,7 @@ int AudioDecoder::DecodeRedundant(const uint8_t* encoded,
                                   int16_t* decoded,
                                   SpeechType* speech_type) {
   TRACE_EVENT0("webrtc", "AudioDecoder::DecodeRedundant");
-  MsanCheckInitialized(MakeArrayView(encoded, encoded_len));
+  MsanCheckInitialized(std::span(encoded, encoded_len));
   int duration = PacketDurationRedundant(encoded, encoded_len);
   if (duration >= 0 &&
       duration * Channels() * sizeof(int16_t) > max_decoded_bytes) {
@@ -171,5 +175,4 @@ AudioDecoder::SpeechType AudioDecoder::ConvertSpeechType(int16_t type) {
   }
 }
 
-constexpr int AudioDecoder::kMaxNumberOfChannels;
 }  // namespace webrtc

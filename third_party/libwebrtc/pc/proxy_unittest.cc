@@ -39,7 +39,7 @@ class FakeInterface : public RefCountInterface {
   virtual std::string Method2(std::string s1, std::string s2) = 0;
 
  protected:
-  virtual ~FakeInterface() {}
+  ~FakeInterface() override {}
 };
 
 // Implementation of the test interface.
@@ -60,7 +60,7 @@ class Fake : public FakeInterface {
 
  protected:
   Fake() {}
-  ~Fake() { Destroy(); }
+  ~Fake() override { Destroy(); }
 };
 
 // Proxies for the test interface.
@@ -255,6 +255,13 @@ TEST_F(ProxyTest, WorkerMethod2) {
       .WillOnce(DoAll(InvokeWithoutArgs(this, &ProxyTest::CheckWorkerThread),
                       Return("Method2")));
   EXPECT_EQ("Method2", fake_proxy_->Method2(arg1, arg2));
+}
+
+TEST_F(ProxyTest, DoesNotHangWhenTargetThreadQuits) {
+  signaling_thread_->Stop();
+  EXPECT_CALL(*fake_, Method0).Times(0);
+  EXPECT_CALL(*fake_, Destroy).Times(1);
+  fake_proxy_->Method0();
 }
 
 }  // namespace webrtc

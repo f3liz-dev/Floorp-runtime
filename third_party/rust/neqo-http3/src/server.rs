@@ -13,23 +13,23 @@ use std::{
     time::Instant,
 };
 
-use neqo_common::{qtrace, Datagram};
-use neqo_crypto::{AntiReplay, Cipher, PrivateKey, PublicKey, ZeroRttChecker};
+use neqo_common::{Datagram, qtrace};
 use neqo_transport::{
-    server::{ConnectionRef, Server, ValidateAddress},
     ConnectionIdGenerator, Output, OutputBatch,
+    server::{ConnectionRef, Server, ValidateAddress},
 };
+use nss::{AntiReplay, Cipher, PrivateKey, PublicKey, ZeroRttChecker};
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::{
+    Http3Parameters, Http3StreamInfo, Res,
+    connect_udp::{self, ServerEvents as _},
     connection::Http3State,
     connection_server::Http3ServerHandler,
-    server_connection_events::Http3ServerConnEvent,
-    server_events::{
-        Http3OrWebTransportStream, Http3ServerEvent, Http3ServerEvents, WebTransportRequest,
-    },
+    server_connection_events::{ConnectUdpEvent, Http3ServerConnEvent, WebTransportEvent},
+    server_events::{Http3OrWebTransportStream, Http3ServerEvent, Http3ServerEvents},
     settings::HttpZeroRttChecker,
-    Http3Parameters, Http3StreamInfo, Res,
+    webtransport::{ServerEvents as _, ServerSession},
 };
 
 type HandlerRef = Rc<RefCell<Http3ServerHandler>>;
@@ -121,24 +121,24 @@ impl Http3Server {
     /// Wrapper around [`Http3Server::process_multiple`] that processes a single
     /// output datagram only.
     #[expect(clippy::missing_panics_doc, reason = "see expect()")]
-    pub fn process<A: AsRef<[u8]> + AsMut<[u8]>>(
+    pub fn process<A: AsRef<[u8]> + AsMut<[u8]>, I: IntoIterator<Item = Datagram<A>>>(
         &mut self,
-        dgram: Option<Datagram<A>>,
+        dgrams: I,
         now: Instant,
     ) -> Output {
-        self.process_multiple(dgram, now, 1.try_into().expect(">0"))
+        self.process_multiple(dgrams, now, 1.try_into().expect(">0"))
             .try_into()
             .expect("max_datagrams is 1")
     }
 
-    pub fn process_multiple(
+    pub fn process_multiple<A: AsRef<[u8]> + AsMut<[u8]>, I: IntoIterator<Item = Datagram<A>>>(
         &mut self,
-        dgram: Option<Datagram<impl AsRef<[u8]> + AsMut<[u8]>>>,
+        dgrams: I,
         now: Instant,
         max_datagrams: NonZeroUsize,
     ) -> OutputBatch {
         qtrace!("[{self}] Process");
-        let out = self.server.process_multiple(dgram, now, max_datagrams);
+        let out = self.server.process_multiple_input(dgrams, now);
         self.process_http3(now);
         // If we do not that a dgram already try again after process_http3.
         match out {
@@ -251,36 +251,83 @@ impl Http3Server {
                     } => {
                         self.events.priority_update(stream_id, priority);
                     }
-                    Http3ServerConnEvent::ExtendedConnect { stream_id, headers } => {
+                    Http3ServerConnEvent::WebTransport(WebTransportEvent::Session {
+                        stream_id,
+                        headers,
+                    }) => {
                         self.events.webtransport_new_session(
-                            WebTransportRequest::new(conn.clone(), Rc::clone(handler), stream_id),
+                            ServerSession::new(conn.clone(), Rc::clone(handler), stream_id),
                             headers,
                         );
                     }
-                    Http3ServerConnEvent::ExtendedConnectClosed {
+                    Http3ServerConnEvent::ConnectUdp(ConnectUdpEvent::Session {
+                        stream_id,
+                        headers,
+                    }) => {
+                        self.events.connect_udp_new_session(
+                            connect_udp::ServerSession::new(
+                                conn.clone(),
+                                Rc::clone(handler),
+                                stream_id,
+                            ),
+                            headers,
+                        );
+                    }
+                    Http3ServerConnEvent::WebTransport(WebTransportEvent::SessionClosed {
                         stream_id,
                         reason,
                         headers,
                         ..
-                    } => self.events.webtransport_session_closed(
-                        WebTransportRequest::new(conn.clone(), Rc::clone(handler), stream_id),
+                    }) => self.events.webtransport_session_closed(
+                        ServerSession::new(conn.clone(), Rc::clone(handler), stream_id),
                         reason,
                         headers,
                     ),
-                    Http3ServerConnEvent::ExtendedConnectNewStream(stream_info) => self
+                    Http3ServerConnEvent::ConnectUdp(ConnectUdpEvent::SessionClosed {
+                        stream_id,
+                        reason,
+                        headers,
+                        ..
+                    }) => self.events.connect_udp_session_closed(
+                        connect_udp::ServerSession::new(
+                            conn.clone(),
+                            Rc::clone(handler),
+                            stream_id,
+                        ),
+                        reason,
+                        headers,
+                    ),
+                    Http3ServerConnEvent::WebTransport(WebTransportEvent::NewStream(
+                        stream_info,
+                    )) => self
                         .events
                         .webtransport_new_stream(Http3OrWebTransportStream::new(
                             conn.clone(),
                             Rc::clone(handler),
                             stream_info,
                         )),
-                    Http3ServerConnEvent::ExtendedConnectDatagram {
+                    Http3ServerConnEvent::WebTransport(WebTransportEvent::Datagram {
                         session_id,
                         datagram,
-                    } => self.events.webtransport_datagram(
-                        WebTransportRequest::new(conn.clone(), Rc::clone(handler), session_id),
+                    }) => {
+                        self.events.webtransport_datagram(
+                            ServerSession::new(conn.clone(), Rc::clone(handler), session_id),
+                            datagram,
+                        );
+                    }
+                    Http3ServerConnEvent::ConnectUdp(ConnectUdpEvent::Datagram {
+                        session_id,
                         datagram,
-                    ),
+                    }) => {
+                        self.events.connect_udp_datagram(
+                            connect_udp::ServerSession::new(
+                                conn.clone(),
+                                Rc::clone(handler),
+                                session_id,
+                            ),
+                            datagram,
+                        );
+                    }
                 }
             }
         }
@@ -307,6 +354,27 @@ impl Http3Server {
     #[must_use]
     pub fn next_event(&self) -> Option<Http3ServerEvent> {
         self.events.next_event()
+    }
+
+    /// Queue a GOAWAY frame to be sent to all connected clients.
+    ///
+    /// `stream_id` is the first stream ID that was **not** processed.
+    ///
+    /// **Note:** The same `stream_id` is sent to every connection. Callers
+    /// must ensure that `stream_id` is valid across all connections and that
+    /// subsequent calls use non-increasing values (per RFC 9114 §5.2).
+    pub fn send_goaway(&self, stream_id: neqo_transport::StreamId) {
+        debug_assert!(
+            !stream_id.is_uni() && !stream_id.is_server_initiated(),
+            "GOAWAY stream ID must be client-initiated bidirectional (RFC 9114 S5.2)"
+        );
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "OK to iterate over handlers in undefined order for goaway"
+        )]
+        for handler in self.http3_handlers.values() {
+            handler.borrow_mut().queue_goaway(stream_id);
+        }
     }
 }
 fn prepare_data(
@@ -345,37 +413,36 @@ fn prepare_data(
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{
         collections::HashMap,
         ops::{Deref, DerefMut},
     };
 
-    use neqo_common::{event::Provider as _, Encoder};
-    use neqo_crypto::{AuthenticationStatus, ZeroRttCheckResult, ZeroRttChecker};
+    use neqo_common::{Encoder, event::Provider as _};
     use neqo_qpack as qpack;
     use neqo_transport::{
         CloseReason, Connection, ConnectionEvent, State, StreamId, StreamType, ZeroRttState,
     };
+    use nss::{AuthenticationStatus, ResumptionToken, ZeroRttCheckResult, ZeroRttChecker};
     use test_fixture::{
-        anti_replay, default_client, fixture_init, now, CountingConnectionIdGenerator,
-        DEFAULT_ALPN, DEFAULT_KEYS,
+        CountingConnectionIdGenerator, DEFAULT_ALPN, DEFAULT_KEYS, anti_replay, default_client,
+        fixture_init, now,
     };
 
     use super::{Http3Server, Http3ServerEvent, Http3State, Rc, RefCell};
     use crate::{Error, HFrame, Header, Http3Parameters, Priority};
 
-    const DEFAULT_SETTINGS: qpack::Settings = qpack::Settings {
-        max_table_size_encoder: 100,
-        max_table_size_decoder: 100,
-        max_blocked_streams: 100,
-    };
+    fn qpack_defaults() -> qpack::Settings {
+        qpack::Settings::default()
+            .max_table_size_encoder(100)
+            .max_table_size_decoder(100)
+            .max_blocked_streams(100)
+    }
 
     fn http3params(qpack_settings: qpack::Settings) -> Http3Parameters {
-        Http3Parameters::default()
-            .max_table_size_encoder(qpack_settings.max_table_size_encoder)
-            .max_table_size_decoder(qpack_settings.max_table_size_decoder)
-            .max_blocked_streams(qpack_settings.max_blocked_streams)
+        Http3Parameters::default().qpack(qpack_settings)
     }
 
     pub fn create_server(conn_params: Http3Parameters) -> Http3Server {
@@ -394,7 +461,7 @@ mod tests {
 
     /// Create a http3 server with default configuration.
     pub fn default_server() -> Http3Server {
-        create_server(http3params(DEFAULT_SETTINGS))
+        create_server(http3params(qpack_defaults()))
     }
 
     fn assert_closed(hconn: &Http3Server, expected: &Error) {
@@ -447,7 +514,7 @@ mod tests {
         let needs_auth = client
             .events()
             .any(|e| e == ConnectionEvent::AuthenticationNeeded);
-        let c2 = if needs_auth {
+        let c3 = if needs_auth {
             assert!(!resume);
             // c2 should just be an ACK, so absorb that.
             let s_ack = server.process(c2.dgram(), now());
@@ -457,22 +524,27 @@ mod tests {
             client.process_output(now())
         } else {
             assert!(resume);
-            c2
+            let s3 = server.process(c2.dgram(), now()).dgram();
+            client.process(s3, now())
         };
         assert!(client.state().connected());
-        let s2 = server.process(c2.dgram(), now());
+        let s4 = server.process(c3.dgram(), now());
+        assert_eq!(server.process_output(now()).dgram(), None);
         assert_connected(server);
-        _ = client.process(s2.dgram(), now());
+        assert_eq!(client.process(s4.dgram(), now()).dgram(), None);
     }
 
     // Start a client/server and check setting frame.
-    fn connect_and_receive_settings_with_server(server: &mut Http3Server) -> Connection {
-        const CONTROL_STREAM_DATA: &[u8] = &[0x0, 0x4, 0x6, 0x1, 0x40, 0x64, 0x7, 0x40, 0x64];
+    fn connect_and_receive_settings_with_server(
+        server: &mut Http3Server,
+    ) -> (Connection, ResumptionToken) {
+        const CONTROL_STREAM_DATA: &[u8] = &[0x0, 0x4, 0x12, 0x1, 0x40, 0x64, 0x7, 0x40, 0x64];
 
         let mut client = default_client();
         connect_transport(server, &mut client, false);
 
         let mut connected = false;
+        let mut token = None;
         while let Some(e) = client.next_event() {
             match e {
                 ConnectionEvent::NewStream { stream_id } => {
@@ -489,10 +561,9 @@ mod tests {
                     {
                         // the control stream
                         let mut buf = [0_u8; 100];
-                        let (amount, fin) = client.stream_recv(stream_id, &mut buf).unwrap();
+                        let (_, fin) = client.stream_recv(stream_id, &mut buf).unwrap();
                         assert!(!fin);
-                        assert_eq!(amount, CONTROL_STREAM_DATA.len());
-                        assert_eq!(&buf[..9], CONTROL_STREAM_DATA);
+                        assert_eq!(&buf[..CONTROL_STREAM_DATA.len()], CONTROL_STREAM_DATA);
                     } else if stream_id == CLIENT_SIDE_ENCODER_STREAM_ID
                         || stream_id == SERVER_SIDE_ENCODER_STREAM_ID
                     {
@@ -521,15 +592,16 @@ mod tests {
                     );
                 }
                 ConnectionEvent::StateChange(State::Connected) => connected = true,
+                ConnectionEvent::ResumptionToken(t) => token = Some(t),
                 ConnectionEvent::StateChange(_) | ConnectionEvent::SendStreamCreatable { .. } => (),
-                _ => panic!("unexpected event"),
+                e => panic!("unexpected event: {e:?}"),
             }
         }
         assert!(connected);
-        client
+        (client, token.unwrap())
     }
 
-    fn connect_and_receive_settings() -> (Http3Server, Connection) {
+    fn connect_and_receive_settings() -> (Http3Server, Connection, ResumptionToken) {
         // Create a server and connect it to a client.
         // We will have a http3 server on one side and a neqo_transport
         // connection on the other side so that we can check what the http3
@@ -537,8 +609,8 @@ mod tests {
         // client.
 
         let mut server = default_server();
-        let client = connect_and_receive_settings_with_server(&mut server);
-        (server, client)
+        let (client, token) = connect_and_receive_settings_with_server(&mut server);
+        (server, client, token)
     }
 
     // Test http3 connection initialization.
@@ -575,8 +647,8 @@ mod tests {
     }
 
     // Connect transport, send and receive settings.
-    fn connect_to(server: &mut Http3Server) -> PeerConnection {
-        let mut neqo_trans_conn = connect_and_receive_settings_with_server(server);
+    fn connect_to(server: &mut Http3Server) -> (PeerConnection, ResumptionToken) {
+        let (mut neqo_trans_conn, token) = connect_and_receive_settings_with_server(server);
         let control_stream = neqo_trans_conn.stream_create(StreamType::UniDi).unwrap();
         let mut sent = neqo_trans_conn.stream_send(
             control_stream,
@@ -584,11 +656,11 @@ mod tests {
         );
         assert_eq!(sent, Ok(9));
         let mut encoder = qpack::Encoder::new(
-            &qpack::Settings {
-                max_table_size_encoder: 100,
-                max_table_size_decoder: 0,
-                max_blocked_streams: 0,
-            },
+            &qpack::Settings::default()
+                .max_table_size_encoder(100)
+                .max_table_size_decoder(0)
+                .max_blocked_streams(0)
+                .max_tracked_streams(4096),
             true,
         );
         encoder.add_send_stream(neqo_trans_conn.stream_create(StreamType::UniDi).unwrap());
@@ -603,16 +675,24 @@ mod tests {
         // assert no error occurred.
         assert_not_closed(server);
 
-        PeerConnection {
-            conn: neqo_trans_conn,
-            control_stream_id: control_stream,
-        }
+        (
+            PeerConnection {
+                conn: neqo_trans_conn,
+                control_stream_id: control_stream,
+            },
+            token,
+        )
     }
 
     fn connect() -> (Http3Server, PeerConnection) {
-        let mut server = default_server();
-        let client = connect_to(&mut server);
+        let (server, client, _token) = connect_with_token();
         (server, client)
+    }
+
+    fn connect_with_token() -> (Http3Server, PeerConnection, ResumptionToken) {
+        let mut server = default_server();
+        let (client, token) = connect_to(&mut server);
+        (server, client, token)
     }
 
     // Server: Test receiving a new control stream and a SETTINGS frame.
@@ -637,7 +717,7 @@ mod tests {
     // (the first frame sent is a MAX_PUSH_ID frame).
     #[test]
     fn server_missing_settings() {
-        let (mut hconn, mut neqo_trans_conn) = connect_and_receive_settings();
+        let (mut hconn, mut neqo_trans_conn, _token) = connect_and_receive_settings();
         // Create client control stream.
         let control_stream = neqo_trans_conn.stream_create(StreamType::UniDi).unwrap();
         // Send a MAX_PUSH_ID frame instead.
@@ -787,7 +867,7 @@ mod tests {
     /// Test reading of a slowly streamed frame. bytes are received one by one
     #[test]
     fn server_frame_reading() {
-        let (mut hconn, mut peer_conn) = connect_and_receive_settings();
+        let (mut hconn, mut peer_conn, _token) = connect_and_receive_settings();
 
         // create a control stream.
         let control_stream = peer_conn.stream_create(StreamType::UniDi).unwrap();
@@ -873,7 +953,7 @@ mod tests {
 
     // Test reading of a slowly streamed frame. bytes are received one by one
     fn test_incomplete_frame(res: &[u8]) {
-        let (mut hconn, mut peer_conn) = connect_and_receive_settings();
+        let (mut hconn, mut peer_conn, _token) = connect_and_receive_settings();
 
         // send an incomplete request.
         let stream_id = peer_conn.stream_create(StreamType::BiDi).unwrap();
@@ -954,7 +1034,7 @@ mod tests {
                             Header::new("content-length", "3"),
                         ])
                         .unwrap();
-                    stream.send_data(RESPONSE_BODY).unwrap();
+                    stream.send_data(RESPONSE_BODY, now()).unwrap();
                     data_received += 1;
                 }
                 Http3ServerEvent::DataWritable { .. }
@@ -962,7 +1042,8 @@ mod tests {
                 | Http3ServerEvent::StreamStopSending { .. }
                 | Http3ServerEvent::StateChange { .. }
                 | Http3ServerEvent::PriorityUpdate { .. }
-                | Http3ServerEvent::WebTransport(_) => {}
+                | Http3ServerEvent::WebTransport(_)
+                | Http3ServerEvent::ConnectUdp(_) => {}
             }
         }
         assert_eq!(headers_frames, 1);
@@ -1001,7 +1082,7 @@ mod tests {
                             Header::new("content-length", "3"),
                         ])
                         .unwrap();
-                    stream.send_data(RESPONSE_BODY).unwrap();
+                    stream.send_data(RESPONSE_BODY, now()).unwrap();
                 }
                 Http3ServerEvent::Data { .. } => {
                     panic!("We should not have a Data event");
@@ -1011,7 +1092,8 @@ mod tests {
                 | Http3ServerEvent::StreamStopSending { .. }
                 | Http3ServerEvent::StateChange { .. }
                 | Http3ServerEvent::PriorityUpdate { .. }
-                | Http3ServerEvent::WebTransport(_) => {}
+                | Http3ServerEvent::WebTransport(_)
+                | Http3ServerEvent::ConnectUdp(_) => {}
             }
         }
         let out = hconn.process_output(now());
@@ -1038,7 +1120,8 @@ mod tests {
                 | Http3ServerEvent::StreamStopSending { .. }
                 | Http3ServerEvent::StateChange { .. }
                 | Http3ServerEvent::PriorityUpdate { .. }
-                | Http3ServerEvent::WebTransport(_) => {}
+                | Http3ServerEvent::WebTransport(_)
+                | Http3ServerEvent::ConnectUdp(_) => {}
             }
         }
         assert_eq!(headers_frames, 1);
@@ -1082,7 +1165,8 @@ mod tests {
                 | Http3ServerEvent::StreamStopSending { .. }
                 | Http3ServerEvent::StateChange { .. }
                 | Http3ServerEvent::PriorityUpdate { .. }
-                | Http3ServerEvent::WebTransport(_) => {}
+                | Http3ServerEvent::WebTransport(_)
+                | Http3ServerEvent::ConnectUdp(_) => {}
             }
         }
         let out = hconn.process_output(now());
@@ -1193,19 +1277,11 @@ mod tests {
     /// Perform a handshake, then another with the token from the first.
     /// The second should always resume, but it might not always accept early data.
     fn zero_rtt_with_settings(conn_params: Http3Parameters, zero_rtt: ZeroRttState) {
-        let (_, mut client) = connect();
-        let token = client.events().find_map(|e| {
-            if let ConnectionEvent::ResumptionToken(token) = e {
-                Some(token)
-            } else {
-                None
-            }
-        });
-        assert!(token.is_some());
+        let (_, _, token) = connect_with_token();
 
         let mut server = create_server(conn_params);
         let mut client = default_client();
-        client.enable_resumption(now(), token.unwrap()).unwrap();
+        client.enable_resumption(now(), token).unwrap();
 
         connect_transport(&mut server, &mut client, true);
         assert!(client.tls_info().unwrap().resumed());
@@ -1214,17 +1290,17 @@ mod tests {
 
     #[test]
     fn zero_rtt() {
-        zero_rtt_with_settings(http3params(DEFAULT_SETTINGS), ZeroRttState::AcceptedClient);
+        zero_rtt_with_settings(http3params(qpack_defaults()), ZeroRttState::AcceptedClient);
     }
 
     /// A larger QPACK decoder table size isn't an impediment to 0-RTT.
     #[test]
     fn zero_rtt_larger_decoder_table() {
+        let qpack_dflt = qpack_defaults();
         zero_rtt_with_settings(
-            http3params(qpack::Settings {
-                max_table_size_decoder: DEFAULT_SETTINGS.max_table_size_decoder + 1,
-                ..DEFAULT_SETTINGS
-            }),
+            http3params(
+                qpack_dflt.max_table_size_decoder(qpack_dflt.get_max_table_size_decoder() + 1),
+            ),
             ZeroRttState::AcceptedClient,
         );
     }
@@ -1232,11 +1308,11 @@ mod tests {
     /// A smaller QPACK decoder table size prevents 0-RTT.
     #[test]
     fn zero_rtt_smaller_decoder_table() {
+        let qpack_dflt = qpack_defaults();
         zero_rtt_with_settings(
-            http3params(qpack::Settings {
-                max_table_size_decoder: DEFAULT_SETTINGS.max_table_size_decoder - 1,
-                ..DEFAULT_SETTINGS
-            }),
+            http3params(
+                qpack_dflt.max_table_size_decoder(qpack_dflt.get_max_table_size_decoder() - 1),
+            ),
             ZeroRttState::Rejected,
         );
     }
@@ -1244,11 +1320,9 @@ mod tests {
     /// More blocked streams does not prevent 0-RTT.
     #[test]
     fn zero_rtt_more_blocked_streams() {
+        let qpack_dflt = qpack_defaults();
         zero_rtt_with_settings(
-            http3params(qpack::Settings {
-                max_blocked_streams: DEFAULT_SETTINGS.max_blocked_streams + 1,
-                ..DEFAULT_SETTINGS
-            }),
+            http3params(qpack_dflt.max_blocked_streams(qpack_dflt.get_max_blocked_streams() + 1)),
             ZeroRttState::AcceptedClient,
         );
     }
@@ -1256,11 +1330,9 @@ mod tests {
     /// A lower number of blocked streams also prevents 0-RTT.
     #[test]
     fn zero_rtt_fewer_blocked_streams() {
+        let qpack_dflt = qpack_defaults();
         zero_rtt_with_settings(
-            http3params(qpack::Settings {
-                max_blocked_streams: DEFAULT_SETTINGS.max_blocked_streams - 1,
-                ..DEFAULT_SETTINGS
-            }),
+            http3params(qpack_dflt.max_blocked_streams(qpack_dflt.get_max_blocked_streams() - 1)),
             ZeroRttState::Rejected,
         );
     }
@@ -1268,11 +1340,11 @@ mod tests {
     /// The size of the encoder table is local and therefore doesn't prevent 0-RTT.
     #[test]
     fn zero_rtt_smaller_encoder_table() {
+        let qpack_dflt = qpack_defaults();
         zero_rtt_with_settings(
-            http3params(qpack::Settings {
-                max_table_size_encoder: DEFAULT_SETTINGS.max_table_size_encoder - 1,
-                ..DEFAULT_SETTINGS
-            }),
+            http3params(
+                qpack_dflt.max_table_size_encoder(qpack_dflt.get_max_table_size_encoder() - 1),
+            ),
             ZeroRttState::AcceptedClient,
         );
     }
@@ -1311,7 +1383,8 @@ mod tests {
                 | Http3ServerEvent::StreamStopSending { .. }
                 | Http3ServerEvent::StateChange { .. }
                 | Http3ServerEvent::PriorityUpdate { .. }
-                | Http3ServerEvent::WebTransport(_) => {}
+                | Http3ServerEvent::WebTransport(_)
+                | Http3ServerEvent::ConnectUdp(_) => {}
             }
         }
         assert_eq!(requests.len(), 2);
@@ -1334,22 +1407,14 @@ mod tests {
             DEFAULT_ALPN,
             anti_replay(),
             Rc::new(RefCell::new(CountingConnectionIdGenerator::default())),
-            http3params(DEFAULT_SETTINGS),
+            http3params(qpack_defaults()),
             Some(Box::<RejectZeroRtt>::default()),
         )
         .expect("create a server");
-        let mut client = connect_to(&mut server);
-        let token = client.events().find_map(|e| {
-            if let ConnectionEvent::ResumptionToken(token) = e {
-                Some(token)
-            } else {
-                None
-            }
-        });
-        assert!(token.is_some());
+        let (_, token) = connect_to(&mut server);
 
         let mut client = default_client();
-        client.enable_resumption(now(), token.unwrap()).unwrap();
+        client.enable_resumption(now(), token).unwrap();
 
         connect_transport(&mut server, &mut client, true);
         assert!(client.tls_info().unwrap().resumed());

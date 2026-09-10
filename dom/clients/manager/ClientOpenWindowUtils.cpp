@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,7 +7,7 @@
 #include "ClientInfo.h"
 #include "ClientManager.h"
 #include "ClientState.h"
-#include "mozilla/ResultExtensions.h"
+#include "mozilla/NullPrincipal.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
@@ -502,7 +500,10 @@ RefPtr<ClientOpPromise> ClientOpenWindow(
 
   RefPtr<nsOpenWindowInfo> openInfo = new nsOpenWindowInfo();
   openInfo->mBrowsingContextReadyCallback = callback;
-  openInfo->mOriginAttributes = principal->OriginAttributesRef();
+  nsCOMPtr<nsIURI> nullPrincipalURI = NullPrincipal::CreateURI(nullptr);
+  nsCOMPtr<nsIPrincipal> initialPrincipal =
+      NullPrincipal::Create(principal->OriginAttributesRef(), nullPrincipalURI);
+  openInfo->mPrincipalToInheritForAboutBlank = std::move(initialPrincipal);
   openInfo->mIsRemote = true;
 
   RefPtr<BrowsingContext> bc;

@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,7 +7,6 @@
 
 #include "ObjectModel.h"
 #include "mozilla/dom/BufferSourceBindingFwd.h"
-#include "mozilla/dom/TypedArray.h"
 #include "mozilla/webgpu/WebGPUTypes.h"
 #include "nsWrapperCache.h"
 
@@ -35,12 +33,14 @@ class CommandBuffer;
 class Device;
 class Fence;
 
-class Queue final : public ObjectBase, public ChildOf<Device> {
+class Queue final : public nsWrapperCache,
+                    public ObjectBase,
+                    public ChildOf<Device> {
  public:
   GPU_DECL_CYCLE_COLLECTION(Queue)
   GPU_DECL_JS_WRAP(Queue)
 
-  Queue(Device* const aParent, WebGPUChild* aBridge, RawId aId);
+  Queue(Device* const aParent, RawId aId);
 
   void Submit(
       const dom::Sequence<OwningNonNull<CommandBuffer>>& aCommandBuffers);
@@ -62,18 +62,12 @@ class Queue final : public ObjectBase, public ChildOf<Device> {
       const dom::GPUCopyExternalImageDestInfo& aDestination,
       const dom::GPUExtent3D& aCopySize, ErrorResult& aRv);
 
-  const RawId mId;
-
  private:
   virtual ~Queue();
-  void Cleanup();
 
-  RefPtr<WebGPUChild> mBridge;
   // Index to use for the next submission containing external textures. Used to
   // keep track of when work involving external textures is done.
   uint64_t mNextExternalTextureSubmissionIndex = 1;
-
- public:
 };
 
 }  // namespace webgpu

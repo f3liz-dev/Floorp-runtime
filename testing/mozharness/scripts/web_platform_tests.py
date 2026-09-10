@@ -236,7 +236,7 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
     )
 
     def __init__(self, require_config_file=True):
-        super(WebPlatformTest, self).__init__(
+        super().__init__(
             config_options=self.config_options,
             all_actions=[
                 "clobber",
@@ -280,7 +280,7 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
     def query_abs_dirs(self):
         if self.abs_dirs:
             return self.abs_dirs
-        abs_dirs = super(WebPlatformTest, self).query_abs_dirs()
+        abs_dirs = super().query_abs_dirs()
 
         dirs = {}
         dirs["abs_app_install_dir"] = os.path.join(
@@ -366,7 +366,7 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
 
         mozinfo.find_and_update_from_json(dirs["abs_test_install_dir"])
 
-        raw_log_file, error_summary_file = self.get_indexed_logs(
+        raw_log_file, error_summary_file, _test_summary_file = self.get_indexed_logs(
             dirs["abs_blob_upload_dir"], "wpt"
         )
 
@@ -419,8 +419,9 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
 
         cmd += ["--no-install-fonts"]
 
-        for test_type in test_types:
-            cmd.append("--test-type=%s" % test_type)
+        if test_types:
+            cmd.append("--test-type")
+            cmd.extend(test_types)
 
         if c["extra_prefs"]:
             cmd.extend([f"--setpref={p}" for p in c["extra_prefs"]])
@@ -501,7 +502,7 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
 
         options = list(c.get("options", []))
 
-        if "wdspec" in test_types:
+        if "wdspec" in test_types or "aamtest" in test_types:
             geckodriver_path = self._query_geckodriver()
             if not geckodriver_path or not os.path.isfile(geckodriver_path):
                 self.fatal(
@@ -510,25 +511,9 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
                 )
             cmd.append("--webdriver-binary=%s" % geckodriver_path)
             cmd.append("--webdriver-arg=-vv")  # enable trace logs
+            cmd.append("--log-raw-unexpectedonly")
 
-        test_type_suite = {
-            "testharness": "web-platform-tests",
-            "crashtest": "web-platform-tests-crashtest",
-            "print-reftest": "web-platform-tests-print-reftest",
-            "reftest": "web-platform-tests-reftest",
-            "wdspec": "web-platform-tests-wdspec",
-        }
-        for test_type in test_types:
-            try_options, try_tests = self.try_args(test_type_suite[test_type])
-
-            cmd.extend(
-                self.query_options(
-                    options, try_options, str_format_values=str_format_values
-                )
-            )
-            cmd.extend(
-                self.query_tests_args(try_tests, str_format_values=str_format_values)
-            )
+        cmd.extend(self.query_options(options, str_format_values=str_format_values))
 
         for url_prefix in c["include"]:
             cmd.append(f"--include={url_prefix}")
@@ -553,7 +538,7 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
         return cmd
 
     def download_and_extract(self):
-        super(WebPlatformTest, self).download_and_extract(
+        super().download_and_extract(
             extract_dirs=[
                 "mach",
                 "bin/*",
@@ -623,7 +608,7 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
         if self.is_android:
             self.install_android_app(self.installer_path)
         else:
-            super(WebPlatformTest, self).install()
+            super().install()
 
     def _install_fonts(self):
         if self.is_android:

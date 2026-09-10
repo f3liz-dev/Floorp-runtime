@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=4 sw=2 sts=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -57,7 +55,7 @@ GeckoViewContentChannelParent::Delete() {
   if (!CanSend()) {
     return NS_ERROR_UNEXPECTED;
   }
-  Unused << SendDeleteSelf();
+  (void)SendDeleteSelf();
   return NS_OK;
 }
 
@@ -93,8 +91,8 @@ GeckoViewContentChannelParent::OnStartRequest(nsIRequest* aRequest) {
     return NS_ERROR_UNEXPECTED;
   }
 
-  Unused << SendOnStartRequest(channelStatus, contentType, entityID,
-                               WrapNotNull(uri));
+  (void)SendOnStartRequest(channelStatus, contentType, entityID,
+                           WrapNotNull(uri));
 
   return NS_OK;
 }
@@ -125,7 +123,7 @@ GeckoViewContentChannelParent::OnDataAvailable(nsIRequest* aRequest,
   nsresult channelStatus = NS_OK;
   mChannel->GetStatus(&channelStatus);
 
-  Unused << SendOnDataAvailable(channelStatus, data, aOffset, aCount);
+  (void)SendOnDataAvailable(channelStatus, data, aOffset);
 
   return NS_OK;
 }
@@ -155,11 +153,16 @@ bool GeckoViewContentChannelParent::Init(
 
   auto scopeExit = MakeScopeExit([&rv, this] {
     if (NS_FAILED(rv)) {
-      Unused << SendOnAsyncOpenFailed(rv);
+      (void)SendOnAsyncOpenFailed(rv);
     }
   });
 
   nsCOMPtr<nsIURI> uri = ipc::DeserializeURI(aArgs.uri());
+
+  if (!uri || !uri->SchemeIs("content")) {
+    rv = NS_ERROR_UNKNOWN_PROTOCOL;
+    return false;
+  }
 
   nsAutoCString remoteType;
   rv = GetRemoteType(remoteType);
@@ -199,8 +202,10 @@ bool GeckoViewContentChannelParent::Init(
 bool GeckoViewContentChannelParent::Init(
     const GeckoViewContentChannelConnectArgs& aArgs) {
   nsCOMPtr<nsIChannel> channel;
-  nsresult rv =
-      NS_LinkRedirectChannels(aArgs.channelId(), this, getter_AddRefs(channel));
+  dom::ContentParentId cpId =
+      static_cast<dom::ContentParent*>(Manager()->Manager())->ChildID();
+  nsresult rv = NS_LinkRedirectChannels(aArgs.channelId(), cpId, this,
+                                        getter_AddRefs(channel));
   if (NS_SUCCEEDED(rv)) {
     mChannel = channel;
   }

@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -28,11 +27,10 @@ class CanvasContext final : public nsICanvasRenderingContextInternal,
                             public nsWrapperCache {
  private:
   virtual ~CanvasContext();
-  void Cleanup();
 
  public:
   // nsISupports interface + CC
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(CanvasContext)
 
   CanvasContext();
@@ -61,7 +59,7 @@ class CanvasContext final : public nsICanvasRenderingContextInternal,
   NS_IMETHOD GetInputStream(
       const char* aMimeType, const nsAString& aEncoderOptions,
       mozilla::CanvasUtils::ImageExtraction aExtractionBehavior,
-      nsIInputStream** aStream) override;
+      const nsACString& aRandomizationKey, nsIInputStream** aStream) override;
   already_AddRefed<gfx::SourceSurface> GetSurfaceSnapshot(
       gfxAlphaType* aOutAlphaType) override;
 
@@ -108,13 +106,12 @@ class CanvasContext final : public nsICanvasRenderingContextInternal,
   bool mPendingSwapChainPresent = false;
   bool mWaitingCanvasRendererInitialized = false;
 
-  RefPtr<WebGPUChild> mBridge;
+  RefPtr<WebGPUChild> mChild;
   RefPtr<Texture> mCurrentTexture;
   gfx::SurfaceFormat mGfxFormat = gfx::SurfaceFormat::R8G8B8A8;
 
   Maybe<layers::RemoteTextureId> mLastRemoteTextureId;
   Maybe<layers::RemoteTextureOwnerId> mRemoteTextureOwnerId;
-  nsTArray<RawId> mBufferIds;
   RefPtr<layers::FwdTransactionTracker> mFwdTransactionTracker;
   bool mUseSharedTextureInSwapChain = false;
   bool mNewTextureRequested = false;

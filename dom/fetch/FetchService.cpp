@@ -8,8 +8,8 @@
 #include "FetchParent.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/ClearOnShutdown.h"
+#include "mozilla/Components.h"
 #include "mozilla/SchedulerGroup.h"
-#include "mozilla/ScopeExit.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/ClientInfo.h"
 #include "mozilla/dom/InternalRequest.h"
@@ -17,7 +17,6 @@
 #include "mozilla/dom/PerformanceStorage.h"
 #include "mozilla/dom/PerformanceTiming.h"
 #include "mozilla/dom/ServiceWorkerDescriptor.h"
-#include "mozilla/glean/NetwerkMetrics.h"
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/net/CookieJarSettings.h"
 #include "nsContentUtils.h"
@@ -233,10 +232,9 @@ RefPtr<FetchServicePromises> FetchService::FetchInstance::Fetch() {
 
   nsAutoCString principalSpec;
   MOZ_ALWAYS_SUCCEEDS(mPrincipal->GetAsciiSpec(principalSpec));
-  nsAutoCString requestURL;
-  mRequest->GetURL(requestURL);
+  nsCOMPtr<nsIURI> requestURL = mRequest->GetURL();
   FETCH_LOG(("FetchInstance::Fetch [%p], mRequest URL: %s mPrincipal: %s", this,
-             requestURL.BeginReading(), principalSpec.BeginReading()));
+             requestURL->GetSpecOrDefault().get(), principalSpec.get()));
 
   nsresult rv;
 
@@ -272,8 +270,7 @@ RefPtr<FetchServicePromises> FetchService::FetchInstance::Fetch() {
   if (mArgsType == FetchArgsType::WorkerFetch) {
     auto& args = mArgs.as<WorkerFetchArgs>();
     mFetchDriver->SetWorkerScript(args.mWorkerScript);
-    MOZ_ASSERT(args.mClientInfo.isSome());
-    mFetchDriver->SetClientInfo(args.mClientInfo.ref());
+    mFetchDriver->SetClientInfo(args.mClientInfo);
     mFetchDriver->SetController(args.mController);
     if (args.mCSPEventListener) {
       mFetchDriver->SetCSPEventListener(args.mCSPEventListener);
@@ -286,6 +283,9 @@ RefPtr<FetchServicePromises> FetchService::FetchInstance::Fetch() {
 
   if (mArgsType == FetchArgsType::MainThreadFetch) {
     auto& args = mArgs.as<MainThreadFetchArgs>();
+    mFetchDriver->SetClientInfo(args.mClientInfo);
+    mFetchDriver->SetAssociatedBrowsingContextID(
+        args.mAssociatedBrowsingContextID);
     mFetchDriver->SetIsThirdPartyContext(Some(args.mIsThirdPartyContext));
   }
 
@@ -578,25 +578,25 @@ void FetchService::FetchInstance::OnNotifyNetworkMonitorAlternateStack(
   FETCH_LOG(("FetchInstance::OnNotifyNetworkMonitorAlternateStack [%p]", this));
   MOZ_ASSERT(mFetchDriver);
   MOZ_ASSERT(mPromises);
-  if (mArgsType != FetchArgsType::WorkerFetch) {
-    // We need to support this for Main thread fetch requests as well
-    // See Bug 1897129
+
+  if (mArgsType != FetchArgsType::WorkerFetch &&
+      mArgsType != FetchArgsType::MainThreadFetch) {
+    // Fetch type not supported
     return;
   }
 
   nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
-      __func__, [actorID = mArgs.as<WorkerFetchArgs>().mActorID,
-                 channelID = aChannelID]() {
+      __func__, [actorID = GetActorID(), channelID = aChannelID]() {
         FETCH_LOG(
-            ("FetchInstance::NotifyNetworkMonitorAlternateStack, Runnable"));
+            ("FetchInstance::OnNotifyNetworkMonitorAlternateStack, Runnable"));
         RefPtr<FetchParent> actor = FetchParent::GetActorByID(actorID);
         if (actor) {
           actor->OnNotifyNetworkMonitorAlternateStack(channelID);
         }
       });
 
-  MOZ_ALWAYS_SUCCEEDS(mArgs.as<WorkerFetchArgs>().mEventTarget->Dispatch(
-      r, nsIThread::DISPATCH_NORMAL));
+  MOZ_ALWAYS_SUCCEEDS(
+      GetBackgroundEventTarget()->Dispatch(r, nsIThread::DISPATCH_NORMAL));
 }
 
 nsID FetchService::FetchInstance::GetActorID() {
@@ -717,7 +717,7 @@ nsresult FetchService::RegisterNetworkObserver() {
     return NS_ERROR_UNEXPECTED;
   }
 
-  nsCOMPtr<nsIIOService> ioService = services::GetIOService();
+  nsCOMPtr<nsIIOService> ioService = components::IO::Service();
   if (!ioService) {
     return NS_ERROR_UNEXPECTED;
   }
@@ -790,21 +790,11 @@ bool FetchService::DoesExceedsKeepaliveResourceLimits(
     const nsACString& origin) {
   if (mTotalKeepAliveRequests >=
       StaticPrefs::dom_fetchKeepalive_total_request_limit()) {
-    // Count keep-alive request discards due to
-    // exceeding the total keep-alive request limit.
-    mozilla::glean::networking::fetch_keepalive_discard_count
-        .Get("total_keepalive_limit"_ns)
-        .Add(1);
     return true;
   }
 
   if (mPendingKeepAliveRequestsPerOrigin.Get(origin) >=
       StaticPrefs::dom_fetchKeepalive_request_limit_per_origin()) {
-    // Count keep-alive request discards due to
-    // exceeding the per-origin request limit.
-    mozilla::glean::networking::fetch_keepalive_discard_count
-        .Get("per_origin_limit"_ns)
-        .Add(1);
     return true;
   }
 

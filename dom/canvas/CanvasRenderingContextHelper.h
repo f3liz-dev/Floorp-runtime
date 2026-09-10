@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,6 +12,7 @@
 #include "nsSize.h"
 
 class nsICanvasRenderingContextInternal;
+class nsICookieJarSettings;
 class nsIGlobalObject;
 
 namespace mozilla {
@@ -75,6 +75,8 @@ class CanvasRenderingContextHelper {
       CanvasUtils::ImageExtraction aExtractionBehavior, int32_t* aOutFormat,
       gfx::IntSize* aOutImageSize);
 
+  nsICookieJarSettings* GetCookieJarSettings() const;
+
   already_AddRefed<nsISupports> GetOrCreateContext(
       JSContext* aCx, const nsAString& aContextId,
       JS::Handle<JS::Value> aContextOptions, ErrorResult& aRv);
@@ -95,8 +97,9 @@ class CanvasRenderingContextHelper {
   nsCOMPtr<nsICanvasRenderingContextInternal> mCurrentContext;
 };
 
-Maybe<layers::SurfaceDescriptor> ValidSurfaceDescriptorForRemoteCanvas2d(
-    const layers::SurfaceDescriptor&);
+bool ValidSurfaceDescriptorForRemoteCanvas2d(
+    const layers::SurfaceDescriptor& aSd,
+    Maybe<layers::SurfaceDescriptor>* aResultSd = nullptr);
 
 }  // namespace dom
 namespace CanvasUtils {

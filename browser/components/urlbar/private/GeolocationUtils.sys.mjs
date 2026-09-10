@@ -5,20 +5,23 @@
 const lazy = {};
 
 ChromeUtils.defineESModuleGetters(lazy, {
-  MerinoClient: "resource:///modules/MerinoClient.sys.mjs",
-  UrlbarUtils: "resource:///modules/UrlbarUtils.sys.mjs",
+  MerinoClient: "moz-src:///browser/components/urlbar/MerinoClient.sys.mjs",
+  UrlbarShared: "chrome://browser/content/urlbar/UrlbarShared.mjs",
 });
 
 ChromeUtils.defineLazyGetter(lazy, "logger", () =>
-  lazy.UrlbarUtils.getLogger({ prefix: "GeolocationUtils" })
+  lazy.UrlbarShared.getLogger({ prefix: "GeolocationUtils" })
 );
 
 // Cache period for Merino's geolocation response. This is intentionally a small
 // amount of time. See the `cachePeriodMs` discussion in `MerinoClient`.
-const GEOLOCATION_CACHE_PERIOD_MS = 120000; // 2 minutes
+const GEOLOCATION_CACHE_PERIOD_MS = 2 * 60 * 60 * 1000; // 2 hours.
 
 // The mean Earth radius used in distance calculations.
 const EARTH_RADIUS_KM = 6371.009;
+
+// Timeout setting to fetch geolocation from Merino.
+const MERINO_TIMEOUT_MS = 5000;
 
 /**
  * Utils for fetching the client's geolocation from Merino, computing distances
@@ -64,6 +67,7 @@ class _GeolocationUtils {
     let results = await this.#merino.fetch({
       providers: ["geolocation"],
       query: "",
+      timeoutMs: MERINO_TIMEOUT_MS,
     });
 
     lazy.logger.debug("Got geolocation from Merino", results);

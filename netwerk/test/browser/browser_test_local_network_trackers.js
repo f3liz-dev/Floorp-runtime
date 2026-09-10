@@ -52,10 +52,11 @@ add_setup(async function () {
       ["network.lna.block_trackers", true],
       ["network.lna.address_space.public.override", "127.0.0.1:4443"],
       ["network.lna.blocking", true],
+      ["network.lna.websocket.enabled", true],
       // always select allow actions for user prompts
-      ["network.localhost.prompt.testing", true],
+      ["network.loopback-network.prompt.testing", true],
       ["network.localnetwork.prompt.testing", true],
-      ["network.localhost.prompt.testing.allow", true],
+      ["network.loopback-network.prompt.testing.allow", true],
       ["network.localnetwork.prompt.testing.allow", true],
     ],
   });
@@ -232,7 +233,7 @@ add_task(async function test_tracker_initiated_lna_fetch() {
   // check that when adding the permission the fetch req succeeds.
   PermissionTestUtils.add(
     baseURL + "page_with_trackers.html",
-    "localhost",
+    "loopback-network",
     Services.perms.ALLOW_ACTION,
     Services.perms.EXPIRE_NEVER
   );
@@ -254,11 +255,14 @@ add_task(async function test_tracker_initiated_lna_fetch() {
     gBrowser.removeTab(tab);
   }
 
-  PermissionTestUtils.remove(baseURL + "page_with_trackers.html", "localhost");
+  PermissionTestUtils.remove(
+    baseURL + "page_with_trackers.html",
+    "loopback-network"
+  );
 
   // This time check that the remote permission service can automatically set up the permission for this domain.
   const ORIGIN_1 = "https://example.com";
-  const TEST_PERMISSION_1 = "localhost";
+  const TEST_PERMISSION_1 = "loopback-network";
   await remoteSettingsSync({
     created: [
       {

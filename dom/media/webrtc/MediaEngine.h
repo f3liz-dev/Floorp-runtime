@@ -10,7 +10,6 @@
 #include "MediaTrackConstraints.h"
 #include "MediaTrackGraph.h"
 #include "mozilla/RefPtr.h"
-#include "mozilla/ThreadSafeWeakPtr.h"
 #include "mozilla/dom/MediaStreamTrackBinding.h"
 #include "mozilla/dom/VideoStreamTrack.h"
 
@@ -45,10 +44,19 @@ class MediaEngine {
   virtual void EnumerateDevices(dom::MediaSourceEnum, MediaSinkEnum,
                                 nsTArray<RefPtr<MediaDevice>>*) = 0;
 
+  virtual void InvalidateDesktopCaptureDeviceCache(dom::MediaSourceEnum) = 0;
+
   virtual void Shutdown() = 0;
 
   virtual RefPtr<MediaEngineSource> CreateSource(
       const MediaDevice* aDevice) = 0;
+
+  /**
+   * Like CreateSource but in addition copies over capabilities and settings
+   * from another source.
+   */
+  virtual RefPtr<MediaEngineSource> CreateSourceFrom(
+      const MediaEngineSource* aSource, const MediaDevice* aDevice) = 0;
 
   virtual MediaEventSource<void>& DeviceListChangeEvent() = 0;
   /**

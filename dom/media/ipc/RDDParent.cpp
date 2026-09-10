@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -143,7 +141,7 @@ mozilla::ipc::IPCResult RDDParent::RecvInit(
   gfxVars::ApplyUpdate(vars);
 
   auto supported = media::MCSInfo::GetSupportFromFactory();
-  Unused << SendUpdateMediaCodecsSupported(supported);
+  (void)SendUpdateMediaCodecsSupported(supported);
 
 #if defined(MOZ_SANDBOX)
 #  if defined(XP_MACOSX)
@@ -183,7 +181,7 @@ IPCResult RDDParent::RecvUpdateVar(const nsTArray<GfxVarUpdate>& aUpdate) {
                 [supported = media::MCSInfo::GetSupportFromFactory(
                      true /* force refresh */)]() {
                   if (auto* rdd = RDDParent::GetSingleton()) {
-                    Unused << rdd->SendUpdateMediaCodecsSupported(supported);
+                    (void)rdd->SendUpdateMediaCodecsSupported(supported);
                   }
                 }));
           }),
@@ -220,7 +218,6 @@ mozilla::ipc::IPCResult RDDParent::RecvInitVideoBridge(
           Feature::HW_COMPOSITING,
           Feature::D3D11_COMPOSITING,
           Feature::OPENGL_COMPOSITING,
-          Feature::DIRECT2D,
       },
       aContentDeviceData.prefs());
 #ifdef XP_WIN
@@ -247,7 +244,7 @@ mozilla::ipc::IPCResult RDDParent::RecvRequestMemoryReport(
   mozilla::dom::MemoryReportRequestClient::Start(
       aGeneration, aAnonymize, aMinimizeMemoryUsage, aDMDFile, processName,
       [&](const MemoryReport& aReport) {
-        Unused << GetSingleton()->SendAddMemoryReport(aReport);
+        (void)GetSingleton()->SendAddMemoryReport(aReport);
       },
       aResolver);
   return IPC_OK();

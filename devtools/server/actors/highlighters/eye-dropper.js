@@ -46,11 +46,11 @@ const CLOSE_DELAY = 750;
  * The EyeDropper allows the user to select a color of a pixel within the content page,
  * showing a magnified circle and color preview while the user hover the page.
  */
-class EyeDropper {
+class EyeDropper extends EventEmitter {
   #pageEventListenersAbortController;
   #debouncedUpdateScreenshot;
   constructor(highlighterEnv) {
-    EventEmitter.decorate(this);
+    super();
 
     this.highlighterEnv = highlighterEnv;
     this.markup = new CanvasFrameAnonymousContentHelper(
@@ -143,7 +143,7 @@ class EyeDropper {
    * Show the eye-dropper highlighter.
    *
    * @param {DOMNode} node The node which document the highlighter should be inserted in.
-   * @param {Object} options The options object may contain the following properties:
+   * @param {object} options The options object may contain the following properties:
    * - {Boolean} copyOnSelect: Whether selecting a color should copy it to the clipboard.
    * - {String|null} screenshot: a dataURL representation of the page screenshot. If null,
    *                 the eyedropper will use `drawWindow` to get the the screenshot
@@ -241,9 +241,10 @@ class EyeDropper {
    * Create an image bitmap from the page screenshot, draw the eyedropper and set the
    * "drawn" attribute on the "root" element once it's done.
    *
-   * @params {String|null} screenshot: a dataURL representation of the page screenshot.
-   *                       If null, we'll use `drawWindow` to get the the page screenshot
-   *                       (⚠️ but it won't handle remote frames).
+   * @param {string | null} screenshot
+   *   A dataURL representation of the page screenshot.
+   *   If null, we'll use `drawWindow` to get the the page screenshot
+   *   (⚠️ but it won't handle remote frames).
    */
   async updateScreenshot(screenshot) {
     const rootElement = this.getElement("eye-dropper-root");
@@ -391,7 +392,7 @@ class EyeDropper {
 
   handleEvent(e) {
     switch (e.type) {
-      case "mousemove":
+      case "mousemove": {
         // We might be getting an event from a child frame, so account for the offset.
         const [xOffset, yOffset] = getFrameOffsets(this.win, e.target);
         const x = xOffset + e.pageX - this.win.scrollX;
@@ -404,6 +405,7 @@ class EyeDropper {
         // And move the eye-dropper's UI so it follows the mouse.
         this.moveTo(x, y);
         break;
+      }
       // Note: when events are suppressed we will only get mousedown/mouseup and
       // not any click events.
       case "click":
@@ -537,6 +539,7 @@ class EyeDropper {
 
   /**
    * Copy the currently inspected color to the clipboard.
+   *
    * @return {Promise} Resolves when the copy has been done (after a delay that is used to
    * let users know that something was copied).
    */
@@ -562,6 +565,7 @@ exports.EyeDropper = EyeDropper;
 
 /**
  * Draw the visible portion of the window on a canvas and get the resulting ImageData.
+ *
  * @param {Window} win
  * @return {ImageData} The image data for the window.
  */
@@ -587,7 +591,8 @@ function getWindowAsImageData(win) {
 
 /**
  * Get a formatted CSS color string from a color value.
- * @param {array} rgb Rgb values of a color to format.
+ *
+ * @param {Array} rgb Rgb values of a color to format.
  * @param {string} format Format of string. One of "hex", "rgb", "hsl", "name".
  * @return {string} Formatted color value, e.g. "#FFF" or "hsl(20, 10%, 10%)".
  */
@@ -599,12 +604,12 @@ function toColorString(rgb, format) {
       return hexString(rgb);
     case "rgb":
       return "rgb(" + r + ", " + g + ", " + b + ")";
-    case "hsl":
+    case "hsl": {
       const [h, s, l] = rgbToHsl(rgb);
       return "hsl(" + h + ", " + s + "%, " + l + "%)";
+    }
     case "name":
-      const str = InspectorUtils.rgbToColorName(r, g, b) || hexString(rgb);
-      return str;
+      return InspectorUtils.rgbToColorName(r, g, b) || hexString(rgb);
     default:
       return hexString(rgb);
   }
@@ -612,7 +617,8 @@ function toColorString(rgb, format) {
 
 /**
  * Produce a hex-formatted color string from rgb values.
- * @param {array} rgb Rgb values of color to stringify.
+ *
+ * @param {Array} rgb Rgb values of color to stringify.
  * @return {string} Hex formatted string for color, e.g. "#FFEE00".
  */
 function hexString([r, g, b]) {

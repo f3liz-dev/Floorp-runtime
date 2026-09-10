@@ -32,16 +32,30 @@ export var ShortcutUtils = {
   TOGGLE_CARET_BROWSING: "TOGGLE_CARET_BROWSING",
   MOVE_TAB_BACKWARD: "MOVE_TAB_BACKWARD",
   MOVE_TAB_FORWARD: "MOVE_TAB_FORWARD",
+  MOVE_TAB_TO_START: "MOVE_TAB_TO_START",
+  MOVE_TAB_TO_END: "MOVE_TAB_TO_END",
   NEXT_TAB: "NEXT_TAB",
   PREVIOUS_TAB: "PREVIOUS_TAB",
 
   /**
    * Prettifies the modifier keys for an element.
    *
-   * @param Node aElemKey
-   *        The key element to get the modifiers from.
-   * @return string
-   *         A prettified and properly separated modifier keys string.
+   * @param {Element} aElemKey
+   *   The key element to get the modifiers from.
+   * @return {string}
+   *   A prettified and properly separated modifier keys string. If the data
+   *   on `aElemKey` is missing or incomplete, the return value is `""`.
+   * @example
+   *   // example1 (macOS): <key modifiers="ctrl" key="T"/>
+   *   prettifyShortcut(example1) => "⌃T"
+   *   // example1 (other): <key modifiers="ctrl" key="T"/>
+   *   prettifyShortcut(example1) => "Ctrl+T"
+   *   // example2 (macOS): <key modifiers="ctrl,shift" key="i"/>
+   *   prettifyShortcut(example2) => "⇧⌃I"
+   *   // example2 (other): <key modifiers="ctrl,shift" key="i"/>
+   *   prettifyShortcut(example2) => "Shift+Ctrl+I"
+   *   // example3: <key/>
+   *   prettifyShortcut(example3) => ""
    */
   prettifyShortcut(aElemKey) {
     let elemString = this.getModifierString(aElemKey.getAttribute("modifiers"));
@@ -49,6 +63,14 @@ export var ShortcutUtils = {
       aElemKey.getAttribute("keycode"),
       aElemKey.getAttribute("key")
     );
+    if (!key) {
+      console.warn(
+        "Key element",
+        aElemKey,
+        'is missing "key" and "keycode" attributes necessary to define a shortcut'
+      );
+      return "";
+    }
     return elemString + key;
   },
 
@@ -56,6 +78,17 @@ export var ShortcutUtils = {
     return AppConstants.platform == "macosx";
   },
 
+  /**
+   * @param {string|null} elemMod
+   *   Value of the `"modifiers"` attribute for a XUL <key> element.
+   *   Comma-separated list of key modifiers for a keyboard shortcut.
+   * @returns {string}
+   *   Pretty string representation of the set of modifiers that must be used
+   *   with another key in order to invoke a keyboard shortcut.
+   * @example getModifierString("shift,meta") => "⇧⌘"
+   * @example getModifierString("ctrl,alt") => "⌥⌃"
+   * @see KeyEventHandler
+   */
   getModifierString(elemMod) {
     if (!elemMod) {
       return "";
@@ -118,8 +151,18 @@ export var ShortcutUtils = {
     return elemString;
   },
 
+  /**
+   * @param {string|null} keyCode
+   *   Value of the `"keycode"` attribute of a XUL <key> element
+   * @param {string|null} keyAttribute
+   *   Value of the `"key"` attribute of a XUL <key> element
+   * @returns {string}
+   *   Pretty string representing a primary key that must be pressed to
+   *   engage a keyboard shortcut. Returns `""` if neither `keyCode` nor
+   *   `keyAttribute` are usable.
+   */
   getKeyString(keyCode, keyAttribute) {
-    let key;
+    let key = "";
     if (keyCode) {
       keyCode = keyCode.toUpperCase();
       if (AppConstants.platform == "macosx") {
@@ -139,7 +182,7 @@ export var ShortcutUtils = {
         console.error("Error finding ", keyCode, ": ", ex);
         key = keyCode.replace(/^VK_/, "");
       }
-    } else {
+    } else if (keyAttribute) {
       key = keyAttribute.toUpperCase();
     }
 
@@ -296,7 +339,7 @@ export var ShortcutUtils = {
    * Attempt to find a key for a given shortcut string, such as
    * "Ctrl+Shift+A" and determine if it is a system shortcut.
    *
-   * @param {Object} win The window to look for key elements in.
+   * @param {object} win The window to look for key elements in.
    * @param {string} value The shortcut string.
    * @returns {boolean} Whether a system shortcut was found or not.
    */
@@ -370,6 +413,16 @@ export var ShortcutUtils = {
         }
         if (ctrlShift) {
           return ShortcutUtils.MOVE_TAB_FORWARD;
+        }
+        break;
+      case event.DOM_VK_HOME:
+        if (ctrlShift) {
+          return ShortcutUtils.MOVE_TAB_TO_START;
+        }
+        break;
+      case event.DOM_VK_END:
+        if (ctrlShift) {
+          return ShortcutUtils.MOVE_TAB_TO_END;
         }
         break;
       case event.DOM_VK_UP: // fall through

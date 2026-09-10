@@ -31,7 +31,7 @@ function queryAll(el, selector) {
 /**
  * MozLitElement provides extensions to the lit-provided LitElement class.
  *
- *******
+ * ---------
  *
  * `@query` support (define a getter for a querySelector):
  *
@@ -52,14 +52,14 @@ function queryAll(el, selector) {
  * get anotherName() {
  *   return this.renderRoot?.querySelectorAll(".selectorFor .querySelectorAll");
  * }
- *******
+ * ---------
  *
  * Automatic Fluent support for shadow DOM.
  *
  * Fluent requires that a shadowRoot be connected before it can use Fluent.
  * Shadow roots will get connected automatically.
  *
- *******
+ * ---------
  *
  * Automatic Fluent support for localized Reactive Properties
  *
@@ -67,7 +67,7 @@ function queryAll(el, selector) {
  * property definition and it will automatically be added to the data-l10n-attrs
  * attribute so that fluent will allow setting the attribute.
  *
- *******
+ * ---------
  *
  * Mapped properties support (moving a standard attribute to rendered content)
  *
@@ -77,7 +77,7 @@ function queryAll(el, selector) {
  * definition and the attribute will be removed from the host when it is set.
  * Note that the attribute can not be unset once it is set.
  *
- *******
+ * ---------
  *
  * Test helper for sending events after a change: `dispatchOnUpdateComplete`
  *
@@ -116,7 +116,11 @@ export class MozLitElement extends LitElement {
       if (attrName.startsWith("aria")) {
         domAttrName = domAttrName.replace("aria", "aria-");
       }
-      this.mappedAttributes ??= [];
+      // Give this class its own array so we don't mutate the one we inherit
+      // from an ancestor, which would leak our attributes into every sibling.
+      if (!Object.hasOwn(this, "mappedAttributes")) {
+        this.mappedAttributes = [...(this.mappedAttributes ?? [])];
+      }
       this.mappedAttributes.push([attrName, domAttrPropertyName]);
       options.state = true;
       super.createProperty(domAttrPropertyName, {
@@ -126,7 +130,10 @@ export class MozLitElement extends LitElement {
       });
     }
     if (options.fluent) {
-      this.fluentProperties ??= [];
+      // Same as above: give this class its own array.
+      if (!Object.hasOwn(this, "fluentProperties")) {
+        this.fluentProperties = [...(this.fluentProperties ?? [])];
+      }
       this.fluentProperties.push(options.attribute || attrName.toLowerCase());
     }
     return super.createProperty(attrName, options);
@@ -161,7 +168,14 @@ export class MozLitElement extends LitElement {
       this.#l10nRootConnected = true;
 
       if (this.constructor.fluentProperties?.length) {
-        this.dataset.l10nAttrs = this.constructor.fluentProperties.join(",");
+        let { fluentProperties } = this.constructor;
+        if (this.dataset.l10nAttrs) {
+          // Not worrying about duplication since this may happen a lot and we
+          // could avoid it by not providing the duplicates manually.
+          // Copy the fluentProperties since they're stored on our class.
+          fluentProperties = fluentProperties.concat(this.dataset.l10nAttrs);
+        }
+        this.dataset.l10nAttrs = fluentProperties.join(",");
         if (this.dataset.l10nId) {
           this.#l10n.translateElements([this]);
         }
@@ -235,10 +249,12 @@ export class MozLitElement extends LitElement {
  * @property {boolean} parentDisabled - When this element is nested under another input and that
  *     input is disabled or unchecked/unpressed the parent will set this property to true so this
  *     element can be disabled.
- * @property {string} ariaLabel
- *  The aria-label text for cases where there is no visible label.
+ * @property {string} ariaLabel - The aria-label text when there is no visible label.
+ * @property {string} ariaDescription - The aria-description text when there is no visible description.
+ * @property {string} title - The title attribute, mapped onto the inner focusable control.
  */
 export class MozBaseInputElement extends MozLitElement {
+  static formAssociated = true;
   #internals;
   #hasSlottedContent = new Map();
 
@@ -253,18 +269,46 @@ export class MozBaseInputElement extends MozLitElement {
     accessKey: { type: String, mapped: true, fluent: true },
     parentDisabled: { type: Boolean, state: true },
     ariaLabel: { type: String, mapped: true },
+    ariaDescription: { type: String, mapped: true },
+    title: { type: String, mapped: true },
+    inputLayout: { type: String, reflect: true, attribute: "inputlayout" },
   };
+  /** @type {"inline" | "block" | "inline-end"} */
   static inputLayout = "inline";
+  /** @type {keyof MozBaseInputElement} */
+  static activatedProperty = null;
 
   constructor() {
     super();
     this.disabled = false;
+    this.inputLayout = /** @type {typeof MozBaseInputElement} */ (
+      this.constructor
+    ).inputLayout;
     this.#internals = this.attachInternals();
+  }
+
+  get form() {
+    return this.#internals.form;
+  }
+
+  /**
+   * @param {string} value The current value of the element.
+   */
+  setFormValue(value) {
+    this.#internals.setFormValue(value);
+  }
+
+  formResetCallback() {
+    this.value = this.defaultValue;
   }
 
   connectedCallback() {
     super.connectedCallback();
-    this.setAttribute("inputlayout", this.constructor.inputLayout);
+    /** @type {string} val */
+    let val = this.getAttribute("value") || this.value;
+    this.defaultValue = val;
+    this.value = val;
+    this.#internals.setFormValue(this.value || null);
   }
 
   willUpdate(changedProperties) {
@@ -273,7 +317,12 @@ export class MozBaseInputElement extends MozLitElement {
     this.#updateInternalState(this.supportPage, "support-link");
     this.#updateInternalState(this.label, "label");
 
-    let activatedProperty = this.constructor.activatedProperty;
+    if (changedProperties.has("value")) {
+      this.setFormValue(this.value);
+    }
+    let activatedProperty = /** @type {typeof MozBaseInputElement} */ (
+      this.constructor
+    ).activatedProperty;
     if (
       (activatedProperty && changedProperties.has(activatedProperty)) ||
       changedProperties.has("disabled") ||
@@ -346,10 +395,6 @@ export class MozBaseInputElement extends MozLitElement {
     return this.#internals.states.has("has-label");
   }
 
-  get isInlineLayout() {
-    return this.constructor.inputLayout == "inline";
-  }
-
   get isDisabled() {
     return !!(this.disabled || this.parentDisabled);
   }
@@ -404,20 +449,22 @@ export class MozBaseInputElement extends MozLitElement {
         href="chrome://global/content/elements/moz-input-common.css"
       />
       ${this.inputStylesTemplate()}
-      <span class="label-wrapper">
-        <label
-          is="moz-label"
-          id="label"
-          part="label"
-          for="input"
-          shownaccesskey=${ifDefined(this.accessKey)}
-          >${this.isInlineLayout
-            ? this.inputTemplate()
-            : ""}${this.labelTemplate()}</label
-        >${this.hasDescription ? "" : this.supportLinkTemplate()}
-      </span>
-      ${this.descriptionTemplate()}
-      ${!this.isInlineLayout ? this.inputTemplate() : ""}
+      <div class="content-wrapper">
+        <span class="label-wrapper">
+          <label
+            is="moz-label"
+            id="label"
+            part="label"
+            for="input"
+            shownaccesskey=${ifDefined(this.accessKey)}
+            >${this.inputLayout === "inline"
+              ? this.inputTemplate()
+              : ""}${this.labelTemplate()}</label
+          >${this.hasDescription ? "" : this.supportLinkTemplate()}
+          ${this.descriptionTemplate()}
+        </span>
+        ${this.inputLayout !== "inline" ? this.inputTemplate() : ""}
+      </div>
       ${this.nestedFieldsTemplate()}
     `;
   }
@@ -426,12 +473,22 @@ export class MozBaseInputElement extends MozLitElement {
     if (!this.label) {
       return "";
     }
-    return html`<span class="text-container"
-      >${this.iconTemplate()}<span
-        class="text"
+    let labelEl;
+    let headingLevel = this.getAttribute("headinglevel");
+    if (headingLevel == "3" || headingLevel == "4") {
+      // Undocumented hack for AI controls, do not use, it WILL be removed. (bug 2012250)
+      // Configs set headinglevel: 3; the SettingElement SRD bump can promote
+      // that to 4 in SRD mode, so both values render h3 here.
+      labelEl = html`<h3
+        class="text text-box-trim-start"
         .textContent=${this.label}
-      ></span
-    ></span>`;
+      ></h3>`;
+    } else {
+      labelEl = html`<span class="text" .textContent=${this.label}></span>`;
+    }
+    return html`<span class="text-container"
+      >${this.iconTemplate()}${labelEl}</span
+    >`;
   }
 
   descriptionTemplate() {
@@ -461,7 +518,7 @@ export class MozBaseInputElement extends MozLitElement {
         is="moz-support-link"
         support-page=${this.supportPage}
         part="support-link"
-        aria-describedby=${this.isInlineLayout ? nothing : "label description"}
+        aria-describedby="label description"
       ></a>`;
     }
     return html`<slot

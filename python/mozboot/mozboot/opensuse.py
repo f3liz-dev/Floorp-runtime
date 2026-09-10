@@ -14,13 +14,8 @@ class OpenSUSEBootstrapper(LinuxBootstrapper, BaseBootstrapper):
         BaseBootstrapper.__init__(self, **kwargs)
 
     def install_packages(self, packages):
-        ALTERNATIVE_NAMES = {
-            "libxml2": "libxml2-2",
-        }
         # watchman is not available
-        packages = [ALTERNATIVE_NAMES.get(p, p) for p in packages if p != "watchman"]
-        # awk might be missing
-        packages += ["awk"]
+        packages = [p for p in packages if p != "watchman"]
         self.zypper_install(*packages)
 
     def _update_package_manager(self):

@@ -21,7 +21,6 @@
 #include "mozilla/ErrorResult.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/StaticPtr.h"
-#include "mozilla/Unused.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/PWebrtcGlobal.h"
 #include "mozilla/dom/PWebrtcGlobalChild.h"
@@ -65,7 +64,7 @@ class WebrtcContentParents {
   static std::vector<RefPtr<WebrtcGlobalParent>> sContentParents;
 };
 
-MOZ_RUNINIT std::vector<RefPtr<WebrtcGlobalParent>>
+MOZ_GLIBCXX_CONSTINIT std::vector<RefPtr<WebrtcGlobalParent>>
     WebrtcContentParents::sContentParents;
 
 WebrtcGlobalParent* WebrtcContentParents::Alloc() {
@@ -144,7 +143,7 @@ GetStatsPromiseForThisProcess(const nsAString& aPcIdFilter) {
     MOZ_RELEASE_ASSERT(aResult.IsResolve(), "AllSettled should never reject!");
     for (auto& reportResult : aResult.ResolveValue()) {
       if (reportResult.IsResolve()) {
-        reports.AppendElement(*reportResult.ResolveValue());
+        reports.AppendElement(std::move(*reportResult.ResolveValue()));
       }
     }
     return PWebrtcGlobalParent::GetStatsPromise::CreateAndResolve(
@@ -194,7 +193,7 @@ void WebrtcGlobalInformation::ClearAllStats(const GlobalObject& aGlobal) {
   if (!WebrtcContentParents::Empty()) {
     // Pass on the request to any content process based PeerConnections.
     for (const auto& cp : WebrtcContentParents::GetAll()) {
-      Unused << cp->SendClearStats();
+      (void)cp->SendClearStats();
     }
   }
 
@@ -273,9 +272,9 @@ void WebrtcGlobalInformation::GatherHistory() {
       if (result.IsReject()) {
         return;
       }
-      for (const auto& report : result.ResolveValue()) {
+      for (auto& report : result.ResolveValue()) {
         WebrtcGlobalStatsHistory::Record(
-            MakeUnique<RTCStatsReportInternal>(report));
+            MakeUnique<RTCStatsReportInternal>(std::move(report)));
       }
     };
     promise->Then(GetMainThreadSerialEventTarget(), __func__,
@@ -447,12 +446,12 @@ void WebrtcGlobalInformation::ClearLogging(const GlobalObject& aGlobal) {
   if (!WebrtcContentParents::Empty()) {
     // Clear content process signaling logs
     for (const auto& cp : WebrtcContentParents::GetAll()) {
-      Unused << cp->SendClearLog();
+      (void)cp->SendClearLog();
     }
   }
 
   // Clear chrome process signaling logs
-  Unused << RunLogClear();
+  (void)RunLogClear();
 }
 
 static RefPtr<GenericPromise> UpdateLogStash() {
@@ -535,7 +534,7 @@ void WebrtcGlobalInformation::GetLogging(
 }
 
 static bool sLastAECDebug = false;
-MOZ_RUNINIT static Maybe<nsCString> sAecDebugLogDir;
+constinit static Maybe<nsCString> sAecDebugLogDir;
 
 void WebrtcGlobalInformation::SetAecDebug(const GlobalObject& aGlobal,
                                           bool aEnable) {
@@ -548,7 +547,7 @@ void WebrtcGlobalInformation::SetAecDebug(const GlobalObject& aGlobal,
   sLastAECDebug = aEnable;
 
   for (const auto& cp : WebrtcContentParents::GetAll()) {
-    Unused << cp->SendSetAecLogging(aEnable);
+    (void)cp->SendSetAecLogging(aEnable);
   }
 }
 
@@ -605,7 +604,7 @@ void WebrtcGlobalInformation::AdjustTimerReferences(
             },
             nullptr, WebrtcGlobalStatsHistory::Pref::PollIntervalMs(),
             nsITimer::TYPE_REPEATING_SLACK,
-            "WebrtcGlobalInformation::GatherHistory");
+            "WebrtcGlobalInformation::GatherHistory"_ns);
       }
       ClearOnShutdown(&sHistoryTimer);
     }

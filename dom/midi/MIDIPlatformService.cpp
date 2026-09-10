@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -14,7 +12,6 @@
 #include "mozilla/ErrorResult.h"
 #include "mozilla/StaticPrefs_midi.h"
 #include "mozilla/StaticPtr.h"
-#include "mozilla/Unused.h"
 #include "mozilla/dom/MIDIManagerParent.h"
 #include "mozilla/dom/MIDIPlatformRunnables.h"
 #include "mozilla/dom/MIDIPortParent.h"
@@ -48,9 +45,9 @@ void MIDIPlatformService::CheckAndReceive(const nsAString& aPortId,
           msgs.AppendElement(msg);
         }
       }
-      Unused << port->SendReceive(msgs);
+      (void)port->SendReceive(msgs);
     } else {
-      Unused << port->SendReceive(aMsgs);
+      (void)port->SendReceive(aMsgs);
     }
   }
 }
@@ -101,7 +98,7 @@ void MIDIPlatformService::SendPortList() {
     l.ports().AppendElement(el);
   }
   for (auto& mgr : mManagers) {
-    Unused << mgr->SendMIDIPortListUpdate(l);
+    (void)mgr->SendMIDIPortListUpdate(l);
   }
 }
 

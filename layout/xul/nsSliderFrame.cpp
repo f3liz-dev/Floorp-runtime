@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -22,6 +20,7 @@
 #include "mozilla/MouseEvents.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ReflowInput.h"
 #include "mozilla/SVGIntegrationUtils.h"
 #include "mozilla/ScrollContainerFrame.h"
 #include "mozilla/StaticPrefs_general.h"
@@ -420,7 +419,8 @@ void nsSliderFrame::BuildDisplayListForThumb(nsDisplayListBuilder* aBuilder,
     aLists.Content()->AppendNewToTopWithIndex<nsDisplayOwnLayer>(
         aBuilder, this,
         /* aIndex = */ nsDisplayOwnLayer::OwnLayerForScrollThumb, &masterList,
-        ownLayerASR, nsDisplayOwnLayerFlags::None,
+        ownLayerASR, nsDisplayItem::ContainerASRType::AncestorOfContained,
+        nsDisplayOwnLayerFlags::None,
         ScrollbarData::CreateForThumb(*scrollDirection, GetThumbRatio(),
                                       thumbStart, thumbLength, minThumbLength,
                                       isAsyncDraggable, sliderTrackStart,
@@ -632,7 +632,7 @@ nsresult nsSliderFrame::HandleEvent(nsPresContext* aPresContext,
       case eMouseUp:
         if (ShouldScrollForEvent(aEvent)) {
           StopDrag();
-          // we MUST call nsFrame HandleEvent for mouse ups to maintain the
+          // we MUST call nsIFrame HandleEvent for mouse ups to maintain the
           // selection state and capture state.
           return nsIFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
         }
@@ -996,6 +996,10 @@ nsresult nsSliderFrame::StopDrag() {
   return NS_OK;
 }
 
+bool nsSliderFrame::ClickAndHoldActive() const {
+  return mCurrentClickHoldDestination.isSome();
+}
+
 void nsSliderFrame::DragThumb(bool aGrabMouseEvents) {
   if (mDragInProgress != aGrabMouseEvents) {
     Scrollbar()->ActivityChanged(aGrabMouseEvents);
@@ -1203,6 +1207,15 @@ void nsSliderFrame::Destroy(DestroyContext& aContext) {
   nsContainerFrame::Destroy(aContext);
 }
 
+void nsSliderFrame::StartRepeat() {
+  ScrollContainerFrame* sf = GetScrollContainerFrame();
+  if (sf) {
+    mCurrentClickHoldDestination = Some(sf->GetScrollPosition());
+  }
+  nsRepeatService::GetInstance()->Start(Notify, this, mContent->OwnerDoc(),
+                                        "nsSliderFrame"_ns);
+}
+
 void nsSliderFrame::Notify() {
   bool stop = false;
 
@@ -1328,7 +1341,6 @@ void nsSliderFrame::PageScroll(bool aClickAndHold) {
   }
 
   if (nsIScrollbarMediator* m = sb->GetScrollbarMediator()) {
-    sb->SetButtonScrollDirectionAndUnit(changeDirection, ScrollUnit::PAGES);
     m->ScrollByPage(sb, changeDirection, scrollSnapFlags);
   }
 }

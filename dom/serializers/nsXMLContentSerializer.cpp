@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,6 +19,7 @@
 #include "mozilla/dom/DocumentType.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/ProcessingInstruction.h"
+#include "mozilla/dom/Text.h"
 #include "mozilla/intl/Segmenter.h"
 #include "nsAttrName.h"
 #include "nsCRT.h"
@@ -127,14 +126,13 @@ nsXMLContentSerializer::Init(uint32_t aFlags, uint32_t aWrapColumn,
   return NS_OK;
 }
 
-nsresult nsXMLContentSerializer::AppendTextData(nsIContent* aNode,
+nsresult nsXMLContentSerializer::AppendTextData(Text* aText,
                                                 int32_t aStartOffset,
                                                 int32_t aEndOffset,
                                                 nsAString& aStr,
                                                 bool aTranslateEntities) {
-  nsIContent* content = aNode;
   const CharacterDataBuffer* characterDataBuffer = nullptr;
-  if (!content || !(characterDataBuffer = content->GetCharacterDataBuffer())) {
+  if (!aText || !(characterDataBuffer = aText->GetCharacterDataBuffer())) {
     return NS_ERROR_FAILURE;
   }
 
@@ -184,7 +182,7 @@ nsresult nsXMLContentSerializer::AppendTextData(nsIContent* aNode,
 }
 
 NS_IMETHODIMP
-nsXMLContentSerializer::AppendText(nsIContent* aText, int32_t aStartOffset,
+nsXMLContentSerializer::AppendText(Text* aText, int32_t aStartOffset,
                                    int32_t aEndOffset) {
   NS_ENSURE_ARG(aText);
   NS_ENSURE_STATE(mOutput);
@@ -213,11 +211,12 @@ nsXMLContentSerializer::AppendText(nsIContent* aText, int32_t aStartOffset,
 }
 
 NS_IMETHODIMP
-nsXMLContentSerializer::AppendCDATASection(nsIContent* aCDATASection,
+nsXMLContentSerializer::AppendCDATASection(Text* aCDATASection,
                                            int32_t aStartOffset,
                                            int32_t aEndOffset) {
   NS_ENSURE_ARG(aCDATASection);
   NS_ENSURE_STATE(mOutput);
+  MOZ_ASSERT(aCDATASection->NodeType() == nsINode::CDATA_SECTION_NODE);
 
   nsresult rv;
 
@@ -961,10 +960,8 @@ static bool ElementNeedsSeparateEndTag(Element* aElement,
   // HTML container tags should have a separate end tag even if empty, per spec.
   // See
   // https://w3c.github.io/DOM-Parsing/#dfn-concept-xml-serialization-algorithm
-  nsAtom* localName = aElement->NodeInfo()->NameAtom();
-  bool isHTMLContainer = nsHTMLElement::IsContainer(
-      nsHTMLTags::CaseSensitiveAtomTagToId(localName));
-  return isHTMLContainer;
+  return nsHTMLElement::IsContainer(
+      aElement->NodeInfo()->HTMLTag().valueOr(eHTMLTag_userdefined));
 }
 
 bool nsXMLContentSerializer::AppendEndOfElementStart(Element* aElement,

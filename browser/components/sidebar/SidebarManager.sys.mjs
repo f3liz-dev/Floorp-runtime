@@ -12,18 +12,30 @@ const VERTICAL_TABS_PREF = "sidebar.verticalTabs";
 const INSTALLED_EXTENSIONS = "sidebar.installed.extensions";
 const PINNED_PROMO_PREF = "sidebar.verticalTabs.dragToPinPromo.dismissed";
 
+// Visibility values are orientation-exclusive: each value implies the tab
+// orientation it belongs to, so a stored value is never ambiguous.
+const VERTICAL_VISIBILITIES = [
+  "always-show",
+  "expand-on-hover",
+  "hide-sidebar",
+];
+const HORIZONTAL_VISIBILITIES = ["hide-on-close", "hide-launcher"];
+const DEFAULT_VERTICAL_VISIBILITY = "always-show";
+const DEFAULT_HORIZONTAL_VISIBILITY = "hide-on-close";
+
 // New panels that are ready to be introduced to new sidebar users should be added to this list;
 // ensure your feature flag is enabled at the same time you do this and that its the same value as
 // what you added to .
-const DEFAULT_LAUNCHER_TOOLS = "aichat,syncedtabs,history,bookmarks";
+const DEFAULT_LAUNCHER_TOOLS = "aichat,syncedtabs,history,bookmarks,opentabs";
 const lazy = {};
 ChromeUtils.defineESModuleGetters(lazy, {
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.sys.mjs",
   CustomizableUI:
     "moz-src:///browser/components/customizableui/CustomizableUI.sys.mjs",
   NimbusFeatures: "resource://nimbus/ExperimentAPI.sys.mjs",
-  PrefUtils: "resource://normandy/lib/PrefUtils.sys.mjs",
-  SessionStore: "resource:///modules/sessionstore/SessionStore.sys.mjs",
+  PrefUtils: "moz-src:///toolkit/modules/PrefUtils.sys.mjs",
+  SessionStore:
+    "moz-src:///browser/components/sessionstore/SessionStore.sys.mjs",
   SidebarState: "moz-src:///browser/components/sidebar/SidebarState.sys.mjs",
 });
 XPCOMUtils.defineLazyPreferenceGetter(lazy, "sidebarNimbus", "sidebar.nimbus");
@@ -40,7 +52,7 @@ XPCOMUtils.defineLazyPreferenceGetter(
   VERTICAL_TABS_PREF,
   false,
   (pref, oldVal, newVal) => {
-    sidebarManager.handleVerticalTabsPrefChange(newVal, true);
+    sidebarManager.handleVerticalTabsPrefChange(newVal);
   }
 );
 
@@ -56,8 +68,12 @@ XPCOMUtils.defineLazyPreferenceGetter(
       // Disable vertical tabs if revamped sidebar is turned off
       Services.prefs.setBoolPref("sidebar.verticalTabs", false);
     } else if (newVal && !lazy.verticalTabsEnabled) {
-      // horizontal tabs with sidebar.revamp must have visibility of "hide-sidebar"
-      Services.prefs.setStringPref(VISIBILITY_SETTING_PREF, "hide-sidebar");
+      // Horizontal tabs with sidebar.revamp default to "hide-on-close"; users
+      // can opt into the switcher-only "hide-launcher" from the customize panel.
+      Services.prefs.setStringPref(
+        VISIBILITY_SETTING_PREF,
+        DEFAULT_HORIZONTAL_VISIBILITY
+      );
     }
   }
 );
@@ -94,46 +110,11 @@ class SidebarManager extends EventTarget {
     super();
     this.checkForPinnedTabsComplete = false;
   }
+  #initialized = false;
+  // Preserves an "expand-on-hover" choice while in horizontal tabs so it can be
+  // restored when switching back to vertical tabs.
+  #savedVisibility = null;
   init() {
-    // Handle nimbus feature pref setting updates on init and enrollment
-    const featureId = "sidebar";
-    lazy.NimbusFeatures[featureId].onUpdate(() => {
-      // Set prefs only if we have an enrollment that's new
-      const enrollment = lazy.NimbusFeatures[featureId].getEnrollmentMetadata();
-      if (!enrollment) {
-        return;
-      }
-      const slug = enrollment.slug + ":" + enrollment.branch;
-      if (slug == lazy.sidebarNimbus) {
-        return;
-      }
-
-      // Enforce minimum version by skipping pref changes until Firefox restarts
-      // with the appropriate version
-      if (
-        Services.vc.compare(
-          // Support betas, e.g., 132.0b1, instead of MOZ_APP_VERSION
-          AppConstants.MOZ_APP_VERSION_DISPLAY,
-          // Check configured version or compare with unset handled as 0
-          lazy.NimbusFeatures[featureId].getVariable("minVersion")
-        ) < 0
-      ) {
-        return;
-      }
-
-      // Set/override user prefs to persist after experiment end
-      const setPref = (pref, value) => {
-        // Only set prefs with a value (so no clearing)
-        if (value != null) {
-          lazy.PrefUtils.setPref("sidebar." + pref, value);
-        }
-      };
-      setPref("nimbus", slug);
-      ["revamp", "verticalTabs", "visibility"].forEach(pref =>
-        setPref(pref, lazy.NimbusFeatures[featureId].getVariable(pref))
-      );
-    });
-
     lazy.CustomizableUI.addListener(this);
 
     Services.prefs.addObserver(
@@ -145,13 +126,57 @@ class SidebarManager extends EventTarget {
       this.checkForPinnedTabs();
     });
 
-    // if there's no user visibility pref, we may need to update it to the default value for the tab orientation
-    const shouldResetVisibility = !Services.prefs.prefHasUserValue(
-      VISIBILITY_SETTING_PREF
-    );
-    this.handleVerticalTabsPrefChange(
-      lazy.verticalTabsEnabled,
-      shouldResetVisibility
+    // Move the visibility to the orientation's default if the current value
+    // isn't valid for it (e.g. a value carried over from the other orientation).
+    this.handleVerticalTabsPrefChange(lazy.verticalTabsEnabled);
+
+    // Handle nimbus feature pref setting updates on init and enrollment
+    lazy.NimbusFeatures.sidebar.onUpdate(() => {
+      if (this.#initialized) {
+        this.onNimbusFeatureUpdate();
+      } else {
+        // Schedule handling the update after this module has finished initializing
+        Promise.resolve().then(() => this.onNimbusFeatureUpdate());
+      }
+    });
+    this.#initialized = true;
+  }
+
+  onNimbusFeatureUpdate() {
+    const featureId = "sidebar";
+    // Set prefs only if we have an enrollment that's new
+    const enrollment = lazy.NimbusFeatures[featureId].getEnrollmentMetadata();
+    if (!enrollment) {
+      return;
+    }
+    const slug = enrollment.slug + ":" + enrollment.branch;
+    if (slug == lazy.sidebarNimbus) {
+      return;
+    }
+
+    // Enforce minimum version by skipping pref changes until Firefox restarts
+    // with the appropriate version
+    if (
+      Services.vc.compare(
+        // Support betas, e.g., 132.0b1, instead of MOZ_APP_VERSION
+        AppConstants.MOZ_APP_VERSION_DISPLAY,
+        // Check configured version or compare with unset handled as 0
+        lazy.NimbusFeatures[featureId].getVariable("minVersion")
+      ) < 0
+    ) {
+      return;
+    }
+
+    // Set/override user prefs to persist after experiment end
+    const setPref = (pref, value) => {
+      // Only set prefs with a value (so no clearing)
+      if (value != null) {
+        lazy.PrefUtils.setPref("sidebar." + pref, value);
+      }
+    };
+    setPref("nimbus", slug);
+    ["revamp", "verticalTabs", "visibility"].forEach(pref =>
+      setPref(pref, lazy.NimbusFeatures[featureId].getVariable(pref))
     );
   }
 
@@ -201,22 +226,45 @@ class SidebarManager extends EventTarget {
       if (w.SidebarController.isOpen) {
         w.SidebarController.hide();
       }
-      w.SidebarController._state.loadInitialState({
+      w.SidebarController._state.loadCurrentState({
         ...lazy.SidebarState.defaultProperties,
       });
     }
   }
 
   /**
-   * Adjust for a change to the verticalTabs pref.
+   * Adjust for a change to the verticalTabs pref. Visibility values are
+   * orientation-exclusive, so we only move to an orientation's default when the
+   * current visibility isn't valid for the active orientation. A value that is
+   * already valid is preserved, including an explicit user choice such as
+   * "hide-sidebar"; an "expand-on-hover" choice is saved when leaving vertical
+   * tabs and restored when returning.
    */
-  handleVerticalTabsPrefChange(isEnabled, resetVisibility = true) {
+  handleVerticalTabsPrefChange(isEnabled) {
+    const currentVisibility = Services.prefs.getStringPref(
+      VISIBILITY_SETTING_PREF,
+      DEFAULT_VERTICAL_VISIBILITY
+    );
     if (!isEnabled) {
-      // horizontal tabs can only have visibility of "hide-sidebar"
-      Services.prefs.setStringPref(VISIBILITY_SETTING_PREF, "hide-sidebar");
-    } else if (resetVisibility) {
-      // only reset visibility pref when switching to vertical tabs and explictly indicated
-      Services.prefs.setStringPref(VISIBILITY_SETTING_PREF, "always-show");
+      // Switching to (or initializing) horizontal tabs.
+      if (currentVisibility === "expand-on-hover") {
+        this.#savedVisibility = currentVisibility;
+      }
+      if (!HORIZONTAL_VISIBILITIES.includes(currentVisibility)) {
+        Services.prefs.setStringPref(
+          VISIBILITY_SETTING_PREF,
+          DEFAULT_HORIZONTAL_VISIBILITY
+        );
+      }
+    } else if (!VERTICAL_VISIBILITIES.includes(currentVisibility)) {
+      // Switching to (or initializing) vertical tabs: restore a preserved
+      // choice (always-show, expand-on-hover, hide-sidebar) otherwise fall
+      // back to the vertical default.
+      Services.prefs.setStringPref(
+        VISIBILITY_SETTING_PREF,
+        this.#savedVisibility ?? DEFAULT_VERTICAL_VISIBILITY
+      );
+      this.#savedVisibility = null;
     }
   }
 

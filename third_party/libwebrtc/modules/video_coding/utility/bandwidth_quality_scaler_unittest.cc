@@ -87,7 +87,7 @@ class BandwidthQualityScalerTest : public ::testing::Test {
   explicit BandwidthQualityScalerTest(VideoCodecType codec_type)
       : task_queue_(time_controller_.GetTaskQueueFactory()->CreateTaskQueue(
             "BandwidthQualityScalerTestQueue",
-            TaskQueueFactory::Priority::NORMAL)),
+            TaskQueueFactory::Priority::kNormal)),
         handler_(std::make_unique<FakeBandwidthQualityScalerHandler>()),
         codec_type_(codec_type) {
     task_queue_.SendTask([this] {
@@ -102,7 +102,7 @@ class BandwidthQualityScalerTest : public ::testing::Test {
     });
   }
 
-  ~BandwidthQualityScalerTest() {
+  ~BandwidthQualityScalerTest() override {
     task_queue_.SendTask([this] { bandwidth_quality_scaler_ = nullptr; });
   }
 

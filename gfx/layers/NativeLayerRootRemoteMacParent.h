@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -27,6 +26,11 @@ class NativeLayerRootRemoteMacParent final : public NativeLayerRemoteParent {
   mozilla::ipc::IPCResult RecvCommitNativeLayerCommands(
       nsTArray<NativeLayerCommand>&& aCommands) override;
 
+  mozilla::ipc::IPCResult RecvRequestReadback(IntSize aSize,
+                                              Shmem* const aPixels) override;
+
+  mozilla::ipc::IPCResult RecvFlush() override;
+
  protected:
   ~NativeLayerRootRemoteMacParent() = default;
 
@@ -35,14 +39,16 @@ class NativeLayerRootRemoteMacParent final : public NativeLayerRemoteParent {
   void HandleCreateLayerForColor(uint64_t aID, DeviceColor aColor);
   void HandleLayerDestroyed(uint64_t aID);
   void HandleSetLayers(const nsTArray<uint64_t>& aIDs);
-  void HandleLayerInfo(uint64_t aID, uint32_t aSurfaceID, bool aIsDRM,
-                       bool aIsHDR, IntPoint aPosition, IntSize aSize,
-                       IntRect aDisplayRect, Maybe<IntRect> aClipRect,
+  void HandleLayerInfo(uint64_t aID, IntPoint aPosition, IntRect aDisplayRect,
+                       Maybe<IntRect> aClipRect,
                        Maybe<RoundedRect> aRoundedClipRect,
-                       Matrix4x4 aTransform, int8_t aSamplingFilter,
+                       Matrix4x4 aTransform, SamplingFilter aSamplingFilter,
                        bool aSurfaceIsFlipped);
+  void HandleChangedSurface(uint64_t aID, IOSurfacePort aSurfacePort,
+                            bool aIsDRM, bool aIsHDR, IntSize aSize);
 
   RefPtr<NativeLayerRootCA> mRealNativeLayerRoot;
+  UniquePtr<NativeLayerRootSnapshotter> mSnapshotter;
   nsTHashMap<uint64_t, RefPtr<NativeLayer>> mKnownLayers;
 };
 

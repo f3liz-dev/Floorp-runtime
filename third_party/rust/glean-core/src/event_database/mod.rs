@@ -3,14 +3,15 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::fs;
 use std::fs::{create_dir_all, File, OpenOptions};
-use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Write;
+use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+use std::{fs, mem};
 
 use chrono::{DateTime, FixedOffset, Utc};
 
@@ -20,9 +21,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 
 use crate::common_metric_data::CommonMetricDataInternal;
-use crate::coverage::record_coverage;
 use crate::error_recording::{record_error, ErrorType};
 use crate::metrics::{DatetimeMetric, TimeUnit};
+use crate::session::{EventSessionContext, SessionMetadata};
 use crate::storage::INTERNAL_STORAGE;
 use crate::util::get_iso_time_string;
 use crate::Glean;
@@ -53,6 +54,14 @@ pub struct RecordedEvent {
     /// The set of allowed extra keys is defined by users in the metrics file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extra: Option<HashMap<String, String>>,
+
+    /// Session metadata attached to this event.
+    ///
+    /// `None` for out-of-session events and events recorded before
+    /// sessions were introduced (backwards compatibility).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
+    pub session: Option<SessionMetadata>,
 }
 
 /// Represents the stored data for a single event.
@@ -99,13 +108,23 @@ pub struct EventDatabase {
     pub path: PathBuf,
     /// The in-memory list of events
     event_stores: RwLock<HashMap<String, Vec<StoredEvent>>>,
+    event_store_files: RwLock<HashMap<String, Arc<File>>>,
     /// A lock to be held when doing operations on the filesystem
     file_lock: Mutex<()>,
 }
 
 impl MallocSizeOf for EventDatabase {
     fn size_of(&self, ops: &mut malloc_size_of::MallocSizeOfOps) -> usize {
-        self.event_stores.read().unwrap().size_of(ops)
+        let mut n = 0;
+        n += self.event_stores.read().unwrap().size_of(ops);
+
+        let map = self.event_store_files.read().unwrap();
+        for store_name in map.keys() {
+            n += store_name.size_of(ops);
+            // `File` doesn't allocate, but `Arc` puts it on the heap.
+            n += mem::size_of::<File>();
+        }
+        n
     }
 }
 
@@ -123,6 +142,7 @@ impl EventDatabase {
         Ok(Self {
             path,
             event_stores: RwLock::new(HashMap::new()),
+            event_store_files: RwLock::new(HashMap::new()),
             file_lock: Mutex::new(()),
         })
     }
@@ -209,6 +229,7 @@ impl EventDatabase {
                         &glean_restarted.into(),
                         crate::get_timestamp_ms(),
                         Some(extra),
+                        EventSessionContext::OutOfSession,
                     );
                 }
                 has_events_events && glean.submit_ping_by_name("events", Some("startup"))
@@ -273,6 +294,8 @@ impl EventDatabase {
     ///   monotonically increasing timer (this value is obtained on the
     ///   platform-specific side).
     /// * `extra` - Extra data values, mapping strings to strings.
+    /// * `ctx` - The event's session context, conveying both whether session
+    ///   metadata should be attached and what that metadata is.
     ///
     /// ## Returns
     ///
@@ -284,11 +307,18 @@ impl EventDatabase {
         meta: &CommonMetricDataInternal,
         timestamp: u64,
         extra: Option<HashMap<String, String>>,
+        ctx: EventSessionContext,
     ) -> bool {
         // If upload is disabled we don't want to record.
         if !glean.is_upload_enabled() {
             return false;
         }
+
+        // Convert the session context to the optional metadata stored on the event.
+        let session = match ctx {
+            EventSessionContext::OutOfSession => None,
+            EventSessionContext::InSession(session_meta) => Some(session_meta),
+        };
 
         let mut submit_max_capacity_event_ping = false;
         {
@@ -314,6 +344,7 @@ impl EventDatabase {
                         category: meta.inner.category.to_string(),
                         name: meta.inner.name.to_string(),
                         extra: extra.clone(),
+                        session: session.clone(),
                     },
                     execution_counter,
                 };
@@ -333,6 +364,25 @@ impl EventDatabase {
         }
     }
 
+    fn get_event_store(&self, store_name: &str) -> Result<Arc<File>, io::Error> {
+        // safe unwrap, only error case is poisoning
+        let mut map = self.event_store_files.write().unwrap();
+        let entry = map.entry(store_name.to_string());
+
+        match entry {
+            Entry::Occupied(entry) => Ok(Arc::clone(entry.get())),
+            Entry::Vacant(entry) => {
+                let file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(self.path.join(store_name))?;
+                let file = Arc::new(file);
+                let entry = entry.insert(file);
+                Ok(Arc::clone(entry))
+            }
+        }
+    }
+
     /// Writes an event to a single store on disk.
     ///
     /// # Arguments
@@ -341,12 +391,16 @@ impl EventDatabase {
     /// * `event_json` - The event content, as a single-line JSON-encoded string.
     fn write_event_to_disk(&self, store_name: &str, event_json: &str) {
         let _lock = self.file_lock.lock().unwrap(); // safe unwrap, only error case is poisoning
-        if let Err(err) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.path.join(store_name))
-            .and_then(|mut file| writeln!(file, "{}", event_json))
-        {
+
+        let write_res = (|| {
+            let mut file = self.get_event_store(store_name)?;
+            file.write_all(event_json.as_bytes())?;
+            file.write_all(b"\n")?;
+            file.flush()?;
+            Ok::<(), std::io::Error>(())
+        })();
+
+        if let Err(err) = write_res {
             log::warn!("IO error writing event to store '{}': {}", store_name, err);
         }
     }
@@ -525,6 +579,22 @@ impl EventDatabase {
                 // Let's fix cur_ec up and hope this isn't a sign something big is broken.
                 cur_ec = execution_counter;
             }
+
+            // event timestamp is a `u64`, but BigQuery uses `i64` (signed!) everywhere. Let's clamp the value to make
+            // sure we stay within bounds.
+            if event.event.timestamp > i64::MAX as u64 {
+                glean
+                    .additional_metrics
+                    .event_timestamp_clamped
+                    .add_sync(glean, 1);
+                log::warn!(
+                    "Calculated event timestamp was too high. Got: {}, max: {}",
+                    event.event.timestamp,
+                    i64::MAX,
+                );
+                event.event.timestamp = event.event.timestamp.clamp(0, i64::MAX as u64);
+            }
+
             if highest_ts > event.event.timestamp {
                 // Even though we sorted everything, something in the
                 // execution_counter or glean.startup.date math went awry.
@@ -589,6 +659,10 @@ impl EventDatabase {
                 .write()
                 .unwrap() // safe unwrap, only error case is poisoning
                 .remove(&store_name.to_string());
+            self.event_store_files
+                .write()
+                .unwrap() // safe unwrap, only error case is poisoning
+                .remove(&store_name.to_string());
 
             let _lock = self.file_lock.lock().unwrap(); // safe unwrap, only error case is poisoning
             if let Err(err) = fs::remove_file(self.path.join(store_name)) {
@@ -608,6 +682,7 @@ impl EventDatabase {
     pub fn clear_all(&self) -> Result<()> {
         // safe unwrap, only error case is poisoning
         self.event_stores.write().unwrap().clear();
+        self.event_store_files.write().unwrap().clear();
 
         // safe unwrap, only error case is poisoning
         let _lock = self.file_lock.lock().unwrap();
@@ -628,8 +703,6 @@ impl EventDatabase {
         meta: &'a CommonMetricDataInternal,
         store_name: &str,
     ) -> Option<Vec<RecordedEvent>> {
-        record_coverage(&meta.base_identifier());
-
         let value: Vec<RecordedEvent> = self
             .event_stores
             .read()
@@ -651,6 +724,7 @@ impl EventDatabase {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::metrics::RemoteSettingsConfig;
     use crate::test_get_num_recorded_errors;
     use crate::tests::new_glean;
     use chrono::{TimeZone, Timelike};
@@ -684,6 +758,7 @@ mod test {
             category: "cat".to_string(),
             name: "name".to_string(),
             extra: None,
+            session: None,
         };
 
         let mut data = HashMap::new();
@@ -693,6 +768,7 @@ mod test {
             category: "cat".to_string(),
             name: "name".to_string(),
             extra: Some(data),
+            session: None,
         };
 
         let event_empty_json = ::serde_json::to_string_pretty(&event_empty).unwrap();
@@ -740,6 +816,7 @@ mod test {
             category: "cat".to_string(),
             name: "name".to_string(),
             extra: None,
+            session: None,
         };
 
         let mut data = HashMap::new();
@@ -749,6 +826,7 @@ mod test {
             category: "cat".to_string(),
             name: "name".to_string(),
             extra: Some(data),
+            session: None,
         };
 
         assert_eq!(
@@ -782,11 +860,18 @@ mod test {
             category: test_category.to_string(),
             name: test_name.to_string(),
             extra: None,
+            session: None,
         };
 
         // Upload is not yet disabled,
         // so let's check that everything is getting recorded as expected.
-        db.record(&glean, &test_meta, 2, None);
+        db.record(
+            &glean,
+            &test_meta,
+            2,
+            None,
+            EventSessionContext::OutOfSession,
+        );
         {
             let event_stores = db.event_stores.read().unwrap();
             assert_eq!(
@@ -802,7 +887,13 @@ mod test {
         glean.set_upload_enabled(false);
 
         // Now that upload is disabled, let's check nothing is recorded.
-        db.record(&glean, &test_meta, 2, None);
+        db.record(
+            &glean,
+            &test_meta,
+            2,
+            None,
+            EventSessionContext::OutOfSession,
+        );
         {
             let event_stores = db.event_stores.read().unwrap();
             assert_eq!(event_stores.get(test_storage).unwrap().len(), 1);
@@ -821,6 +912,7 @@ mod test {
                 category: "glean".into(),
                 name: "restarted".into(),
                 extra: None,
+                session: None,
             },
             execution_counter: None,
         };
@@ -861,6 +953,7 @@ mod test {
                 category: "glean".into(),
                 name: "restarted".into(),
                 extra: None,
+                session: None,
             },
             execution_counter: None,
         };
@@ -870,6 +963,7 @@ mod test {
                 category: "category".into(),
                 name: "name".into(),
                 extra: None,
+                session: None,
             },
             execution_counter: None,
         };
@@ -910,6 +1004,7 @@ mod test {
                 category: "glean".into(),
                 name: "restarted".into(),
                 extra: None,
+                session: None,
             },
             execution_counter: None,
         };
@@ -920,6 +1015,7 @@ mod test {
                 category: "category".into(),
                 name: "name".into(),
                 extra: None,
+                session: None,
             },
             execution_counter: None,
         };
@@ -1245,6 +1341,7 @@ mod test {
                 category: "glean".into(),
                 name: "restarted".into(),
                 extra: None,
+                session: None,
             },
             execution_counter: Some(2),
         };
@@ -1254,6 +1351,7 @@ mod test {
                 category: "category".into(),
                 name: "name".into(),
                 extra: None,
+                session: None,
             },
             execution_counter: Some(2),
         };
@@ -1263,6 +1361,7 @@ mod test {
                 category: "glean".into(),
                 name: "restarted".into(),
                 extra: None,
+                session: None,
             },
             execution_counter: Some(3),
         };
@@ -1316,5 +1415,89 @@ mod test {
             ErrorType::InvalidValue
         )
         .is_err());
+    }
+
+    #[test]
+    fn normalize_store_clamps_timestamp() {
+        let (glean, _dir) = new_glean(None);
+
+        let store_name = "store-name";
+        let event = RecordedEvent {
+            category: "category".into(),
+            name: "name".into(),
+            ..Default::default()
+        };
+
+        let timestamps = [
+            0,
+            (i64::MAX / 2) as u64,
+            i64::MAX as _,
+            (i64::MAX as u64) + 1,
+        ];
+        let mut store = timestamps
+            .into_iter()
+            .map(|timestamp| StoredEvent {
+                event: RecordedEvent {
+                    timestamp,
+                    ..event.clone()
+                },
+                execution_counter: None,
+            })
+            .collect();
+
+        let glean_start_time = glean.start_time();
+        glean
+            .event_storage()
+            .normalize_store(&glean, store_name, &mut store, glean_start_time);
+        assert_eq!(4, store.len());
+
+        assert_eq!(0, store[0].event.timestamp);
+        assert_eq!((i64::MAX / 2) as u64, store[1].event.timestamp);
+        assert_eq!((i64::MAX as u64), store[2].event.timestamp);
+        assert_eq!((i64::MAX as u64), store[3].event.timestamp);
+    }
+
+    #[test]
+    fn normalize_store_clamps_timestamp_metric_enabled() {
+        let (glean, _dir) = new_glean(None);
+
+        let mut cfg = RemoteSettingsConfig::default();
+        cfg.metrics_enabled
+            .insert("glean.error.event_timestamp_clamped".to_string(), true);
+        glean.apply_server_knobs_config(cfg);
+
+        let store_name = "store-name";
+        let event = RecordedEvent {
+            category: "category".into(),
+            name: "name".into(),
+            ..Default::default()
+        };
+
+        let timestamps = [0, (i64::MAX as u64) + 1];
+        let mut store = timestamps
+            .into_iter()
+            .map(|timestamp| StoredEvent {
+                event: RecordedEvent {
+                    timestamp,
+                    ..event.clone()
+                },
+                execution_counter: None,
+            })
+            .collect();
+
+        let glean_start_time = glean.start_time();
+        glean
+            .event_storage()
+            .normalize_store(&glean, store_name, &mut store, glean_start_time);
+        assert_eq!(2, store.len());
+
+        assert_eq!(0, store[0].event.timestamp);
+        assert_eq!((i64::MAX as u64), store[1].event.timestamp);
+
+        let error_count = glean
+            .additional_metrics
+            .event_timestamp_clamped
+            .get_value(&glean, "health");
+        assert_eq!(Some(1), error_count);
     }
 }

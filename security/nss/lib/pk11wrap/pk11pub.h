@@ -251,6 +251,7 @@ SECItem *PK11_ParamFromIV(CK_MECHANISM_TYPE type, SECItem *iv);
 unsigned char *PK11_IVFromParam(CK_MECHANISM_TYPE type, SECItem *param, int *len);
 SECItem *PK11_BlockData(SECItem *data, unsigned long size);
 int PK11_GetMaxKeyLength(CK_MECHANISM_TYPE type);
+PRBool PK11_IsAEAD(CK_MECHANISM_TYPE type);
 
 /* PKCS #11 to DER mapping functions */
 SECItem *PK11_ParamFromAlgid(SECAlgorithmID *algid);
@@ -562,6 +563,14 @@ SECKEYPrivateKey *PK11_FindPrivateKeyFromCert(PK11SlotInfo *slot,
 SECKEYPrivateKey *PK11_FindKeyByAnyCert(CERTCertificate *cert, void *wincx);
 SECKEYPrivateKey *PK11_FindKeyByKeyID(PK11SlotInfo *slot, SECItem *keyID,
                                       void *wincx);
+/*
+ * Create a SECKEYPrivateKey directly from a fully-specified PKCS #11 private
+ * key template (CKA_CLASS = CKO_PRIVATE_KEY, CKA_KEY_TYPE, and the key
+ * material). The key is created as a session object on 'slot'.
+ */
+SECKEYPrivateKey *PK11_CreatePrivateKeyFromTemplate(
+    PK11SlotInfo *slot, const CK_ATTRIBUTE *theTemplate, unsigned int count,
+    void *wincx);
 int PK11_GetPrivateModulusLen(SECKEYPrivateKey *key);
 
 SECStatus PK11_Decrypt(PK11SymKey *symkey,
@@ -609,30 +618,32 @@ SECStatus PK11_PubEncrypt(SECKEYPublicKey *key,
                           const unsigned char *data, unsigned int dataLen,
                           void *wincx);
 
+const SECItem *PK11_GetPublicValueFromPublicKey(const SECKEYPublicKey *pubKey);
+
 SECStatus PK11_ImportPrivateKeyInfo(PK11SlotInfo *slot,
                                     SECKEYPrivateKeyInfo *pki, SECItem *nickname,
-                                    SECItem *publicValue, PRBool isPerm, PRBool isPrivate,
+                                    const SECItem *publicValue, PRBool isPerm, PRBool isPrivate,
                                     unsigned int usage, void *wincx);
 SECStatus PK11_ImportPrivateKeyInfoAndReturnKey(PK11SlotInfo *slot,
                                                 SECKEYPrivateKeyInfo *pki, SECItem *nickname,
-                                                SECItem *publicValue, PRBool isPerm, PRBool isPrivate,
+                                                const SECItem *publicValue, PRBool isPerm, PRBool isPrivate,
                                                 unsigned int usage, SECKEYPrivateKey **privk, void *wincx);
 SECStatus PK11_ImportDERPrivateKeyInfo(PK11SlotInfo *slot,
                                        SECItem *derPKI, SECItem *nickname,
-                                       SECItem *publicValue, PRBool isPerm, PRBool isPrivate,
+                                       const SECItem *publicValue, PRBool isPerm, PRBool isPrivate,
                                        unsigned int usage, void *wincx);
 SECStatus PK11_ImportDERPrivateKeyInfoAndReturnKey(PK11SlotInfo *slot,
                                                    SECItem *derPKI, SECItem *nickname,
-                                                   SECItem *publicValue, PRBool isPerm, PRBool isPrivate,
+                                                   const SECItem *publicValue, PRBool isPerm, PRBool isPrivate,
                                                    unsigned int usage, SECKEYPrivateKey **privk, void *wincx);
 SECStatus PK11_ImportEncryptedPrivateKeyInfo(PK11SlotInfo *slot,
                                              SECKEYEncryptedPrivateKeyInfo *epki, SECItem *pwitem,
-                                             SECItem *nickname, SECItem *publicValue, PRBool isPerm,
+                                             SECItem *nickname, const SECItem *publicValue, PRBool isPerm,
                                              PRBool isPrivate, KeyType type,
                                              unsigned int usage, void *wincx);
 SECStatus PK11_ImportEncryptedPrivateKeyInfoAndReturnKey(PK11SlotInfo *slot,
                                                          SECKEYEncryptedPrivateKeyInfo *epki, SECItem *pwitem,
-                                                         SECItem *nickname, SECItem *publicValue, PRBool isPerm,
+                                                         SECItem *nickname, const SECItem *publicValue, PRBool isPerm,
                                                          PRBool isPrivate, KeyType type,
                                                          unsigned int usage, SECKEYPrivateKey **privk, void *wincx);
 SECItem *PK11_ExportDERPrivateKeyInfo(SECKEYPrivateKey *pk, void *wincx);
@@ -664,9 +675,15 @@ PRBool PK11_VerifyKeyOK(PK11SymKey *key);
 SECKEYPrivateKey *PK11_UnwrapPrivKey(PK11SlotInfo *slot,
                                      PK11SymKey *wrappingKey, CK_MECHANISM_TYPE wrapType,
                                      SECItem *param, SECItem *wrappedKey, SECItem *label,
-                                     SECItem *publicValue, PRBool token, PRBool sensitive,
+                                     const SECItem *publicValue, PRBool token, PRBool sensitive,
                                      CK_KEY_TYPE keyType, CK_ATTRIBUTE_TYPE *usage, int usageCount,
                                      void *wincx);
+SECKEYPrivateKey *PK11_UnwrapPrivKeyByKeyType(PK11SlotInfo *slot, PK11SymKey *wrappingKey,
+                                              CK_MECHANISM_TYPE wrapType, SECItem *param,
+                                              SECItem *wrappedKey, SECItem *label,
+                                              const SECItem *idValue, PRBool perm, PRBool sensitive,
+                                              KeyType keyType, unsigned int keyUsage, void *wincx);
+
 SECStatus PK11_WrapPrivKey(PK11SlotInfo *slot, PK11SymKey *wrappingKey,
                            SECKEYPrivateKey *privKey, CK_MECHANISM_TYPE wrapType,
                            SECItem *param, SECItem *wrappedKey, void *wincx);
@@ -695,7 +712,7 @@ SECKEYPrivateKey *PK11_CopyTokenPrivKeyToSessionPrivKey(PK11SlotInfo *destSlot,
 /**********************************************************************
  *                   Certs
  **********************************************************************/
-SECItem *PK11_MakeIDFromPubKey(SECItem *pubKeyData);
+SECItem *PK11_MakeIDFromPubKey(const SECItem *pubKeyData);
 SECStatus PK11_TraverseSlotCerts(
     SECStatus (*callback)(CERTCertificate *, SECItem *, void *),
     void *arg, void *wincx);
@@ -842,7 +859,11 @@ SECStatus PK11_VerifyWithMechanism(SECKEYPublicKey *key,
  * specified in |attrFlags| and operation attributes as specified in |opFlags|.
  *
  * The function asserts that |pubKey|, |outKey|, and |ciphertext| are not NULL.
-
+ * |pubKey| must be a KEM key. If it is not already on a slot it is imported
+ * onto the best slot for the mechanism and left there for
+ * SECKEY_DestroyPublicKey to reclaim; a caller that needs a particular token,
+ * or that needs to authenticate to one, should import the key itself first.
+ *
  * If an error occurs, no allocations are made to |outKey| and |ciphertext|;
  * otherwise (if SECSuccess is returned) allocations are made to |outKey| and
  * |ciphertext| and the caller is responsible for freeing the memory occupied
@@ -858,7 +879,8 @@ SECStatus PK11_Encapsulate(SECKEYPublicKey *pubKey, CK_MECHANISM_TYPE target,
  * in |attrFlags| and operation attributes as specified in |opFlags|.
  *
  * The function asserts that |privKey|, |ciphertext|, and |outKey| are not NULL.
-
+ * |privKey| must be a KEM key and must already be on a slot.
+ *
  * If an error occurs, |outKey| is not allocated; otherwise (if SECSuccess is
  * returned) |outKey| is allocated and the caller is responsible for freeing
  * the memory occupied by it.
@@ -876,6 +898,12 @@ PK11Context *PK11_CreateContextBySymKey(CK_MECHANISM_TYPE type,
                                         CK_ATTRIBUTE_TYPE operation,
                                         PK11SymKey *symKey,
                                         const SECItem *param);
+PK11Context *PK11_CreateSignatureContextByPubKey(CK_MECHANISM_TYPE type,
+                                                 CK_ATTRIBUTE_TYPE operation,
+                                                 SECKEYPublicKey *pubKey,
+                                                 const SECItem *param,
+                                                 const SECItem *sig,
+                                                 void *pwArg);
 PK11Context *PK11_CreateContextByPubKey(CK_MECHANISM_TYPE type,
                                         CK_ATTRIBUTE_TYPE operation,
                                         SECKEYPublicKey *pubKey,
@@ -914,6 +942,9 @@ SECStatus PK11_Finalize(PK11Context *context);
 SECStatus PK11_DigestFinal(PK11Context *context, unsigned char *data,
                            unsigned int *outLen, unsigned int length);
 #define PK11_CipherFinal PK11_DigestFinal
+/* deprecated in favor of PK11_SaveContextAlloc, which handles buffer
+ * ownership correctly.  PK11_SaveContext fails (SEC_ERROR_OUTPUT_LEN) if the
+ * supplied buffer is too small to hold the state; it never allocates. */
 SECStatus PK11_SaveContext(PK11Context *cx, unsigned char *save,
                            int *len, int saveLength);
 

@@ -9,20 +9,28 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
+from zipfile import ZipFile
 
 import requests
 import yaml
 from colorama import Fore, Style
+from fluent.syntax import parse as fluent_parse
+from fluent.syntax import serialize as fluent_serialize
+from fluent.syntax.ast import Message, Resource
 from mach.decorators import (
     Command,
     CommandArgument,
     SubCommand,
 )
 from mozfile import json
+
+import taskcluster
 
 # The glean parser module dependency is in a different folder, so we add it to our path.
 sys.path.append(
@@ -35,6 +43,7 @@ sys.path.append(
 WEBEXT_METRICS_PATH = Path("browser", "extensions", "newtab", "webext-glue", "metrics")
 sys.path.append(str(WEBEXT_METRICS_PATH.absolute()))
 import glean_utils
+from gen_runtime_metrics import get_new_metrics, get_new_pings
 from run_glean_parser import parse_with_options
 
 FIREFOX_L10N_REPO = "https://github.com/mozilla-l10n/firefox-l10n.git"
@@ -47,8 +56,40 @@ COMPARE_TOOL_PATH = Path(
 )
 REPORT_PATH = Path(WEBEXT_LOCALES_PATH, "locales-report.json")
 REPORT_LEFT_JUSTIFY_CHARS = 15
+REPORT_WRAP_CHARS = 80
 FLUENT_FILE_ANCESTRY = Path("browser", "newtab")
 SUPPORTED_LOCALES_PATH = Path(WEBEXT_LOCALES_PATH, "supported-locales.json")
+
+# @backward-compat { version 155 }
+# The 13 homepage-settings strings live in preferences.ftl (canonical).
+# The newtab XPI still needs them in its bundled webext-glue/**/newtab.ftl
+# for the pre-155 fallback path in AboutPreferences.sys.mjs. Once 155
+# reaches Release, that fallback and this extract step can both be removed.
+PREFERENCES_EXTRACT_IDS = (
+    "home-homepage-title",
+    "home-homepage-new-windows",
+    "home-homepage-new-tabs",
+    "home-homepage-custom-homepage-button",
+    "home-custom-homepage-card-header",
+    "home-custom-homepage-address",
+    "home-custom-homepage-address-button",
+    "home-custom-homepage-no-results",
+    "home-custom-homepage-delete-address-button",
+    "home-custom-homepage-replace-with-prompt",
+    "home-custom-homepage-current-pages-button",
+    "home-custom-homepage-bookmarks-button",
+    "home-prefs-homepage-extension-option",
+)
+
+# @backward-compat { version 155 }
+# The l10n repo mirrors browser/locales/en-US/** under <locale>/browser/**,
+# so the "browser" component name is duplicated for files that themselves
+# live under a "browser/" subdirectory locally (see browser/locales/l10n.toml).
+PREFERENCES_FTL_ANCESTRY = Path("browser", "browser", "preferences")
+PREFERENCES_FTL_NAME = "preferences.ftl"
+LOCAL_PREFERENCES_EN_US_PATH = Path(
+    "browser", "locales", "en-US", "browser", "preferences", "preferences.ftl"
+)
 
 # We query whattrainisitnow.com to get some key dates for both beta and
 # release in order to compute whether or not strings have been available on
@@ -59,6 +100,13 @@ RELEASE_SCHEDULE_QUERY = (
     "https://whattrainisitnow.com/api/release/schedule/?version=release"
 )
 BETA_FALLBACK_THRESHOLD = timedelta(weeks=3)
+TASKCLUSTER_ROOT_URL = "https://firefox-ci-tc.services.mozilla.com"
+BEETMOVER_TASK_NAME = "beetmover-newtab"
+SIGNING_TASK_NAME = "release-signing-newtab"
+XPI_NAME = "newtab.xpi"
+BEETMOVER_ARTIFACT_PATH = f"public/build/{XPI_NAME}"
+ARCHIVE_ROOT_PATH = "https://ftp.mozilla.org"
+GIT2HG_URL = "https://lando.moz.tools/api/git2hg/firefox"
 
 
 class YamlType(Enum):
@@ -86,6 +134,10 @@ def run_mach(command_context, cmd, **kwargs):
     )
 
 
+def mach_argv(command_context):
+    return [sys.executable, os.path.join(command_context.topsrcdir, "mach")]
+
+
 @SubCommand(
     "newtab",
     "watch",
@@ -95,10 +147,14 @@ def watch(command_context):
     processes = []
 
     try:
-        p1 = subprocess.Popen(
-            ["./mach", "npm", "run", "watchmc", "--prefix=browser/extensions/newtab"]
-        )
-        p2 = subprocess.Popen(["./mach", "watch"])
+        p1 = subprocess.Popen([
+            *mach_argv(command_context),
+            "npm",
+            "run",
+            "watchmc",
+            "--prefix=browser/extensions/newtab",
+        ])
+        p2 = subprocess.Popen([*mach_argv(command_context), "watch"])
         processes.extend([p1, p2])
         print("Watching subprocesses started. Press Ctrl-C to terminate them.")
 
@@ -121,6 +177,41 @@ def watch(command_context):
     )
 
 
+# @backward-compat { version 155 }
+def _extract_preferences_messages(preferences_path):
+    """Return a serialized Fluent block containing the IDs in
+    PREFERENCES_EXTRACT_IDS from preferences_path, or an empty string if the
+    file is missing or has none of the target IDs."""
+    try:
+        source = Path(preferences_path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    resource = fluent_parse(source)
+    wanted = set(PREFERENCES_EXTRACT_IDS)
+    picked = [
+        entry
+        for entry in resource.body
+        if isinstance(entry, Message) and entry.id.name in wanted
+    ]
+    if not picked:
+        return ""
+    return fluent_serialize(Resource(body=picked))
+
+
+# @backward-compat { version 155 }
+def _append_extract_to_webext_glue(webext_glue_ftl_path, extract_block):
+    """Append the extract block, with a header comment, to a webext-glue newtab.ftl file."""
+    if not extract_block:
+        return
+    header = (
+        "\n## Below strings are extracted from preferences.ftl by\n"
+        "## ./mach newtab update-locales - edit them in preferences.ftl.\n\n"
+    )
+    with open(webext_glue_ftl_path, "a", encoding="utf-8") as handle:
+        handle.write(header)
+        handle.write(extract_block)
+
+
 @SubCommand(
     "newtab",
     "update-locales",
@@ -136,9 +227,13 @@ def update_locales(command_context):
     # Step 1: We download the latest reckoning of strings from firefox-l10n
     print("Cloning the latest HEAD of firefox-l10n repository")
     with tempfile.TemporaryDirectory() as clone_dir:
-        subprocess.check_call(
-            ["git", "clone", "--depth=1", FIREFOX_L10N_REPO, clone_dir]
-        )
+        subprocess.check_call([
+            "git",
+            "clone",
+            "--depth=1",
+            FIREFOX_L10N_REPO,
+            clone_dir,
+        ])
         # Step 2: Get some metadata about what we just pulled down -
         # specifically, the revision.
         revision = subprocess.check_output(
@@ -162,6 +257,15 @@ def update_locales(command_context):
             destination_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(fluent_file_abs_path, destination_file)
 
+            # @backward-compat { version 155 }
+            # Inject the homepage-settings strings sourced from preferences.ftl
+            # so the newtab XPI still has them for the pre-155 fallback path.
+            locale_preferences_path = (
+                root_dir / locale / PREFERENCES_FTL_ANCESTRY / PREFERENCES_FTL_NAME
+            )
+            extract_block = _extract_preferences_messages(locale_preferences_path)
+            _append_extract_to_webext_glue(destination_file, extract_block)
+
         # Now clean up the temporary directory.
         shutil.rmtree(clone_dir)
 
@@ -174,10 +278,25 @@ def update_locales(command_context):
     dest_en_ftl_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(LOCAL_EN_US_PATH, dest_en_ftl_path)
 
+    # @backward-compat { version 155 }
+    # Same as above, for the local en-US preferences.ftl.
+    en_us_extract = _extract_preferences_messages(LOCAL_PREFERENCES_EN_US_PATH)
+    _append_extract_to_webext_glue(dest_en_ftl_path, en_us_extract)
+
     # Step 4.5: Now compute the commit dates of each of the strings inside of
     # LOCAL_EN_US_PATH.
     print("Computing local message commit dates…")
     message_dates = get_message_dates(LOCAL_EN_US_PATH)
+
+    # @backward-compat { version 155 }
+    # The en-US source now also carries the preferences.ftl extract (see
+    # above), so its commit dates need to come from preferences.ftl's own
+    # history, or display_report() will KeyError on those message ids.
+    message_dates.update({
+        message_id: date
+        for message_id, date in get_message_dates(LOCAL_PREFERENCES_EN_US_PATH).items()
+        if message_id in PREFERENCES_EXTRACT_IDS
+    })
 
     # Step 5: Now compare that en-US Fluent file with all of the ones we just
     # cloned and create a report with how many strings are still missing.
@@ -259,10 +378,19 @@ def update_locales(command_context):
 @CommandArgument(
     "--details", default=None, help="Which locale to pull up details about"
 )
-def locales_report(command_context, details):
+@CommandArgument(
+    "--string",
+    dest="message_id",
+    default=None,
+    help="Show which locales are missing a specific Fluent message id",
+)
+def locales_report(command_context, details, message_id):
     with open(REPORT_PATH) as file:
         report = json.load(file)
-        display_report(report, details)
+        if message_id:
+            display_string_report(report, message_id)
+        else:
+            display_report(report, details)
 
 
 def get_message_dates(fluent_file_path):
@@ -275,7 +403,7 @@ def get_message_dates(fluent_file_path):
         ["git", "blame", "--line-porcelain", fluent_file_path],
         stdout=subprocess.PIPE,
         text=True,
-        check=False,
+        check=True,
     )
 
     pattern = re.compile(r"^([a-z-]+[^\s]+) ")
@@ -392,7 +520,6 @@ def display_report(report, details=None):
         sorted_locales = sorted(report["locales"].keys(), key=lambda x: x.lower())
     for locale in sorted_locales:
         print(Style.RESET_ALL, end="")
-        # import pdb;pdb.set_trace()
         if report["locales"][locale]["missing"]:
             missing_translations = report["locales"][locale]["missing"][
                 str(FLUENT_FILE_ANCESTRY.joinpath(FLUENT_FILE))
@@ -458,22 +585,75 @@ def display_report(report, details=None):
     print(Style.RESET_ALL, end="")
 
 
+def display_string_report(report, message_id):
+    """Lists which locales are missing or have a specific Fluent message id.
+
+    This is the inverse of the --details view: instead of listing the missing
+    strings for one locale, it lists every locale missing one given string (and
+    the locales that have it). Computed entirely from the local
+    locales-report.json (no network access).
+    """
+    if message_id not in report["message_dates"]:
+        print(f"Unknown string '{message_id}'")
+        return
+
+    file_key = str(FLUENT_FILE_ANCESTRY.joinpath(FLUENT_FILE))
+    missing_locales = []
+    present_locales = []
+    for locale in sorted(report["locales"].keys(), key=lambda x: x.lower()):
+        missing = report["locales"][locale]["missing"]
+        # Entries may carry a ".attribute" suffix, so normalize to the message id.
+        missing_ids = {
+            entry.split(".")[0] for entry in (missing or {}).get(file_key, [])
+        }
+        if message_id in missing_ids:
+            missing_locales.append(locale)
+        else:
+            present_locales.append(locale)
+
+    total = len(report["locales"])
+    meta = report["meta"]
+    print("New Tab string report")
+    print(f"String: {message_id}")
+    print(f"Landed in en-US: {report['message_dates'][message_id]}")
+    print(f"Locales last updated: {meta['updated']}")
+    print(f"From {meta['repository']} - revision: {meta['revision']}")
+    print("------")
+    print(Fore.YELLOW + f"{len(missing_locales)}/{total} locales missing")
+    print(
+        textwrap.fill(
+            ", ".join(missing_locales),
+            width=REPORT_WRAP_CHARS,
+            break_on_hyphens=False,
+        )
+    )
+    print(Fore.GREEN + f"{len(present_locales)}/{total} locales present")
+    print(
+        textwrap.fill(
+            ", ".join(present_locales),
+            width=REPORT_WRAP_CHARS,
+            break_on_hyphens=False,
+        )
+    )
+    print(Style.RESET_ALL, end="")
+
+
 @SubCommand(
     "newtab",
     "channel-metrics-diff",
-    description="Compares and produces a JSON diff between NewTab Nightly metrics and pings, using the specified channel.",
+    description="Compares and produces a JSON diff between local NewTab metrics and pings, and the specified channel.",
     virtualenv_name="newtab",
 )
 @CommandArgument(
     "--channel",
-    default="local",
-    choices=["beta", "release", "local"],
+    default="release",
+    choices=["beta", "release"],
     help="Which channel should be used to compare NewTab metrics and pings YAML",
 )
 def channel_metrics_diff(command_context, channel):
     """
     Fetch main and a comparison branch (beta or release) metrics.yaml, compute only the new metrics,
-    and process as before. To run use: ./mach newtab channel-metrics-diff --channel [beta|release|local]
+    and process as before. To run use: ./mach newtab channel-metrics-diff --channel [beta|release]
     This will print YAML-formatted output to stdout, showing the differences in newtab metrics and pings.
     """
     METRICS_LOCAL_YAML_PATH = Path("browser", "components", "newtab", "metrics.yaml")
@@ -501,29 +681,14 @@ def channel_metrics_diff(command_context, channel):
         # Base URL for fetching YAML files from GitHub
         GITHUB_URL_TEMPLATE = "https://raw.githubusercontent.com/mozilla-firefox/firefox/refs/heads/{branch}/browser/components/newtab/{yaml}"
 
-        # 1. Fetch both main and comparison metrics and pings YAMLs and determine which branch to compare against
-        if channel == "local":
-            main_metrics_yaml = yaml.safe_load(open(METRICS_LOCAL_YAML_PATH))
-            compare_metrics_yaml = fetch_yaml(
-                GITHUB_URL_TEMPLATE.format(branch="main", yaml="metrics.yaml")
-            )
-            main_pings_yaml = yaml.safe_load(open(PINGS_LOCAL_YAML_PATH))
-            compare_pings_yaml = fetch_yaml(
-                GITHUB_URL_TEMPLATE.format(branch="main", yaml="pings.yaml")
-            )
-        else:
-            main_metrics_yaml = fetch_yaml(
-                GITHUB_URL_TEMPLATE.format(branch="main", yaml="metrics.yaml")
-            )
-            compare_metrics_yaml = fetch_yaml(
-                GITHUB_URL_TEMPLATE.format(branch=channel, yaml="metrics.yaml")
-            )
-            main_pings_yaml = fetch_yaml(
-                GITHUB_URL_TEMPLATE.format(branch="main", yaml="pings.yaml")
-            )
-            compare_pings_yaml = fetch_yaml(
-                GITHUB_URL_TEMPLATE.format(branch=channel, yaml="pings.yaml")
-            )
+        main_metrics_yaml = yaml.safe_load(open(METRICS_LOCAL_YAML_PATH))
+        compare_metrics_yaml = fetch_yaml(
+            GITHUB_URL_TEMPLATE.format(branch=channel, yaml="metrics.yaml")
+        )
+        main_pings_yaml = yaml.safe_load(open(PINGS_LOCAL_YAML_PATH))
+        compare_pings_yaml = fetch_yaml(
+            GITHUB_URL_TEMPLATE.format(branch=channel, yaml="pings.yaml")
+        )
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_dir_path = Path(temp_dir)
@@ -616,7 +781,6 @@ def process_yaml_file(main_yaml, compare_yaml, yaml_type: YamlType, temp_dir_pat
     # Remove $tags if present to avoid invalid tag lint error
     if "$tags" in new_yaml:
         del new_yaml["$tags"]
-    new_yaml["no_lint"] = ["COMMON_PREFIX"]
 
     yaml_content = yaml.dump(new_yaml, sort_keys=False)
     print(yaml_content)
@@ -627,60 +791,6 @@ def process_yaml_file(main_yaml, compare_yaml, yaml_type: YamlType, temp_dir_pat
         f.write(yaml_content)
 
     return file_path
-
-
-def get_new_metrics(main_yaml, compare_yaml):
-    """Compare main and comparison YAML files to find new metrics.
-
-    This function compares the metrics defined in the main branch against those in the comparison branch
-    (beta or release) and returns only the metrics that are new in the main branch.
-
-    Args:
-        main_yaml: The YAML content from the main branch containing metric definitions
-        compare_yaml: The YAML content from the comparison branch (beta/release) containing metric definitions
-
-    Returns:
-        dict: A dictionary containing only the metrics that are new in the main branch
-    """
-    new_metrics_yaml = {}
-    for category in main_yaml:
-        if category.startswith("$"):
-            new_metrics_yaml[category] = main_yaml[category]
-            continue
-        if category not in compare_yaml:
-            new_metrics_yaml[category] = main_yaml[category]
-            continue
-        new_metrics = {}
-        for metric in main_yaml[category]:
-            if metric not in compare_yaml[category]:
-                new_metrics[metric] = main_yaml[category][metric]
-        if new_metrics:
-            new_metrics_yaml[category] = new_metrics
-    return new_metrics_yaml
-
-
-def get_new_pings(main_yaml, compare_yaml):
-    """Compare main and comparison YAML files to find new pings.
-
-    This function compares the pings defined in the main branch against those in the comparison branch
-    (beta or release) and returns only the pings that are new in the main branch.
-
-    Args:
-        main_yaml: The YAML content from the main branch containing ping definitions
-        compare_yaml: The YAML content from the comparison branch (beta/release) containing ping definitions
-
-    Returns:
-        dict: A dictionary containing only the pings that are new in the main branch
-    """
-    new_pings_yaml = {}
-    for ping in main_yaml:
-        if ping.startswith("$"):
-            new_pings_yaml[ping] = main_yaml[ping]
-            continue
-        if ping not in compare_yaml:
-            new_pings_yaml[ping] = main_yaml[ping]
-            continue
-    return new_pings_yaml
 
 
 def check_existing_metrics(main_yaml, compare_yaml):
@@ -750,3 +860,317 @@ def check_existing_metrics(main_yaml, compare_yaml):
             changed_metrics[category] = category_changes
 
     return changed_metrics
+
+
+@SubCommand(
+    "newtab",
+    "trainhop-recipe",
+    description="""Generates the appropriate trainhop recipe for the Nimbus
+newtabTrainhopAddonDeployment feature, given a Taskcluster shipping task group
+URL from ship-it""",
+)
+@CommandArgument(
+    "taskcluster_group_url", help="The shipping Taskcluster task group URL from ship-it"
+)
+@CommandArgument(
+    "--for-table",
+    action="store_true",
+    help="""Also emit a skeleton train-hops.yaml entry (for the train-hop
+tracking table) with the addon version, release name, git and Mercurial
+revisions filled in, and the deployment dates and notes left as placeholders.""",
+)
+def trainhop_recipe(command_context, taskcluster_group_url, for_table):
+    tc_root_url = urlparse(TASKCLUSTER_ROOT_URL)
+    group_url = urlparse(taskcluster_group_url)
+    if group_url.scheme != "https" or group_url.hostname != tc_root_url.hostname:
+        print(
+            f"Expected an https URL with hostname {tc_root_url.hostname}. Got: {taskcluster_group_url}"
+        )
+        return 1
+
+    group_id = group_url.path.split("/")[-1]
+    if not group_id:
+        print(f"Could not extract the task group ID from {taskcluster_group_url}")
+        return 1
+
+    print(f"Extracted task group ID {group_id}")
+
+    queue = taskcluster.Queue({"rootUrl": TASKCLUSTER_ROOT_URL})
+    task_group = queue.listTaskGroup(group_id)
+    artifact_destination = ""
+
+    for task in task_group["tasks"]:
+        if task["task"]["metadata"]["name"] == BEETMOVER_TASK_NAME:
+            print(f"Found {BEETMOVER_TASK_NAME} task")
+            artifacts = task["task"]["payload"]["artifactMap"]
+            for artifact in artifacts:
+                if BEETMOVER_ARTIFACT_PATH in artifact["paths"]:
+                    artifact_destination = artifact["paths"][BEETMOVER_ARTIFACT_PATH][
+                        "destinations"
+                    ][0]
+
+    print(f"Got the destination: {artifact_destination}")
+    xpi_archive_url = urljoin(ARCHIVE_ROOT_PATH, artifact_destination)
+    print(f"Downloading from: {xpi_archive_url}")
+
+    with tempfile.TemporaryDirectory() as download_dir:
+        with requests.get(xpi_archive_url, stream=True) as request:
+            request.raise_for_status()
+
+            download_path = Path(download_dir).joinpath(XPI_NAME)
+            with open(download_path, "wb") as f:
+                for chunk in request.iter_content(chunk_size=8192):
+                    # If you have chunk encoded response uncomment if
+                    # and set chunk_size parameter to None.
+                    # if chunk:
+                    f.write(chunk)
+
+            # XPIs are just ZIP files, so let's reach in and read manifest.json.
+            with ZipFile(download_path) as newtab_xpi:
+                with newtab_xpi.open("manifest.json") as manifest_file:
+                    manifest = json.loads(manifest_file.read())
+                    addon_version = manifest["version"]
+
+            shutil.rmtree(download_dir)
+
+    result = {
+        "addon_version": addon_version,
+        "xpi_download_path": "/".join(artifact_destination.split("/")[-2:]),
+    }
+
+    print("Nimbus train-hop recipe:\n\n")
+    print(json.dumps(result, indent=2, sort_keys=True))
+    print("\n")
+
+    if for_table:
+        build_task_id = get_build_task_id(task_group)
+        if not build_task_id:
+            print(
+                f"Could not find the build task via the {SIGNING_TASK_NAME} task. "
+                "Skipping the train-hops.yaml entry."
+            )
+            return 1
+
+        print(f"Found build task {build_task_id}")
+        git_sha = queue.task(build_task_id)["payload"]["env"]["NEWTAB_HEAD_REV"]
+        print(f"Got the git revision: {git_sha}")
+
+        mercurial_sha = git_sha_to_hg(git_sha)
+        print(f"Got the Mercurial revision: {mercurial_sha}")
+
+        entry = {
+            "version": addon_version,
+            # The release name is the second-to-last path segment of the
+            # beetmover destination, e.g. "newtab-154.2.0-build1".
+            "name": artifact_destination.split("/")[-2],
+            "git_sha": git_sha,
+            "mercurial_sha": mercurial_sha,
+            "deployed_release_25": "Pending",
+            "deployed_release_100": "Pending",
+            "deployed_beta_100": "Pending",
+            "notes": "TODO",
+        }
+
+        print("train-hops.yaml entry:\n\n")
+        print(format_table_entry(entry))
+        print("\n")
+
+
+def get_build_task_id(task_group):
+    """Returns the task ID of the build task that produced the newtab XPI.
+
+    This is found by locating the signing task within the shipping task group
+    and reading the upstream artifact that points back at the build task.
+    Returns None if no such task can be found.
+    """
+    for task in task_group["tasks"]:
+        if task["task"]["metadata"]["name"] == SIGNING_TASK_NAME:
+            upstream_artifacts = task["task"]["payload"].get("upstreamArtifacts", [])
+            for artifact in upstream_artifacts:
+                if BEETMOVER_ARTIFACT_PATH in artifact.get("paths", []):
+                    return artifact["taskId"]
+    return None
+
+
+def git_sha_to_hg(git_sha):
+    """Converts a firefox-main git revision to its Mercurial counterpart."""
+    response = requests.get(f"{GIT2HG_URL}/{git_sha}", timeout=10)
+    response.raise_for_status()
+    return response.json()["hg_hash"]
+
+
+class _TrainHopDumper(yaml.Dumper):
+    """A yaml.Dumper that indents block sequence entries under their parent.
+
+    PyYAML's default places the "- " of a sequence item at the parent key's
+    indent level; forcing indentless off reproduces the train-hops.yaml layout
+    where the dash sits one level in from train_hops.
+    """
+
+    def increase_indent(self, flow=False, indentless=False):
+        return super().increase_indent(flow, False)
+
+
+def format_table_entry(entry):
+    """Formats a train-hops.yaml list entry, ready to paste under train_hops.
+
+    entry is an ordered dict of the entry's fields; insertion order is
+    preserved in the output so it matches the existing entries.
+    """
+    body = yaml.dump(
+        [entry],
+        Dumper=_TrainHopDumper,
+        sort_keys=False,
+        default_flow_style=False,
+        # Avoid wrapping long scalars (e.g. the notes field) onto a second line.
+        width=float("inf"),
+        allow_unicode=True,
+    )
+    return textwrap.indent(body, "  ").rstrip()
+
+
+@SubCommand(
+    "newtab",
+    "bundle",
+    description="Bundle compiled newtab code.",
+)
+def bundle(command_context):
+    """
+    Runs: ./mach npm run bundle --prefix=browser/extensions/newtab
+    """
+    proc = None
+
+    try:
+        proc = subprocess.Popen([
+            *mach_argv(command_context),
+            "npm",
+            "run",
+            "bundle",
+            "--prefix=browser/extensions/newtab",
+        ])
+        print("Bundling newtab started. Press Ctrl-C to terminate.")
+        proc.wait()
+    except KeyboardInterrupt:
+        if proc:
+            proc.terminate()
+            proc.wait()
+            print("Bundle process terminated.")
+    else:
+        # Successful bundle
+        if proc and proc.returncode == 0:
+            print("Bundling newtab completed.")
+        elif proc:
+            code = proc.returncode
+            print(f"Bundling newtab failed (exit code {code}). See logs above.")
+
+            if code == 127:
+                print(
+                    "Hint: Required npm binaries not found. "
+                    "Try running:\n  ./mach newtab install"
+                )
+
+    # Swallow errors (no exception raising). Return the process returncode for mach to surface.
+    return 0 if proc is None else proc.returncode
+
+
+@SubCommand(
+    "newtab",
+    "install",
+    description="Installing node dependencies for newtab extension.",
+)
+def install(command_context):
+    """
+    Runs: ./mach npm install --prefix=browser/extensions/newtab
+    """
+    proc = None
+
+    try:
+        proc = subprocess.Popen([
+            *mach_argv(command_context),
+            "npm",
+            "install",
+            "--prefix=browser/extensions/newtab",
+        ])
+        print(
+            "Installing node dependencies for newtab started. Press Ctrl-C to terminate."
+        )
+        proc.wait()
+    except KeyboardInterrupt:
+        if proc:
+            proc.terminate()
+            proc.wait()
+            print("Install process terminated.")
+    else:
+        print("Installing node dependencies for newtab completed.")
+
+    # Swallow errors (no exception raising). Return the process returncode for mach to surface.
+    return 0 if proc is None else proc.returncode
+
+
+@SubCommand(
+    "newtab",
+    "get-unbranded-builds",
+    description="Get URLs for the latest unbranded Firefox builds for add-on development.",
+)
+@CommandArgument(
+    "--channel",
+    default="release",
+    choices=["beta", "release"],
+    help="Which channel to get unbranded builds for",
+)
+def get_unbranded_builds(command_context, channel):
+    """
+    Prints the latest unbranded Firefox build artifact URLs for Mac, Windows, and Linux.
+    These builds allow testing unsigned extensions without enforcing signature requirements.
+    """
+    TASKCLUSTER_INDEX_URL = (
+        "https://firefox-ci-tc.services.mozilla.com/api/index/v1/task"
+    )
+
+    repo = f"mozilla-{channel}"
+
+    platforms = {
+        "macOS (Intel)": {
+            "namespace": f"gecko.v2.{repo}.latest.firefox.macosx64-add-on-devel",
+            "artifact": "public/build/target.dmg",
+        },
+        "Windows 32-bit": {
+            "namespace": f"gecko.v2.{repo}.latest.firefox.win32-add-on-devel",
+            "artifact": "public/build/target.zip",
+        },
+        "Windows 64-bit": {
+            "namespace": f"gecko.v2.{repo}.latest.firefox.win64-add-on-devel",
+            "artifact": "public/build/target.zip",
+        },
+        "Linux 64-bit": {
+            "namespace": f"gecko.v2.{repo}.latest.firefox.linux64-add-on-devel",
+            "artifact": "public/build/target.tar.xz",
+        },
+    }
+
+    print(f"Fetching latest unbranded builds for {channel} channel...\n")
+
+    for platform_name, platform_info in platforms.items():
+        namespace = platform_info["namespace"]
+        artifact = platform_info["artifact"]
+
+        try:
+            index_url = f"{TASKCLUSTER_INDEX_URL}/{namespace}"
+            response = requests.get(index_url, timeout=10)
+            response.raise_for_status()
+            task_data = response.json()
+            task_id = task_data["taskId"]
+
+            artifact_url = f"https://firefox-ci-tc.services.mozilla.com/api/queue/v1/task/{task_id}/runs/0/artifacts/{artifact}"
+
+            print(f"{platform_name}:")
+            print(f"  {artifact_url}\n")
+        except requests.RequestException as e:
+            print(f"{platform_name}: Failed to fetch ({e})\n")
+
+    print(
+        "For more information, see: https://wiki.mozilla.org/Add-ons/Extension_Signing#Unbranded_Builds"
+    )
+    print(
+        f"Manual search: https://treeherder.mozilla.org/#/jobs?repo={repo}&searchStr=addon"
+    )

@@ -35,6 +35,7 @@ const {
   l10n,
 } = require("resource://devtools/client/webconsole/utils/messages.js");
 const { PluralForm } = require("resource://devtools/shared/plural-form.js");
+const KeyShortcuts = require("resource://devtools/client/shared/key-shortcuts.js");
 
 // Constants
 const {
@@ -76,6 +77,7 @@ class FilterBar extends Component {
       persistLogs: PropTypes.bool.isRequired,
       eagerEvaluation: PropTypes.bool.isRequired,
       timestampsVisible: PropTypes.bool.isRequired,
+      serviceContainer: PropTypes.object.isRequired,
       webConsoleUI: PropTypes.object.isRequired,
       autocomplete: PropTypes.bool.isRequired,
     };
@@ -206,13 +208,23 @@ class FilterBar extends Component {
   renderClearButton() {
     return dom.button({
       className: "devtools-button devtools-clear-icon",
-      title: l10n.getStr("webconsole.clearButton.tooltip"),
+      title: l10n.getFormatStr("webconsole.clearButton.tooltipWithHotkeyHint", [
+        this.props.webConsoleUI
+          .getClearKeyShortcuts()
+          .map(electronKey =>
+            KeyShortcuts.stringifyFromElectronKey(electronKey)
+          )
+          .join(", "),
+      ]),
       onClick: () => this.props.dispatch(actions.messagesClear()),
     });
   }
 
   renderFiltersConfigBar() {
-    const { dispatch, filter, filteredMessagesCount } = this.props;
+    const { dispatch, filter, filteredMessagesCount, serviceContainer } =
+      this.props;
+
+    const { isBrowserConsoleOrBrowserToolbox } = serviceContainer;
 
     const getLabel = (baseLabel, filterKey) => {
       const count = filteredMessagesCount[filterKey];
@@ -293,7 +305,36 @@ class FilterBar extends Component {
         label: l10n.getStr("webconsole.requestsFilterButton.label"),
         filterKey: FILTERS.NET,
         dispatch,
-      })
+      }),
+      // The browser console and browser toolbox console aggregate messages from
+      // the browser itself (privileged code) and from web content. Let the user
+      // show or hide each origin separately.
+      isBrowserConsoleOrBrowserToolbox &&
+        dom.div({
+          className: "devtools-separator",
+        }),
+      isBrowserConsoleOrBrowserToolbox &&
+        FilterButton({
+          active: filter[FILTERS.CHROME],
+          label: getLabel(
+            l10n.getStr("webconsole.chromeFilterButton.label"),
+            FILTERS.CHROME
+          ),
+          title: l10n.getStr("webconsole.chromeFilterButton.tooltip"),
+          filterKey: FILTERS.CHROME,
+          dispatch,
+        }),
+      isBrowserConsoleOrBrowserToolbox &&
+        FilterButton({
+          active: filter[FILTERS.CONTENT],
+          label: getLabel(
+            l10n.getStr("webconsole.contentFilterButton.label"),
+            FILTERS.CONTENT
+          ),
+          title: l10n.getStr("webconsole.contentFilterButton.tooltip"),
+          filterKey: FILTERS.CONTENT,
+          dispatch,
+        })
     );
   }
 

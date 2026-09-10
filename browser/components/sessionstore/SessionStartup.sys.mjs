@@ -29,17 +29,18 @@
 
 /* :::::::: Constants and Helpers ::::::::::::::: */
 
-const lazy = {};
 import { AppConstants } from "resource://gre/modules/AppConstants.sys.mjs";
+import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
-ChromeUtils.defineESModuleGetters(lazy, {
+const lazy = XPCOMUtils.declareLazy({
   BrowserUsageTelemetry: "resource:///modules/BrowserUsageTelemetry.sys.mjs",
   CrashMonitor: "resource://gre/modules/CrashMonitor.sys.mjs",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.sys.mjs",
-  SessionFile: "resource:///modules/sessionstore/SessionFile.sys.mjs",
+  SessionFile: "moz-src:///browser/components/sessionstore/SessionFile.sys.mjs",
   StartupPerformance:
-    "resource:///modules/sessionstore/StartupPerformance.sys.mjs",
-  sessionStoreLogger: "resource:///modules/sessionstore/SessionLogger.sys.mjs",
+    "moz-src:///browser/components/sessionstore/StartupPerformance.sys.mjs",
+  sessionStoreLogger:
+    "moz-src:///browser/components/sessionstore/SessionLogger.sys.mjs",
 });
 
 const STATE_RUNNING_STR = "running";
@@ -330,6 +331,7 @@ export var SessionStartup = {
    * launch of the browser. This does not include crash restoration. In
    * particular, if session restore is configured to restore only in case of
    * crash, this method returns false.
+   *
    * @returns bool
    */
   isAutomaticRestoreEnabled() {
@@ -348,6 +350,7 @@ export var SessionStartup = {
 
   /**
    * Determines whether there is a pending session restore.
+   *
    * @returns bool
    */
   willRestore() {
@@ -360,6 +363,7 @@ export var SessionStartup = {
   /**
    * Determines whether there is a pending session restore and if that will refer
    * back to a crash.
+   *
    * @returns bool
    */
   willRestoreAsCrashed() {

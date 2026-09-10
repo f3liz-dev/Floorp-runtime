@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -42,6 +40,10 @@ nsresult BrowserBridgeParent::InitWithProcess(
   RefPtr<CanonicalBrowsingContext> browsingContext =
       CanonicalBrowsingContext::Get(aWindowInit.context().mBrowsingContextId);
   if (!browsingContext || browsingContext->IsDiscarded()) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  if (!browsingContext->Group()->IsKnownForChildID(
+          aParentBrowser->OtherChildID())) {
     return NS_ERROR_UNEXPECTED;
   }
 
@@ -94,7 +96,7 @@ nsresult BrowserBridgeParent::InitWithProcess(
   }
 
   RefPtr<WindowGlobalParent> windowParent =
-      WindowGlobalParent::CreateDisconnected(aWindowInit);
+      WindowGlobalParent::CreateDisconnected(aWindowInit, aContentParent);
   if (!windowParent) {
     return NS_ERROR_UNEXPECTED;
   }
@@ -137,14 +139,15 @@ CanonicalBrowsingContext* BrowserBridgeParent::GetBrowsingContext() {
 
 BrowserParent* BrowserBridgeParent::Manager() {
   MOZ_ASSERT(CanSend());
-  return static_cast<BrowserParent*>(PBrowserBridgeParent::Manager());
+  return mozilla::ipc::ActorCast<BrowserParent>(
+      PBrowserBridgeParent::Manager());
 }
 
 void BrowserBridgeParent::Destroy() {
   if (mBrowserParent) {
 #ifdef ACCESSIBILITY
-    if (mEmbedderAccessibleDoc && !mEmbedderAccessibleDoc->IsShutdown()) {
-      mEmbedderAccessibleDoc->RemovePendingOOPChildDoc(this);
+    if (a11y::DocAccessibleParent* embedderDoc = GetEmbedderAccessibleDoc()) {
+      embedderDoc->RemovePendingOOPChildDoc(this);
     }
 #endif
     mBrowserParent->Destroy();
@@ -152,25 +155,25 @@ void BrowserBridgeParent::Destroy() {
     mBrowserParent = nullptr;
   }
   if (CanSend()) {
-    Unused << Send__delete__(this);
+    (void)Send__delete__(this);
   }
 }
 
 IPCResult BrowserBridgeParent::RecvShow(const OwnerShowInfo& aOwnerInfo) {
   mBrowserParent->AttachWindowRenderer();
-  Unused << mBrowserParent->SendShow(mBrowserParent->GetShowInfo(), aOwnerInfo);
+  (void)mBrowserParent->SendShow(mBrowserParent->GetShowInfo(), aOwnerInfo);
   return IPC_OK();
 }
 
 IPCResult BrowserBridgeParent::RecvScrollbarPreferenceChanged(
     ScrollbarPreference aPref) {
-  Unused << mBrowserParent->SendScrollbarPreferenceChanged(aPref);
+  (void)mBrowserParent->SendScrollbarPreferenceChanged(aPref);
   return IPC_OK();
 }
 
 IPCResult BrowserBridgeParent::RecvLoadURL(nsDocShellLoadState* aLoadState) {
-  Unused << mBrowserParent->SendLoadURL(WrapNotNull(aLoadState),
-                                        mBrowserParent->GetShowInfo());
+  (void)mBrowserParent->SendLoadURL(WrapNotNull(aLoadState),
+                                    mBrowserParent->GetShowInfo());
   return IPC_OK();
 }
 
@@ -186,24 +189,24 @@ IPCResult BrowserBridgeParent::RecvUpdateDimensions(
 }
 
 IPCResult BrowserBridgeParent::RecvUpdateEffects(const EffectsInfo& aEffects) {
-  Unused << mBrowserParent->SendUpdateEffects(aEffects);
+  (void)mBrowserParent->SendUpdateEffects(aEffects);
   return IPC_OK();
 }
 
 IPCResult BrowserBridgeParent::RecvUpdateRemotePrintSettings(
     const embedding::PrintData& aPrintData) {
-  Unused << mBrowserParent->SendUpdateRemotePrintSettings(aPrintData);
+  (void)mBrowserParent->SendUpdateRemotePrintSettings(aPrintData);
   return IPC_OK();
 }
 
 IPCResult BrowserBridgeParent::RecvRenderLayers(const bool& aEnabled) {
-  Unused << mBrowserParent->SendRenderLayers(aEnabled);
+  (void)mBrowserParent->SendRenderLayers(aEnabled);
   return IPC_OK();
 }
 
 IPCResult BrowserBridgeParent::RecvNavigateByKey(
     const bool& aForward, const bool& aForDocumentNavigation) {
-  Unused << mBrowserParent->SendNavigateByKey(aForward, aForDocumentNavigation);
+  (void)mBrowserParent->SendNavigateByKey(aForward, aForDocumentNavigation);
   return IPC_OK();
 }
 
@@ -225,7 +228,7 @@ IPCResult BrowserBridgeParent::RecvDispatchSynthesizedMouseEvent(
   }
 
   WidgetMouseEvent event = aEvent;
-  event.mWidget = widget;
+  event.mWidget = std::move(widget);
   // Convert mRefPoint from the dispatching child process coordinate space
   // to the parent coordinate space. The SendRealMouseEvent call will convert
   // it into the dispatchee child process coordinate space
@@ -243,7 +246,7 @@ IPCResult BrowserBridgeParent::RecvDispatchSynthesizedMouseEvent(
 }
 
 IPCResult BrowserBridgeParent::RecvWillChangeProcess() {
-  Unused << mBrowserParent->SendWillChangeProcess();
+  (void)mBrowserParent->SendWillChangeProcess();
   return IPC_OK();
 }
 
@@ -260,7 +263,7 @@ IPCResult BrowserBridgeParent::RecvDeactivate(const bool& aWindowLowering,
 
 mozilla::ipc::IPCResult BrowserBridgeParent::RecvUpdateRemoteStyle(
     const StyleImageRendering& aImageRendering) {
-  Unused << mBrowserParent->SendUpdateRemoteStyle(aImageRendering);
+  (void)mBrowserParent->SendUpdateRemoteStyle(aImageRendering);
   return IPC_OK();
 }
 
@@ -275,41 +278,57 @@ a11y::DocAccessibleParent* BrowserBridgeParent::GetDocAccessibleParent() {
   return docAcc && !docAcc->IsShutdown() ? docAcc : nullptr;
 }
 
-IPCResult BrowserBridgeParent::RecvSetEmbedderAccessible(
-    PDocAccessibleParent* aDoc, uint64_t aID) {
+IPCResult BrowserBridgeParent::RecvSetEmbedderAccessible(uint64_t aID) {
 #  if defined(ANDROID)
   MonitorAutoLock mal(nsAccessibilityService::GetAndroidMonitor());
 #  endif
-  MOZ_ASSERT(aDoc || mEmbedderAccessibleDoc,
-             "Embedder doc shouldn't be cleared if it wasn't set");
-  MOZ_ASSERT(!mEmbedderAccessibleDoc || !aDoc || mEmbedderAccessibleDoc == aDoc,
-             "Embedder doc shouldn't change from one doc to another");
-  if (!aDoc && mEmbedderAccessibleDoc &&
-      !mEmbedderAccessibleDoc->IsShutdown()) {
-    // We're clearing the embedder doc, so remove the pending child doc addition
-    // (if any).
-    mEmbedderAccessibleDoc->RemovePendingOOPChildDoc(this);
+  if (!aID && !mEmbedderAccessibleID) {
+    return IPC_FAIL(this,
+                    "Embedder accessible shouldn't be cleared if it wasn't "
+                    "set");
   }
-  mEmbedderAccessibleDoc = static_cast<a11y::DocAccessibleParent*>(aDoc);
-  mEmbedderAccessibleID = aID;
-  if (!aDoc) {
-    MOZ_ASSERT(!aID);
+  if (!aID) {
+    // We're clearing the embedder accessible, so remove the pending child
+    // doc addition (if any).
+    if (a11y::DocAccessibleParent* embedderDoc = GetEmbedderAccessibleDoc()) {
+      embedderDoc->RemovePendingOOPChildDoc(this);
+    }
+    mEmbedderAccessibleID = 0;
     return IPC_OK();
   }
-  MOZ_ASSERT(aID);
+
+  mEmbedderAccessibleID = aID;
   if (GetDocAccessibleParent()) {
     // The embedded DocAccessibleParent has already been created. This can
-    // happen if, for example, an iframe is hidden and then shown or
-    // an iframe is reflowed by layout.
-    mEmbedderAccessibleDoc->AddChildDoc(this);
+    // happen if, for example, an iframe is hidden and then shown or an iframe
+    // Accessible is re-created. In the case of re-creation, the old iframe
+    // Accessible still exists at this point because this IPDL message is
+    // received *before* we receive the accessibility hide and show events. This
+    // is okay; DocAccessibleParent will store this as a pending OOP child
+    // document and add it when the new OuterDocAccessible arrives.
+    RefPtr<WindowGlobalParent> embedderWgp =
+        GetBrowsingContext()->GetEmbedderWindowGlobal();
+    auto* embedderDoc = embedderWgp
+                            ? a11y::DocAccessibleParent::GetFrom(
+                                  embedderWgp, /* aAllowShutdown */ true)
+                            : nullptr;
+    if (!embedderDoc) {
+      return IPC_FAIL(this, "Embedder's PDocAccessible doesn't exist");
+    }
+    if (!embedderDoc->IsShutdown()) {
+      embedderDoc->AddChildDoc(this);
+    }
   }
   return IPC_OK();
 }
 
 a11y::DocAccessibleParent* BrowserBridgeParent::GetEmbedderAccessibleDoc() {
-  return mEmbedderAccessibleDoc && !mEmbedderAccessibleDoc->IsShutdown()
-             ? mEmbedderAccessibleDoc.get()
-             : nullptr;
+  if (!mEmbedderAccessibleID) {
+    return nullptr;
+  }
+  RefPtr<WindowGlobalParent> embedderWgp =
+      GetBrowsingContext()->GetEmbedderWindowGlobal();
+  return a11y::DocAccessibleParent::GetFrom(embedderWgp);
 }
 #endif
 

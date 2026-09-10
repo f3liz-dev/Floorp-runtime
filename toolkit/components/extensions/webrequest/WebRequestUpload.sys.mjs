@@ -14,7 +14,7 @@ XPCOMUtils.defineLazyServiceGetter(
   lazy,
   "mimeHeader",
   "@mozilla.org/network/mime-hdrparam;1",
-  "nsIMIMEHeaderParam"
+  Ci.nsIMIMEHeaderParam
 );
 
 const BinaryInputStream = Components.Constructor(
@@ -401,10 +401,10 @@ function parseFormData(stream, channel, lenient = false) {
     let contentType = channel.getRequestHeader("Content-Type");
 
     switch (Headers.getParam(contentType, "")) {
-      case "multipart/form-data":
+      case "multipart/form-data": {
         let boundary = Headers.getParam(contentType, "boundary");
         return parseMultiPart(stream, `\r\n--${boundary}`);
-
+      }
       case "application/x-www-form-urlencoded":
         return parseUrlEncoded(stream);
     }
@@ -522,13 +522,6 @@ WebRequestUpload = {
   createRequestBody(channel) {
     if (!(channel instanceof Ci.nsIUploadChannel) || !channel.uploadStream) {
       return null;
-    }
-
-    if (
-      channel instanceof Ci.nsIUploadChannel2 &&
-      channel.uploadStreamHasHeaders
-    ) {
-      return { error: "Upload streams with headers are unsupported" };
     }
 
     try {

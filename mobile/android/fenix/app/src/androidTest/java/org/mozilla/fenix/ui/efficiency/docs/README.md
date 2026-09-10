@@ -1,82 +1,82 @@
-# Android Test Automation Framework (POM-Based)
+# ui/efficiency — Android UI test framework
 
-## 🚀 Introduction
-This framework introduces a modern, scalable approach to Android UI testing using the Page Object Model (POM). It combines Espresso, UIAutomator2, and Jetpack Compose testing under a single unified abstraction, making test code clean, reusable, and easy to maintain.
+A page-object + navigation-graph framework for Fenix UI tests. It makes UI tests **cheap to write and
+cheap to maintain**: a test describes only the _what_ (reach this screen, do this, verify that); the
+harness owns the _how_ (navigation, element resolution, retries). Most tests are ~5–20 lines.
 
-Tests written with this system read like user journeys, not code. Teams can define pages once and reuse them throughout tests—encouraging ownership, modularity, and clarity across features.
+## Why it exists (the two problems)
 
-## 🛠️ Getting Started
+1. **Maintenance cost.** Hand-written UI tests duplicate selectors/navigation until upkeep outruns value
+   and teams abandon them. Here the expensive layer (selectors, page objects, navigation) is centralized
+   and shared, so a UI change is fixed once, not once per test.
+2. **Trust in failures.** Product bugs, harness bugs, and environment noise get conflated. The harness
+   attributes failures (structured `Eff` logs, on-failure screen dumps) so a red is actionable.
 
-### Prerequisites
-- Android Studio Arctic Fox or newer
-- Kotlin 1.9+
-- Compose UI Test library
-- Enabled Test Orchestrator (optional for retries)
+See `architecture.md` for the model and the rationale.
 
-### Writing Your First Test
-```kotlin
-@Test
-fun verifyHomeLoads() {
-    on.homePage.navigateToPage()
-        .mozVerifyElementsByGroup("requiredForPage")
-}
+## Directory map
+
+```
+efficiency/
+├── core/         resolve() seam, UiElement facade, ScreenDump — the low-level element plumbing
+├── helpers/      BaseTest, BasePage (the moz* verb library + navigateToPage BFS routing)
+├── navigation/   NavigationEdge · NavigationRegistry · NavigationStep · PageCatalog  (the 4-file graph core)
+├── generation/   case-building infra + factories (reachability / pairs / interaction / behavior)
+├── devtools/     dev/debug tools, atomic test runners, effpretty (log renderer)
+├── logging/      structured test logging (the `Eff` logcat tag)
+├── pageObjects/  one <Screen>Page.kt per screen — models it, registers how to reach it
+├── selectors/    one <Screen>Selectors.kt per screen — the element locator catalog
+├── tests/        the actual @Test classes
+└── docs/         you are here
 ```
 
-### Structure Overview
-- `BasePage.kt`: Common actions (clicks, verification, navigation)
-- `Selector.kt`: Describes UI elements in a flexible, tool-agnostic way
-- `PageContext.kt`: Entry point for test pages via `on.<Page>`
-- `NavigationRegistry.kt`: Stores how to move between pages
+## Quickstart — a minimal test
 
-## 🧪 Test Development Workflow
-
-1. **Define Selectors**
 ```kotlin
-val TITLE = Selector(
-    strategy = SelectorStrategy.ESPRESSO_BY_TEXT,
-    value = "Welcome",
-    description = "Welcome title on Home Page",
-    groups = listOf("requiredForPage")
-)
-```
+class BookmarksTest : BaseTest() {
+    private val mockWebServer get() = fenixTestRule.mockWebServer
 
-2. **Create a Page Object**
-```kotlin
-object HomePage : BasePage() {
-    override val pageName = "HomePage"
-
-    override fun mozGetSelectorsByGroup(group: String) = HomePageSelectors.all.filter {
-        it.groups.contains(group)
+    @SmokeTest @Test
+    fun openBookmarkInNewTabTest() {
+        val page = mockWebServer.getGenericAsset(1)
+        on.browserPage.navigateToPage(page.url.toString())   // reach a state
+        on.mainMenu.navigateToPage()                          // route via the nav graph
+            .mozClick(MainMenuSelectors.BOOKMARKS_BUTTON)     // interact
+        on.bookmarks.navigateToPage()                         // arriving here verifies it opened
     }
 }
 ```
 
-3. **Add to Context**
-```kotlin
-val homePage = HomePage
-```
+`on` is the `PageContext` (every modeled screen hangs off it). `navigateToPage()` BFS-routes over the
+graph. Selectors are referenced from their catalog (`<Screen>Selectors.NAME`), never inlined.
 
-4. **Write a Test**
-```kotlin
-on.homePage.navigateToPage()
-    .mozVerifyElementsByGroup("requiredForPage")
-```
+## How you actually work
 
-## 📚 Additional Resources
-- 📖 [Test Automation Strategy](./docs/TestAutomationStrategy.md): Roadmap for phases and long-term goals
-- 💡 Example tests: See `ui/efficiency/tests/`
-- 📎 Diagrams: (Coming soon)
+Follow the gate loop in **`converting-a-test.md`** (the daily driver for converting a legacy smoke test),
+and read the building-block guide for whatever piece is missing:
 
-## 👥 Contributing
-When adding new pages or selectors:
-- Follow the fluent interface pattern
-- Group selectors meaningfully (e.g., `"requiredForPage"`, `"toolbar"`)
-- Register navigation paths explicitly in each `Page`'s `init` block
+| To…                                                       | Read                               |
+| --------------------------------------------------------- | ---------------------------------- |
+| Convert a legacy test end-to-end                          | `converting-a-test.md`             |
+| Find an element's real handles before choosing a selector | `guides/discovering-selectors.md`  |
+| Add locators to a catalog                                 | `guides/authoring-selectors.md`    |
+| Model a new screen                                        | `guides/creating-a-page-object.md` |
+| Reach a screen / add graph edges                          | `guides/adding-navigation.md`      |
+| Compose the test method                                   | `guides/writing-a-test.md`         |
+| Add a `moz*` verb or page helper                          | `guides/extending-basepage.md`     |
+| Run & debug a test                                        | `guides/debugging-tests.md`        |
+| The harness gotchas + review checklist                    | `gotchas.md`                       |
+| The helper scripts (run by hand)                          | `tooling.md`                       |
 
-## ✅ Best Practices
-- Use clear, readable selector descriptions
-- Avoid direct interaction with Espresso/UIAutomator in tests
-- Build tests in Given/When/Then structure
+## Best practices
+
+- Tests describe the _what_; wrap all Espresso/UIAutomator/Compose in page objects and `moz*` verbs.
+- Reuse an existing capability before adding one; add the smallest general block, not a test-specific hack.
+- Selector priority: Compose `testTag` → resource id → content-description → text (last resort).
+- Verify handles against the live UI (dump the screen), not against how a legacy robot matched.
+- A test that only passes on retry is flaky, not done.
 
 ---
-This framework enables powerful, flexible testing—but starts simple. With it, we empower teams to own their features *and* their tests.
+
+_Maintenance note:_ these docs are the human source of truth; the `efficiency-test-authoring` skill distills
+them for agent use — keep them in sync.

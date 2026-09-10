@@ -2,8 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifndef _RTCRtpSender_h_
-#define _RTCRtpSender_h_
+#ifndef RTCRtpSender_h_
+#define RTCRtpSender_h_
 
 #include "RTCStatsReport.h"
 #include "js/RootingAPI.h"
@@ -278,6 +278,8 @@ class RTCRtpSender : public nsISupports,
   void ApplyVideoConfig(const VideoConfig& aConfig);
   void ApplyAudioConfig(const AudioConfig& aConfig);
   void UpdateParametersCodecs();
+  void UpdateParametersRtcp();
+  void UpdateParametersHeaderExtensions();
 
   Canonical<Ssrcs> mSsrcs;
   Canonical<Ssrcs> mVideoRtxSsrcs;
@@ -295,4 +297,4 @@ class RTCRtpSender : public nsISupports,
 
 }  // namespace dom
 }  // namespace mozilla
-#endif  // _RTCRtpSender_h_
+#endif  // RTCRtpSender_h_

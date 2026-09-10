@@ -1,18 +1,18 @@
 [DEFAULT]
+run-if = [
+  "os != 'android'",
+]
 head = "head.js"
 firefox-appdir = "browser"
 prefs = [
   "browser.ipProtection.enabled=true",
+  "browser.ipProtection.cacheDisabled=true",
 ]
 
-["test_GuardianClient.js"]
+["test_IPPL10nHelper.js"]
 
-["test_IPProtection.js"]
+["test_IPPOnboardingMessageHelper.js"]
 
 ["test_IPProtectionPanel.js"]
 
-["test_IPProtectionServerlist.js"]
-
-["test_IPProtectionService.js"]
-
-["test_IPProtectionUsage.js"]
+["test_IPProtectionToolbarButton.js"]

@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -9,12 +7,16 @@
 #include "sandboxBroker.h"
 
 #include <aclapi.h>
+#include <sddl.h>
 #include <shlobj.h>
+
 #include <string>
 
-#include "base/win/windows_version.h"
-#include "base/win/sid.h"
+#include "ConfigHelpers.h"
 #include "GfxDriverInfo.h"
+#include "WinUtils.h"
+#include "base/win/sid.h"
+#include "base/win/windows_version.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Components.h"
@@ -23,17 +25,17 @@
 #include "mozilla/NSPRLogModulesParser.h"
 #include "mozilla/Omnijar.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/SandboxSettings.h"
 #include "mozilla/SHA1.h"
-#include "mozilla/StaticPrefs_network.h"
+#include "mozilla/SandboxSettings.h"
+#include "mozilla/StaticPrefs_media.h"
 #include "mozilla/StaticPrefs_security.h"
-#include "mozilla/StaticPrefs_widget.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/UniquePtr.h"
-#include "mozilla/glean/SecuritySandboxMetrics.h"
 #include "mozilla/WinDllServices.h"
 #include "mozilla/WindowsVersion.h"
+#include "mozilla/glean/SecuritySandboxMetrics.h"
 #include "mozilla/ipc/LaunchError.h"
+#include "mozilla/ipc/UtilityProcessSandboxing.h"
 #include "nsAppDirectoryServiceDefs.h"
 #include "nsCOMPtr.h"
 #include "nsDirectoryServiceDefs.h"
@@ -48,7 +50,6 @@
 #include "sandbox/win/src/app_container.h"
 #include "sandbox/win/src/sandbox.h"
 #include "sandbox/win/src/security_level.h"
-#include "WinUtils.h"
 
 #define SANDBOX_SUCCEED_OR_CRASH(x)                                   \
   do {                                                                \
@@ -71,7 +72,9 @@ bool SandboxBroker::sRunningFromNetworkDrive = false;
 // Cached special directories used for adding policy rules.
 static StaticAutoPtr<nsString> sBinDir;
 static StaticAutoPtr<nsString> sProfileDir;
+static StaticAutoPtr<nsString> sWindowsProfileDir;
 static StaticAutoPtr<nsString> sLocalAppDataDir;
+static StaticAutoPtr<nsString> sRoamingAppDataDir;
 static StaticAutoPtr<nsString> sSystemFontsDir;
 static StaticAutoPtr<nsString> sWindowsSystemDir;
 static StaticAutoPtr<nsString> sLocalAppDataLowDir;
@@ -80,7 +83,7 @@ static StaticAutoPtr<nsString> sLocalAppDataLowParentDir;
 static StaticAutoPtr<nsString> sUserExtensionsDir;
 #endif
 
-static LazyLogModule sSandboxBrokerLog("SandboxBroker");
+LazyLogModule sSandboxBrokerLog("SandboxBroker");
 
 #define LOG_E(...) MOZ_LOG(sSandboxBrokerLog, LogLevel::Error, (__VA_ARGS__))
 #define LOG_W(...) MOZ_LOG(sSandboxBrokerLog, LogLevel::Warning, (__VA_ARGS__))
@@ -143,7 +146,9 @@ void SandboxBroker::Initialize(sandbox::BrokerServices* aBrokerServices,
     sLaunchErrors = nullptr;
     sBinDir = nullptr;
     sProfileDir = nullptr;
+    sWindowsProfileDir = nullptr;
     sLocalAppDataDir = nullptr;
+    sRoamingAppDataDir = nullptr;
     sSystemFontsDir = nullptr;
     sWindowsSystemDir = nullptr;
     sLocalAppDataLowDir = nullptr;
@@ -172,8 +177,8 @@ static void CacheDirectoryServiceDir(nsIProperties* aDirSvc,
   CacheAndStandardizeDir(dirPath, aCacheVar);
 }
 
-static void AddCachedDirRule(sandbox::TargetConfig* aConfig,
-                             sandbox::FileSemantics aAccess,
+template <typename TC>
+static void AddCachedDirRule(TC* aConfig, sandbox::FileSemantics aAccess,
                              const StaticAutoPtr<nsString>& aBaseDir,
                              const nsLiteralString& aRelativePath = u""_ns) {
   if (!aBaseDir) {
@@ -229,9 +234,10 @@ static void EnsureWindowsDirCached(
   }
 }
 
+template <typename TC>
 static void AddCachedWindowsDirRule(
-    sandbox::TargetConfig* aConfig, sandbox::FileSemantics aAccess,
-    GUID aFolderID, const nsLiteralString& aRelativePath = u""_ns) {
+    TC* aConfig, sandbox::FileSemantics aAccess, GUID aFolderID,
+    const nsLiteralString& aRelativePath = u""_ns) {
   if (aFolderID == FOLDERID_Fonts) {
     EnsureWindowsDirCached(FOLDERID_Fonts, sSystemFontsDir,
                            "Failed to get Windows Fonts folder");
@@ -244,12 +250,30 @@ static void AddCachedWindowsDirRule(
     AddCachedDirRule(aConfig, aAccess, sWindowsSystemDir, aRelativePath);
     return;
   }
+  if (aFolderID == FOLDERID_LocalAppData) {
+    EnsureWindowsDirCached(FOLDERID_LocalAppData, sLocalAppDataDir,
+                           "Failed to get Windows LocalAppData folder");
+    AddCachedDirRule(aConfig, aAccess, sLocalAppDataDir, aRelativePath);
+    return;
+  }
   if (aFolderID == FOLDERID_LocalAppDataLow) {
     // For LocalAppDataLow we also require the parent dir.
     EnsureWindowsDirCached(FOLDERID_LocalAppDataLow, sLocalAppDataLowDir,
                            "Failed to get Windows LocalAppDataLow folder",
                            &sLocalAppDataLowParentDir);
     AddCachedDirRule(aConfig, aAccess, sLocalAppDataLowDir, aRelativePath);
+    return;
+  }
+  if (aFolderID == FOLDERID_RoamingAppData) {
+    EnsureWindowsDirCached(FOLDERID_RoamingAppData, sRoamingAppDataDir,
+                           "Failed to get Windows RoamingAppData folder");
+    AddCachedDirRule(aConfig, aAccess, sRoamingAppDataDir, aRelativePath);
+    return;
+  }
+  if (aFolderID == FOLDERID_Profile) {
+    EnsureWindowsDirCached(FOLDERID_Profile, sWindowsProfileDir,
+                           "Failed to get Windows Profile folder");
+    AddCachedDirRule(aConfig, aAccess, sWindowsProfileDir, aRelativePath);
     return;
   }
 
@@ -276,7 +300,6 @@ void SandboxBroker::GeckoDependentInitialize() {
   }
 
   CacheDirectoryServiceDir(dirSvc, NS_APP_USER_PROFILE_50_DIR, sProfileDir);
-  CacheDirectoryServiceDir(dirSvc, NS_WIN_LOCAL_APPDATA_DIR, sLocalAppDataDir);
 #ifdef ENABLE_SYSTEM_EXTENSION_DIRS
   CacheDirectoryServiceDir(dirSvc, XRE_USER_SYS_EXTENSION_DIR,
                            sUserExtensionsDir);
@@ -381,8 +404,8 @@ static void AddLLVMProfilePathDirectoryToPolicy(
     sandbox::TargetConfig* aConfig) {
   std::wstring parentPath;
   if (GetLlvmProfileDir(parentPath)) {
-    Unused << aConfig->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
-                                       parentPath.c_str());
+    (void)aConfig->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
+                                   parentPath.c_str());
   }
 }
 #endif
@@ -390,29 +413,31 @@ static void AddLLVMProfilePathDirectoryToPolicy(
 #undef WSTRING
 
 static void EnsureAppLockerAccess(sandbox::TargetConfig* aConfig) {
-  if (aConfig->GetLockdownTokenLevel() < sandbox::USER_LIMITED) {
-    // The following rules are to allow DLLs to be loaded when the token level
-    // blocks access to AppLocker. If the sandbox does not allow access to the
-    // DLL or the AppLocker rules specifically block it, then it will not load.
-    auto result = aConfig->AllowFileAccess(
-        sandbox::FileSemantics::kAllowReadonly, L"\\Device\\SrpDevice");
-    if (sandbox::SBOX_ALL_OK != result) {
-      NS_ERROR("Failed to add rule for SrpDevice.");
-      LOG_E("Failed (ResultCode %d) to add read access to SrpDevice", result);
-    }
-    result = aConfig->AllowRegistryRead(
-        L"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Srp\\GP\\");
-    if (sandbox::SBOX_ALL_OK != result) {
-      NS_ERROR("Failed to add rule for Srp\\GP.");
-      LOG_E("Failed (ResultCode %d) to add read access to Srp\\GP", result);
-    }
-    // On certain Windows versions there is a double slash before GP.
-    result = aConfig->AllowRegistryRead(
-        L"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Srp\\\\GP\\");
-    if (sandbox::SBOX_ALL_OK != result) {
-      NS_ERROR("Failed to add rule for Srp\\\\GP.");
-      LOG_E("Failed (ResultCode %d) to add read access to Srp\\\\GP", result);
-    }
+  // At USER_LIMITED and above AppLocker is not blocked.
+  if (aConfig->GetLockdownTokenLevel() >= sandbox::USER_LIMITED) {
+    return;
+  }
+
+  // The ntdll check SaferpIsV2PolicyPresent reads from this key.
+  auto result = aConfig->AllowRegistryRead(
+      LR"(HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Srp\GP\)");
+  if (sandbox::SBOX_ALL_OK != result) {
+    NS_ERROR(R"(Failed to add rule for Srp\GP.)");
+    LOG_E(R"(Failed (ResultCode %d) to add read access to Srp\GP)", result);
+  }
+
+  // When AppLocker is deployed via Mobile Device Management, without this
+  // rule SaferpIsV2PolicyPresent silently fails to detect AppLocker, causing
+  // the AppLocker check to be bypassed entirely.
+  AddCachedWindowsDirRule(aConfig, sandbox::FileSemantics::kAllowReadonly,
+                          FOLDERID_System, uR"(\AppLocker\MDM)"_ns);
+
+  // Read access to this device is required to make the AppLocker ioctl call.
+  result = aConfig->AllowFileAccess(sandbox::FileSemantics::kAllowReadonly,
+                                    LR"(\Device\SrpDevice)");
+  if (sandbox::SBOX_ALL_OK != result) {
+    NS_ERROR("Failed to add rule for SrpDevice.");
+    LOG_E("Failed (ResultCode %d) to add read access to SrpDevice", result);
   }
 }
 
@@ -447,18 +472,35 @@ Result<Ok, mozilla::ipc::LaunchError> SandboxBroker::LaunchApp(
         "Setting the reduced set of flags should always succeed");
   }
 
+  sandbox::MitigationFlags delayedMitigations =
+      config->GetDelayedProcessMitigations();
+
+  // Only prefer loading from the system directory as a delayed mitigation, and
+  // always enable this delayed mitigation. This means that:
+  //  - if the launcher or browser process chose to apply the mitigation, child
+  //    processes will have it enabled at startup automatically anyway;
+  //  - even if the launcher or browser process chose not to apply the
+  //    mitigation, at least sandboxed child processes will run with the
+  //    mitigation once the sandbox starts (by this time, they will already
+  //    have loaded the Visual C++ runtime DLLs, so these are no longer a
+  //    concern; also, although some sandboxed child processes can start new
+  //    processes, they never start new *Firefox* processes).
+  // Refer to EnablePreferLoadFromSystem32IfCompatible for more details.
+  MOZ_ASSERT(!(config->GetProcessMitigations() &
+               sandbox::MITIGATION_IMAGE_LOAD_PREFER_SYS32));
+  delayedMitigations |= sandbox::MITIGATION_IMAGE_LOAD_PREFER_SYS32;
+
   // Bug 1936749: MpDetours.dll injection is incompatible with ACG.
   constexpr sandbox::MitigationFlags kDynamicCodeFlags =
       sandbox::MITIGATION_DYNAMIC_CODE_DISABLE |
       sandbox::MITIGATION_DYNAMIC_CODE_DISABLE_WITH_OPT_OUT;
-  sandbox::MitigationFlags delayedMitigations =
-      config->GetDelayedProcessMitigations();
   if ((delayedMitigations & kDynamicCodeFlags) &&
       ::GetModuleHandleW(L"MpDetours.dll")) {
     delayedMitigations &= ~kDynamicCodeFlags;
-    SANDBOX_SUCCEED_OR_CRASH(
-        config->SetDelayedProcessMitigations(delayedMitigations));
   }
+
+  SANDBOX_SUCCEED_OR_CRASH(
+      config->SetDelayedProcessMitigations(delayedMitigations));
 
   EnsureAppLockerAccess(config);
 
@@ -500,9 +542,8 @@ Result<Ok, mozilla::ipc::LaunchError> SandboxBroker::LaunchApp(
 
   // Create the sandboxed process
   PROCESS_INFORMATION targetInfo = {0};
-  sandbox::ResultCode result;
   DWORD last_error = ERROR_SUCCESS;
-  result =
+  sandbox::ResultCode result =
       sBrokerService->SpawnTarget(aPath, aArguments, aEnvironment,
                                   std::move(mPolicy), &last_error, &targetInfo);
   if (sandbox::SBOX_ALL_OK != result) {
@@ -625,7 +666,7 @@ static sandbox::ResultCode AllowProxyLoadFromBinDir(
   // mozglue.dll, nss3.dll, etc.
   nsAutoString rulePath(*sBinDir);
   rulePath.Append(u"\\*"_ns);
-  return aConfig->AllowExtraDlls(rulePath.get());
+  return aConfig->AllowExtraDll(rulePath.get());
 }
 
 static sandbox::ResultCode AddCigToConfig(
@@ -652,7 +693,7 @@ static sandbox::ResultCode AddCigToConfig(
       }
 
       for (const wchar_t* path : exceptionModules.ref()) {
-        result = aConfig->AllowExtraDlls(path);
+        result = aConfig->AllowExtraDll(path);
         if (result != sandbox::SBOX_ALL_OK) {
           return result;
         }
@@ -705,6 +746,30 @@ static sandbox::MitigationFlags DynamicCodeFlagForSystemMediaLibraries() {
     return sandbox::MitigationFlags{};
   }();
   return dynamicCodeFlag;
+}
+
+static auto GetProcessUserSidString() {
+  std::unique_ptr<wchar_t, LocalFreeDeleter> userSidString;
+  std::unique_ptr<HANDLE, CloseHandleDeleter> tokenHandle;
+  if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY,
+                          getter_Transfers(tokenHandle))) {
+    return userSidString;
+  }
+
+  BYTE tokenUserBuffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+  DWORD len = sizeof(tokenUserBuffer);
+  if (!::GetTokenInformation(tokenHandle.get(), TokenUser, &tokenUserBuffer,
+                             len, &len)) {
+    return userSidString;
+  }
+
+  auto* tokenUser = reinterpret_cast<TOKEN_USER*>(tokenUserBuffer);
+  if (!::ConvertSidToStringSidW(tokenUser->User.Sid,
+                                getter_Transfers(userSidString))) {
+    userSidString.reset();
+  }
+
+  return userSidString;
 }
 
 // Process fails to start in LPAC with ASan build
@@ -869,19 +934,16 @@ static sandbox::ResultCode AddAndConfigureAppContainerProfile(
     return sandbox::SBOX_ERROR_CREATE_APPCONTAINER;
   }
 
-  // The bool parameter is called create_profile, but in fact it tries to create
-  // and then opens if it already exists. So always passing true is fine.
-  bool createOrOpenProfile = true;
   nsAutoString packageName = aPackagePrefix + uniquePackageStr;
   sandbox::ResultCode result =
-      aConfig->AddAppContainerProfile(packageName.get(), createOrOpenProfile);
+      aConfig->AddAppContainerProfile(packageName.get());
   if (result != sandbox::SBOX_ALL_OK) {
     return result;
   }
 
   // This looks odd, but unfortunately holding a scoped_refptr and
   // dereferencing has DCHECKs that cause a linking problem.
-  sandbox::AppContainer* appContainer = aConfig->GetAppContainer().get();
+  sandbox::AppContainer* appContainer = aConfig->GetAppContainer();
   appContainer->SetEnableLowPrivilegeAppContainer(true);
 
   for (auto wkCap : aWellKnownCapabilites) {
@@ -896,22 +958,26 @@ static sandbox::ResultCode AddAndConfigureAppContainerProfile(
 }
 #endif
 
-void AddShaderCachesToPolicy(sandbox::TargetConfig* aConfig,
+void AddShaderCachesToPolicy(sandboxing::SizeTrackingConfig* aConfig,
                              int32_t aSandboxLevel) {
   // The GPU process needs to write to a shader cache for performance reasons
   if (sProfileDir) {
-    // Currently the GPU process creates the shader-cache directory if it
-    // doesn't exist, so we have to give FILES_ALLOW_ANY access.
-    // FILES_ALLOW_DIR_ANY has been seen to fail on an existing profile although
-    // the root cause hasn't been found. FILES_ALLOW_DIR_ANY has also been
-    // removed from the sandbox code upstream.
-    // It is possible that we might be able to use FILES_ALLOW_READONLY for the
-    // dir if it is already created, bug 1966157 has been filed to track.
-    AddCachedDirRule(aConfig, sandbox::FileSemantics::kAllowAny, sProfileDir,
-                     u"\\shader-cache"_ns);
+    // Create the shader-cache dir ourselves, so we only need to give read
+    // access to it.
+    static constexpr auto kShaderCacheDir = u"\\shader-cache"_ns;
+    static constexpr auto kShaderCacheDirAnyEntry = u"\\shader-cache\\*"_ns;
+    nsAutoString rulePath(*sProfileDir);
+    rulePath.Append(kShaderCacheDir);
+    if (!::CreateDirectoryW(rulePath.get(), nullptr) &&
+        ::GetLastError() != ERROR_ALREADY_EXISTS) {
+      LOG_W("Failed to create shader-cache");
+    }
+
+    AddCachedDirRule(aConfig, sandbox::FileSemantics::kAllowReadonly,
+                     sProfileDir, kShaderCacheDir);
 
     AddCachedDirRule(aConfig, sandbox::FileSemantics::kAllowAny, sProfileDir,
-                     u"\\shader-cache\\*"_ns);
+                     kShaderCacheDirAnyEntry);
   }
 
   // Add GPU specific shader cache rules.
@@ -964,6 +1030,11 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
   if (aSandboxLevel >= 20) {
     jobLevel = sandbox::JobLevel::kLockdown;
     accessTokenLevel = sandbox::USER_LOCKDOWN;
+    initialIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
+    delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_UNTRUSTED;
+  } else if (aSandboxLevel >= 9) {
+    jobLevel = sandbox::JobLevel::kLockdown;
+    accessTokenLevel = sandbox::USER_LOCKDOWN_WITH_TRAVERSE;
     initialIntegrityLevel = sandbox::INTEGRITY_LEVEL_LOW;
     delayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_UNTRUSTED;
   } else if (aSandboxLevel >= 8) {
@@ -1043,13 +1114,30 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
     config->SetDesktop(sandbox::Desktop::kAlternateWinstation);
   }
 
+  if (StaticPrefs::security_sandbox_content_close_ksecdd_handle()) {
+    // bug 2006941 and bug 2008739 and bug 2022584 - Trellix DLP uses these
+    // functions, so don't do this if their DLLs are loaded
+    bool isTrellixDllLoaded;
+#if defined(_M_X64)
+    isTrellixDllLoaded = !!::GetModuleHandleW(L"fcagff64.dll") ||
+                         !!::GetModuleHandleW(L"fcagff64hc.dll");
+#elif defined(_M_ARM64)
+    isTrellixDllLoaded = !!::GetModuleHandleW(L"fcagffarm64hc.dll");
+#else
+    isTrellixDllLoaded = !!::GetModuleHandleW(L"fcagff.dll");
+#endif
+    if (!isTrellixDllLoaded) {
+      config->AddKernelObjectToClose(sandbox::HandleToClose::kKsecDD);
+    }
+  }
+
   sandbox::MitigationFlags mitigations =
       sandbox::MITIGATION_BOTTOM_UP_ASLR | sandbox::MITIGATION_HEAP_TERMINATE |
       sandbox::MITIGATION_SEHOP | sandbox::MITIGATION_DEP_NO_ATL_THUNK |
       sandbox::MITIGATION_DEP | sandbox::MITIGATION_EXTENSION_POINT_DISABLE |
+      sandbox::MITIGATION_KTM_COMPONENT | sandbox::MITIGATION_FSCTL_DISABLED |
       sandbox::MITIGATION_IMAGE_LOAD_NO_REMOTE |
-      sandbox::MITIGATION_IMAGE_LOAD_NO_LOW_LABEL |
-      sandbox::MITIGATION_IMAGE_LOAD_PREFER_SYS32;
+      sandbox::MITIGATION_IMAGE_LOAD_NO_LOW_LABEL;
 
 #if defined(_M_ARM64)
   // Disable CFG on older versions of ARM64 Windows to avoid a crash in COM.
@@ -1095,8 +1183,9 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
                        "what happened?");
   } else {
     // Add rule to allow access to user specific fonts.
-    AddCachedDirRule(config, sandbox::FileSemantics::kAllowReadonly,
-                     sLocalAppDataDir, u"\\Microsoft\\Windows\\Fonts\\*"_ns);
+    AddCachedWindowsDirRule(config, sandbox::FileSemantics::kAllowReadonly,
+                            FOLDERID_LocalAppData,
+                            u"\\Microsoft\\Windows\\Fonts\\*"_ns);
 
     // Add rule to allow read access to installation directory.
     AddCachedDirRule(config, sandbox::FileSemantics::kAllowReadonly, sBinDir,
@@ -1117,24 +1206,9 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
 #endif
   }
 
-  // Add the policy for the client side of a pipe. It is just a file
-  // in the \pipe\ namespace. We restrict it to pipes that start with
-  // "chrome." so the sandboxed process cannot connect to system services.
-  result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
-                                   L"\\??\\pipe\\chrome.*");
-  MOZ_RELEASE_ASSERT(
-      sandbox::SBOX_ALL_OK == result,
-      "With these static arguments AddRule should never fail, what happened?");
-
   // Add the policy for the client side of the crash server pipe.
   result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
                                    L"\\??\\pipe\\gecko-crash-server-pipe.*");
-  MOZ_RELEASE_ASSERT(
-      sandbox::SBOX_ALL_OK == result,
-      "With these static arguments AddRule should never fail, what happened?");
-
-  // Allow content processes to use complex line breaking brokering.
-  result = config->AllowLineBreaking();
   MOZ_RELEASE_ASSERT(
       sandbox::SBOX_ALL_OK == result,
       "With these static arguments AddRule should never fail, what happened?");
@@ -1154,6 +1228,19 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
     // USER_RESTRCITED will also block access to the KnownDlls list, so we force
     // that path to fall-back to the normal loading path.
     config->SetForceKnownDllLoadingFallback();
+
+    // If platform video encoding is not remote it requires the KsecDD device.
+    if (!StaticPrefs::media_use_remote_encoder_video_platform()) {
+      result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
+                                       LR"(\Device\KsecDD)");
+      if (sandbox::SBOX_ALL_OK != result) {
+        NS_ERROR("Failed to add rule for KsecDD.");
+        LOG_E("Failed (ResultCode %d) to add read access to KsecDD", result);
+      }
+    }
+
+    // We should be able to remove access to these media registry keys below
+    // once encoding has moved out of the content process (bug 1972552).
 
     // Read access for MF Media Source Activate and subkeys/values.
     result = config->AllowRegistryRead(
@@ -1207,12 +1294,41 @@ void SandboxBroker::SetSecurityLevelForContentProcess(int32_t aSandboxLevel,
       }
     }
 #endif
+  }
 
-    // We still currently create IPC named pipes in the content process.
-    result = config->AllowNamedPipes(L"\\\\.\\pipe\\chrome.*");
-    MOZ_RELEASE_ASSERT(
-        sandbox::SBOX_ALL_OK == result,
-        "With these static arguments AddRule should never fail.");
+  if (aSandboxLevel >= 9) {
+    // Before reading the media registry keys (specified for aSandboxLevel >= 8)
+    // the user's Classes key is read. We lose access to this at
+    // USER_LOCKDOWN_WITH_TRAVERSE because we no longer have the Restricted SID.
+    // We should be able to remove this once encoding has moved out of the
+    // content process (bug 1972552).
+    auto userSidString = GetProcessUserSidString();
+    if (userSidString) {
+      std::wstring userClassKeyName(L"HKEY_USERS\\");
+      userClassKeyName += userSidString.get();
+      userClassKeyName += L"_Classes";
+      result = config->AllowRegistryRead(userClassKeyName.c_str());
+      if (sandbox::SBOX_ALL_OK != result) {
+        NS_ERROR("Failed to add rule for user's Classes.");
+        LOG_E("Failed (ResultCode %d) to add rule for user's Classes.", result);
+      }
+    } else {
+      NS_ERROR("Failed to get user's SID.");
+      LOG_E("Failed to get user's SID. %lx", ::GetLastError());
+    }
+
+    // Required for GetUserGeoID, which is used to get timezone information.
+    bool geoRuleSet =
+        config->AllowRegistryRead(L"HKEY_CURRENT_USER") ==
+            sandbox::SBOX_ALL_OK &&
+        config->AllowRegistryRead(
+            L"HKEY_CURRENT_USER\\Control Panel\\International\\Geo") ==
+            sandbox::SBOX_ALL_OK;
+    if (!geoRuleSet) {
+      NS_ERROR("Failed to add rule for International Geo.");
+      LOG_E("Failed (ResultCode %d) to add rule for International Geo.",
+            result);
+    }
   }
 }
 
@@ -1237,6 +1353,8 @@ void SandboxBroker::SetSecurityLevelForGPUProcess(int32_t aSandboxLevel) {
   sandbox::MitigationFlags initialMitigations =
       sandbox::MITIGATION_BOTTOM_UP_ASLR | sandbox::MITIGATION_HEAP_TERMINATE |
       sandbox::MITIGATION_SEHOP | sandbox::MITIGATION_DEP_NO_ATL_THUNK |
+      sandbox::MITIGATION_EXTENSION_POINT_DISABLE |
+      sandbox::MITIGATION_KTM_COMPONENT | sandbox::MITIGATION_FSCTL_DISABLED |
       sandbox::MITIGATION_IMAGE_LOAD_NO_REMOTE |
       sandbox::MITIGATION_IMAGE_LOAD_NO_LOW_LABEL | sandbox::MITIGATION_DEP;
 
@@ -1262,28 +1380,47 @@ void SandboxBroker::SetSecurityLevelForGPUProcess(int32_t aSandboxLevel) {
   config->SetLockdownDefaultDacl();
   config->AddRestrictingRandomSid();
 
-  // Add the policy for the client side of a pipe. It is just a file
-  // in the \pipe\ namespace. We restrict it to pipes that start with
-  // "chrome." so the sandboxed process cannot connect to system services.
-  SANDBOX_SUCCEED_OR_CRASH(config->AllowFileAccess(
-      sandbox::FileSemantics::kAllowAny, L"\\??\\pipe\\chrome.*"));
+  // Policy wrapper to keep track of available rule space. We allow two spare
+  // pages for generic process rules and to allow for padding that occurs in
+  // LowLevelPolicy::Done. See bug 2009140.
+  // Note that we plan to move to a single font access rule in bug 2002995. This
+  // will remove the need for individual rules and mean that we can reduce
+  // sandbox::kPolMemPageCount.
+  sandboxing::SizeTrackingConfig trackingConfig(config,
+                                                sandbox::kPolMemPageCount - 2);
 
   // Add the policy for the client side of the crash server pipe.
   SANDBOX_SUCCEED_OR_CRASH(
-      config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
-                              L"\\??\\pipe\\gecko-crash-server-pipe.*"));
+      trackingConfig.AllowFileAccess(sandbox::FileSemantics::kAllowAny,
+                                     L"\\??\\pipe\\gecko-crash-server-pipe.*"));
 
   // Add rule to allow read access to installation directory.
-  AddCachedDirRule(config, sandbox::FileSemantics::kAllowReadonly, sBinDir,
-                   u"\\*"_ns);
+  AddCachedDirRule(&trackingConfig, sandbox::FileSemantics::kAllowReadonly,
+                   sBinDir, u"\\*"_ns);
+
+  AddShaderCachesToPolicy(&trackingConfig, aSandboxLevel);
 
   if (aSandboxLevel >= 2) {
-    // Add rule to allow access to user specific fonts.
-    AddCachedDirRule(config, sandbox::FileSemantics::kAllowReadonly,
-                     sLocalAppDataDir, u"\\Microsoft\\Windows\\Fonts\\*"_ns);
+    // We don't want to add a rule directly here but use the same retrieval and
+    // caching mechanism to get the Windows user's dirs.
+    EnsureWindowsDirCached(FOLDERID_Profile, sWindowsProfileDir,
+                           "Failed to get Windows Profile folder");
+    EnsureWindowsDirCached(FOLDERID_LocalAppData, sLocalAppDataDir,
+                           "Failed to get Windows LocalAppData folder");
+    EnsureWindowsDirCached(FOLDERID_RoamingAppData, sRoamingAppDataDir,
+                           "Failed to get Windows RoamingAppData folder");
+    if (sWindowsProfileDir && sLocalAppDataDir && sRoamingAppDataDir) {
+      sandboxing::UserFontConfigHelper configHelper(
+          LR"(Software\Microsoft\Windows NT\CurrentVersion\Fonts)",
+          *sWindowsProfileDir, *sLocalAppDataDir, *sRoamingAppDataDir);
+      if (!configHelper.AddRules(trackingConfig)) {
+        // We've run out of space for font rules, so fall back to
+        // USER_INTERACTIVE to maintain access to all user fonts.
+        SANDBOX_SUCCEED_OR_CRASH(config->SetTokenLevel(
+            initialTokenLevel, sandbox::USER_INTERACTIVE));
+      }
+    }
   }
-
-  AddShaderCachesToPolicy(config, aSandboxLevel);
 }
 
 #define SANDBOX_ENSURE_SUCCESS(result, message)          \
@@ -1328,9 +1465,9 @@ bool SandboxBroker::SetSecurityLevelForRDDProcess() {
       sandbox::MITIGATION_SEHOP | sandbox::MITIGATION_EXTENSION_POINT_DISABLE |
       sandbox::MITIGATION_DEP_NO_ATL_THUNK | sandbox::MITIGATION_DEP |
       sandbox::MITIGATION_NONSYSTEM_FONT_DISABLE |
+      sandbox::MITIGATION_KTM_COMPONENT | sandbox::MITIGATION_FSCTL_DISABLED |
       sandbox::MITIGATION_IMAGE_LOAD_NO_REMOTE |
-      sandbox::MITIGATION_IMAGE_LOAD_NO_LOW_LABEL |
-      sandbox::MITIGATION_IMAGE_LOAD_PREFER_SYS32;
+      sandbox::MITIGATION_IMAGE_LOAD_NO_LOW_LABEL;
 
   if (StaticPrefs::security_sandbox_rdd_shadow_stack_enabled()) {
     mitigations |= sandbox::MITIGATION_CET_COMPAT_MODE;
@@ -1353,15 +1490,6 @@ bool SandboxBroker::SetSecurityLevelForRDDProcess() {
 
   result = AddCigToConfig(config);
   SANDBOX_ENSURE_SUCCESS(result, "Failed to initialize signed policy rules.");
-
-  // Add the policy for the client side of a pipe. It is just a file
-  // in the \pipe\ namespace. We restrict it to pipes that start with
-  // "chrome." so the sandboxed process cannot connect to system services.
-  result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
-                                   L"\\??\\pipe\\chrome.*");
-  SANDBOX_ENSURE_SUCCESS(
-      result,
-      "With these static arguments AddRule should never fail, what happened?");
 
   // Add the policy for the client side of the crash server pipe.
   result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
@@ -1409,9 +1537,9 @@ bool SandboxBroker::SetSecurityLevelForSocketProcess() {
       sandbox::MITIGATION_SEHOP | sandbox::MITIGATION_EXTENSION_POINT_DISABLE |
       sandbox::MITIGATION_DEP_NO_ATL_THUNK | sandbox::MITIGATION_DEP |
       sandbox::MITIGATION_NONSYSTEM_FONT_DISABLE |
+      sandbox::MITIGATION_KTM_COMPONENT | sandbox::MITIGATION_FSCTL_DISABLED |
       sandbox::MITIGATION_IMAGE_LOAD_NO_REMOTE |
-      sandbox::MITIGATION_IMAGE_LOAD_NO_LOW_LABEL |
-      sandbox::MITIGATION_IMAGE_LOAD_PREFER_SYS32;
+      sandbox::MITIGATION_IMAGE_LOAD_NO_LOW_LABEL;
 
   if (StaticPrefs::security_sandbox_socket_shadow_stack_enabled()) {
     mitigations |= sandbox::MITIGATION_CET_COMPAT_MODE;
@@ -1435,15 +1563,6 @@ bool SandboxBroker::SetSecurityLevelForSocketProcess() {
 
   result = AddCigToConfig(config);
   SANDBOX_ENSURE_SUCCESS(result, "Failed to initialize signed policy rules.");
-
-  // Add the policy for the client side of a pipe. It is just a file
-  // in the \pipe\ namespace. We restrict it to pipes that start with
-  // "chrome." so the sandboxed process cannot connect to system services.
-  result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
-                                   L"\\??\\pipe\\chrome.*");
-  SANDBOX_ENSURE_SUCCESS(
-      result,
-      "With these static arguments AddRule should never fail, what happened?");
 
   // Add the policy for the client side of the crash server pipe.
   result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
@@ -1478,10 +1597,12 @@ struct UtilitySandboxProps {
       sandbox::MITIGATION_SEHOP | sandbox::MITIGATION_EXTENSION_POINT_DISABLE |
       sandbox::MITIGATION_DEP_NO_ATL_THUNK | sandbox::MITIGATION_DEP |
       sandbox::MITIGATION_NONSYSTEM_FONT_DISABLE |
+      sandbox::MITIGATION_KTM_COMPONENT | sandbox::MITIGATION_FSCTL_DISABLED |
       sandbox::MITIGATION_IMAGE_LOAD_NO_REMOTE |
       sandbox::MITIGATION_IMAGE_LOAD_NO_LOW_LABEL |
-      sandbox::MITIGATION_IMAGE_LOAD_PREFER_SYS32 |
       sandbox::MITIGATION_CET_COMPAT_MODE;
+
+  sandbox::MitigationFlags mExcludedInitialMitigations = 0;
 
   sandbox::MitigationFlags mDelayedMitigations =
       sandbox::MITIGATION_STRICT_HANDLE_CHECKS |
@@ -1567,11 +1688,13 @@ struct WindowsUtilitySandboxProps : public UtilitySandboxProps {
   WindowsUtilitySandboxProps() {
     mJobLevel = sandbox::JobLevel::kInteractive;
     mDelayedTokenLevel = sandbox::USER_RESTRICTED_SAME_ACCESS;
-    mDesktop = sandbox::Desktop::kAlternateDesktop;
+    mDesktop = sandbox::Desktop::kDefault;
     mInitialIntegrityLevel = sandbox::INTEGRITY_LEVEL_MEDIUM;
     mDelayedIntegrityLevel = sandbox::INTEGRITY_LEVEL_MEDIUM;
     mUseWin32kLockdown = false;
     mUseCig = false;
+    mExcludedInitialMitigations =
+        sandbox::MITIGATION_KTM_COMPONENT | sandbox::MITIGATION_FSCTL_DISABLED;
     mDelayedMitigations = sandbox::MITIGATION_STRICT_HANDLE_CHECKS |
                           sandbox::MITIGATION_DLL_SEARCH_ORDER;
   }
@@ -1617,7 +1740,8 @@ void LogUtilitySandboxProps(const UtilitySandboxProps& us) {
                       us.mUseWin32kLockdown ? "yes" : "no");
   logMsg.AppendPrintf("\tUse CIG: %s\n", us.mUseCig ? "yes" : "no");
   logMsg.AppendPrintf("\tInitial mitigations: %016llx\n",
-                      static_cast<uint64_t>(us.mInitialMitigations));
+                      static_cast<uint64_t>(us.mInitialMitigations &
+                                            ~us.mExcludedInitialMitigations));
   logMsg.AppendPrintf("\tDelayed mitigations: %016llx\n",
                       static_cast<uint64_t>(us.mDelayedMitigations));
   if (us.mPackagePrefix.IsEmpty()) {
@@ -1674,7 +1798,8 @@ bool BuildUtilitySandbox(sandbox::TargetConfig* config,
     config->AddRestrictingRandomSid();
   }
 
-  result = config->SetProcessMitigations(us.mInitialMitigations);
+  result = config->SetProcessMitigations(us.mInitialMitigations &
+                                         ~us.mExcludedInitialMitigations);
   SANDBOX_ENSURE_SUCCESS(result, "Invalid flags for SetProcessMitigations.");
 
   result = config->SetDelayedProcessMitigations(us.mDelayedMitigations);
@@ -1707,15 +1832,6 @@ bool BuildUtilitySandbox(sandbox::TargetConfig* config,
   }
 #endif
 
-  // Add the policy for the client side of a pipe. It is just a file
-  // in the \pipe\ namespace. We restrict it to pipes that start with
-  // "chrome." so the sandboxed process cannot connect to system services.
-  result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
-                                   L"\\??\\pipe\\chrome.*");
-  SANDBOX_ENSURE_SUCCESS(
-      result,
-      "With these static arguments AddRule should never fail, what happened?");
-
   // Add the policy for the client side of the crash server pipe.
   result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
                                    L"\\??\\pipe\\gecko-crash-server-pipe.*");
@@ -1728,6 +1844,8 @@ bool BuildUtilitySandbox(sandbox::TargetConfig* config,
 
 bool SandboxBroker::SetSecurityLevelForUtilityProcess(
     mozilla::ipc::SandboxingKind aSandbox) {
+  MOZ_ASSERT(IsUtilitySandboxEnabled(aSandbox));
+
   if (!mPolicy) {
     return false;
   }
@@ -1740,16 +1858,31 @@ bool SandboxBroker::SetSecurityLevelForUtilityProcess(
     case mozilla::ipc::SandboxingKind::UTILITY_AUDIO_DECODING_WMF:
       return BuildUtilitySandbox(config, UtilityAudioDecodingWmfSandboxProps());
 #ifdef MOZ_WMF_MEDIA_ENGINE
-    case mozilla::ipc::SandboxingKind::MF_MEDIA_ENGINE_CDM:
-      return BuildUtilitySandbox(config, UtilityMfMediaEngineCdmSandboxProps());
+    case mozilla::ipc::SandboxingKind::MF_MEDIA_ENGINE_CDM: {
+      if (!BuildUtilitySandbox(config, UtilityMfMediaEngineCdmSandboxProps())) {
+        return false;
+      }
+      // Allow MFTEnumEx to enumerate registered MFT decoders/encoders.
+      auto result = config->AllowRegistryRead(
+          L"HKEY_LOCAL_MACHINE\\Software\\Classes\\MediaFoundation\\*");
+      if (sandbox::SBOX_ALL_OK != result) {
+        NS_WARNING("Failed to add MediaFoundation registry rule for MFCDM.");
+      }
+      // MFTEnumEx reads CLSID subkeys to enumerate registered Media Foundation
+      // Transforms. The exact CLSIDs vary per system and are not known at build
+      // time, so a wildcard covering the full CLSID hive is required.
+      result = config->AllowRegistryRead(
+          L"HKEY_LOCAL_MACHINE\\Software\\Classes\\CLSID\\*");
+      if (sandbox::SBOX_ALL_OK != result) {
+        NS_WARNING("Failed to add CLSID registry rule for MFCDM.");
+      }
+      return true;
+    }
 #endif
     case mozilla::ipc::SandboxingKind::WINDOWS_UTILS:
       return BuildUtilitySandbox(config, WindowsUtilitySandboxProps());
-    case mozilla::ipc::SandboxingKind::WINDOWS_FILE_DIALOG:
-      // This process type is not sandboxed. (See commentary in
-      // `ipc::IsUtilitySandboxEnabled()`.)
-      MOZ_ASSERT_UNREACHABLE("No sandboxing for this process type");
-      return false;
+    case mozilla::ipc::SandboxingKind::HW_INFERENCE:
+      return BuildUtilitySandbox(config, GenericUtilitySandboxProps());
     default:
       MOZ_ASSERT_UNREACHABLE("Unknown sandboxing value");
       return false;
@@ -1794,6 +1927,7 @@ bool SandboxBroker::SetSecurityLevelForGMPlugin(
       sandbox::MITIGATION_BOTTOM_UP_ASLR | sandbox::MITIGATION_HEAP_TERMINATE |
       sandbox::MITIGATION_SEHOP | sandbox::MITIGATION_EXTENSION_POINT_DISABLE |
       sandbox::MITIGATION_NONSYSTEM_FONT_DISABLE |
+      sandbox::MITIGATION_KTM_COMPONENT | sandbox::MITIGATION_FSCTL_DISABLED |
       sandbox::MITIGATION_IMAGE_LOAD_NO_REMOTE |
       sandbox::MITIGATION_IMAGE_LOAD_NO_LOW_LABEL |
       sandbox::MITIGATION_DEP_NO_ATL_THUNK | sandbox::MITIGATION_DEP;
@@ -1835,15 +1969,6 @@ bool SandboxBroker::SetSecurityLevelForGMPlugin(
   result = config->SetDelayedProcessMitigations(mitigations);
   SANDBOX_ENSURE_SUCCESS(result,
                          "Invalid flags for SetDelayedProcessMitigations.");
-
-  // Add the policy for the client side of a pipe. It is just a file
-  // in the \pipe\ namespace. We restrict it to pipes that start with
-  // "chrome." so the sandboxed process cannot connect to system services.
-  result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
-                                   L"\\??\\pipe\\chrome.*");
-  SANDBOX_ENSURE_SUCCESS(
-      result,
-      "With these static arguments AddRule should never fail, what happened?");
 
   // Add the policy for the client side of the crash server pipe.
   result = config->AllowFileAccess(sandbox::FileSemantics::kAllowAny,
@@ -1947,10 +2072,7 @@ void SandboxBroker::ApplyLoggingConfig() {
 
   // Add dummy rules, so that we can log in the interception code.
   // We already have a file interception set up for the client side of pipes.
-  // Also, passing just "dummy" for file system policy causes win_utils.cc
-  // IsReparsePoint() to loop.
-  Unused << config->AllowNamedPipes(L"dummy");
-  Unused << config->AllowRegistryRead(L"HKEY_CURRENT_USER\\dummy");
+  (void)config->AllowRegistryRead(L"HKEY_CURRENT_USER\\dummy");
 }
 
 SandboxBroker::~SandboxBroker() = default;

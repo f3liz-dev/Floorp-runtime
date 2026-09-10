@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,6 +10,7 @@
 #include "mozilla/ComputedStyle.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/ReflowInput.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "nsCSSRendering.h"
 #include "nsDisplayList.h"
@@ -264,14 +264,13 @@ void nsTableRowFrame::RemoveFrame(DestroyContext& aContext, ChildListID aListID,
   // remove the cell from the cell map
   nsTableFrame* tableFrame = GetTableFrame();
   tableFrame->RemoveCell(cellFrame, GetRowIndex());
-
-  // Remove the frame and destroy it
-  mFrames.DestroyFrame(aContext, aOldFrame);
+  tableFrame->SetGeometryDirty();
 
   PresShell()->FrameNeedsReflow(this, IntrinsicDirty::FrameAndAncestors,
                                 NS_FRAME_HAS_DIRTY_CHILDREN);
 
-  tableFrame->SetGeometryDirty();
+  // Remove the frame and destroy it
+  nsContainerFrame::RemoveFrame(aContext, aListID, aOldFrame);
 }
 
 /* virtual */
@@ -355,7 +354,6 @@ void nsTableRowFrame::DidResize(ForceAlignTopForTableCell aForceAlignTop) {
 
         if (oldPos != newPos) {
           cellFrame->SetPosition(wm, newPos, containerSize);
-          nsTableFrame::RePositionViews(cellFrame);
         }
       }
 
@@ -380,11 +378,6 @@ void nsTableRowFrame::DidResize(ForceAlignTopForTableCell aForceAlignTop) {
     // to this height, it will get a special bsize reflow.
   }
   FinishAndStoreOverflow(&desiredSize);
-  if (HasView()) {
-    nsContainerFrame::SyncFrameViewAfterReflow(PresContext(), this, GetView(),
-                                               desiredSize.InkOverflow(),
-                                               ReflowChildFlags::Default);
-  }
   // Let our base class do the usual work
 }
 
@@ -398,9 +391,6 @@ Maybe<nscoord> nsTableRowFrame::GetRowBaseline(WritingMode aWM) {
   }
 
   // If we get here, we don't have a baseline on any of the cells in this row.
-  if (aWM.IsCentralBaseline()) {
-    return Nothing{};
-  }
   nscoord ascent = 0;
   for (nsIFrame* childFrame : mFrames) {
     MOZ_ASSERT(childFrame->IsTableCellFrame());
@@ -449,7 +439,7 @@ void nsTableRowFrame::UpdateBSize(nscoord aBSize, nsTableFrame* aTableFrame,
     SetContentBSize(aBSize);
   }
 
-  if (aCellFrame->HasVerticalAlignBaseline()) {
+  if (aCellFrame->HasTableCellAlignmentBaseline()) {
     if (auto ascent = aCellFrame->GetCellBaseline()) {
       // see if this is a long ascender
       if (mMaxCellAscent < *ascent) {
@@ -529,7 +519,11 @@ void nsTableRowFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
 
   DisplayOutline(aBuilder, aLists);
 
-  for (nsIFrame* kid : PrincipalChildList()) {
+  if (mFrames.IsEmpty() || HidesContent()) {
+    return;
+  }
+
+  for (nsIFrame* kid : mFrames) {
     BuildDisplayListForChild(aBuilder, kid, aLists);
   }
 }
@@ -567,7 +561,7 @@ nscoord nsTableRowFrame::CalcCellActualBSize(nsTableCellFrame* aCellFrame,
     // https://quirks.spec.whatwg.org/#the-table-cell-height-box-sizing-quirk
     specifiedBSize = bsizeStyleCoord->ToLength();
     if (PresContext()->CompatibilityMode() != eCompatibility_NavQuirks &&
-        position->mBoxSizing == StyleBoxSizing::Content) {
+        position->mBoxSizing == StyleBoxSizing::ContentBox) {
       specifiedBSize +=
           aCellFrame->GetLogicalUsedBorderAndPadding(aWM).BStartEnd(aWM);
     }
@@ -782,16 +776,6 @@ void nsTableRowFrame::ReflowChildren(nsPresContext* aPresContext,
 
         desiredSize.SetSize(wm, cellDesiredSize);
         desiredSize.mOverflowAreas = kidFrame->GetOverflowAreas();
-
-        // if we are in a floated table, our position is not yet established, so
-        // we cannot reposition our views the containing block will do this for
-        // us after positioning the table
-        if (!aTableFrame.IsFloating()) {
-          // Because we may have moved the frame we need to make sure any views
-          // are positioned properly. We have to do this, because any one of our
-          // parent frames could have moved and we have no way of knowing...
-          nsTableFrame::RePositionViews(kidFrame);
-        }
       }
 
       if (NS_UNCONSTRAINEDSIZE == aReflowInput.AvailableBSize()) {
@@ -855,7 +839,6 @@ void nsTableRowFrame::ReflowChildren(nsPresContext* aPresContext,
         // positioning.
         kidFrame->MovePositionBy(
             wm, LogicalPoint(wm, iCoord - origKidNormalPosition.I(wm), 0));
-        nsTableFrame::RePositionViews(kidFrame);
         // invalidate the new position
         kidFrame->InvalidateFrameSubtree();
       }
@@ -912,7 +895,6 @@ void nsTableRowFrame::ReflowChildren(nsPresContext* aPresContext,
         kidFrame->MovePositionBy(
             wm,
             LogicalPoint(wm, 0, kidFrame->BSize(wm) - aDesiredSize.BSize(wm)));
-        nsTableFrame::RePositionViews(kidFrame);
         // Do we need to InvalidateFrameSubtree() here?
       }
     }
@@ -1199,7 +1181,6 @@ nscoord nsTableRowFrame::CollapseRowIfNecessary(nscoord aRowOffset,
       OverflowAreas cellOverflow(cellPhysicalBounds, cellPhysicalBounds);
       cellFrame->FinishAndStoreOverflow(cellOverflow,
                                         cRect.Size(wm).GetPhysicalSize(wm));
-      nsTableFrame::RePositionViews(cellFrame);
       ConsiderChildOverflow(overflow, cellFrame);
 
       if (aRowOffset == 0) {
@@ -1212,8 +1193,6 @@ nscoord nsTableRowFrame::CollapseRowIfNecessary(nscoord aRowOffset,
   SetRect(wm, rowRect, containerSize);
   overflow.UnionAllWith(nsRect(0, 0, rowRect.Width(wm), rowRect.Height(wm)));
   FinishAndStoreOverflow(overflow, rowRect.Size(wm).GetPhysicalSize(wm));
-
-  nsTableFrame::RePositionViews(this);
   nsTableFrame::InvalidateTableFrame(this, oldRect, oldInkOverflow, false);
   return shift;
 }
@@ -1242,19 +1221,37 @@ void nsTableRowFrame::InsertCellFrame(nsTableCellFrame* aFrame,
 }
 
 nsTableRowFrame* nsTableRowFrame::GetPrevRow() const {
-  nsIFrame* prevSibling = GetPrevSibling();
-  MOZ_ASSERT(
-      !prevSibling || static_cast<nsTableRowFrame*>(do_QueryFrame(prevSibling)),
-      "How do we have a non-row sibling?");
-  return static_cast<nsTableRowFrame*>(prevSibling);
+  if (nsIFrame* prevSibling = GetPrevSibling()) {
+    MOZ_ASSERT(static_cast<nsTableRowFrame*>(do_QueryFrame(prevSibling)),
+               "How do we have a non-row sibling?");
+    return static_cast<nsTableRowFrame*>(prevSibling);
+  }
+  for (auto* pif = GetParent()->GetPrevInFlow(); pif;
+       pif = pif->GetPrevInFlow()) {
+    if (auto* sibling = pif->PrincipalChildList().LastChild()) {
+      MOZ_ASSERT(static_cast<nsTableRowFrame*>(do_QueryFrame(sibling)),
+                 "How do we have a non-row sibling?");
+      return static_cast<nsTableRowFrame*>(sibling);
+    }
+  }
+  return nullptr;
 }
 
 nsTableRowFrame* nsTableRowFrame::GetNextRow() const {
-  nsIFrame* nextSibling = GetNextSibling();
-  MOZ_ASSERT(
-      !nextSibling || static_cast<nsTableRowFrame*>(do_QueryFrame(nextSibling)),
-      "How do we have a non-row sibling?");
-  return static_cast<nsTableRowFrame*>(nextSibling);
+  if (nsIFrame* sibling = GetNextSibling()) {
+    MOZ_ASSERT(static_cast<nsTableRowFrame*>(do_QueryFrame(sibling)),
+               "How do we have a non-row sibling?");
+    return static_cast<nsTableRowFrame*>(sibling);
+  }
+  for (auto* nif = GetParent()->GetNextInFlow(); nif;
+       nif = nif->GetNextInFlow()) {
+    if (auto* sibling = nif->PrincipalChildList().FirstChild()) {
+      MOZ_ASSERT(static_cast<nsTableRowFrame*>(do_QueryFrame(sibling)),
+                 "How do we have a non-row sibling?");
+      return static_cast<nsTableRowFrame*>(sibling);
+    }
+  }
+  return nullptr;
 }
 
 // This property is only set on the first-in-flow of nsTableRowFrame.

@@ -12,9 +12,7 @@ import mozilla.components.concept.engine.EngineSession.TrackingProtectionPolicyF
 import org.mozilla.fenix.R
 import org.mozilla.fenix.utils.Settings
 
-/**
- * Handles the logic behind creating new [TrackingProtectionPolicy]s.
- */
+/** Handles the logic behind creating new [TrackingProtectionPolicy]s. */
 class TrackingProtectionPolicyFactory(
     private val settings: Settings,
     private val resources: Resources,
@@ -23,50 +21,51 @@ class TrackingProtectionPolicyFactory(
     /**
      * Constructs a [TrackingProtectionPolicy] based on current preferences.
      *
-     * @param normalMode whether or not tracking protection should be enabled
-     * in normal browsing mode, defaults to the current preference value.
-     * @param privateMode whether or not tracking protection should be enabled
-     * in private browsing mode, default to the current preference value.
+     * @param normalMode whether or not tracking protection should be enabled in normal browsing mode, defaults to the
+     *   current preference value.
+     * @param privateMode whether or not tracking protection should be enabled in private browsing mode, default to the
+     *   current preference value.
      * @return the constructed tracking protection policy based on preferences.
      */
-    @Suppress("ComplexMethod")
     fun createTrackingProtectionPolicy(
         normalMode: Boolean = settings.shouldUseTrackingProtection,
         privateMode: Boolean = settings.shouldUseTrackingProtection,
     ): TrackingProtectionPolicy {
         val trackingProtectionPolicy =
             when {
-                settings.useStrictTrackingProtection -> TrackingProtectionPolicy.strict(
-                    getAllowBaselineTrackingProtection(),
-                    getAllowConvenienceTrackingProtection(),
-                )
+                settings.useStrictTrackingProtection ->
+                    TrackingProtectionPolicy.strict(
+                        getAllowBaselineTrackingProtection(),
+                        getAllowConvenienceTrackingProtection(),
+                    )
                 settings.useCustomTrackingProtection -> return createCustomTrackingProtectionPolicy()
                 else -> TrackingProtectionPolicy.recommended()
             }
 
         return when {
-            normalMode && privateMode -> trackingProtectionPolicy.applyTCPIfNeeded(settings)
-            normalMode && !privateMode -> trackingProtectionPolicy.applyTCPIfNeeded(settings).forRegularSessionsOnly()
-            !normalMode && privateMode -> trackingProtectionPolicy.applyTCPIfNeeded(settings).forPrivateSessionsOnly()
+            normalMode && privateMode -> trackingProtectionPolicy.applyTCPIfNeeded()
+            normalMode && !privateMode -> trackingProtectionPolicy.applyTCPIfNeeded().forRegularSessionsOnly()
+            !normalMode && privateMode -> trackingProtectionPolicy.applyTCPIfNeeded().forPrivateSessionsOnly()
             else -> TrackingProtectionPolicy.none()
         }
     }
 
     private fun createCustomTrackingProtectionPolicy(): TrackingProtectionPolicy {
         return TrackingProtectionPolicy.select(
-            cookiePolicy = getCustomCookiePolicy(),
-            trackingCategories = getCustomTrackingCategories(),
-            cookiePurging = getCustomCookiePurgingPolicy(),
-            strictSocialTrackingProtection = settings.blockTrackingContentInCustomTrackingProtection,
-            allowListBaselineTrackingProtection = getAllowBaselineTrackingProtection(),
-            allowListConvenienceTrackingProtection = getAllowConvenienceTrackingProtection(),
-        ).let {
-            if (settings.blockTrackingContentSelectionInCustomTrackingProtection == "private") {
-                it.forPrivateSessionsOnly()
-            } else {
-                it
+                cookiePolicy = getCustomCookiePolicy(),
+                trackingCategories = getCustomTrackingCategories(),
+                cookiePurging = getCustomCookiePurgingPolicy(),
+                strictSocialTrackingProtection = settings.blockTrackingContentInCustomTrackingProtection,
+                allowListBaselineTrackingProtection = getAllowBaselineTrackingProtection(),
+                allowListConvenienceTrackingProtection = getAllowConvenienceTrackingProtection(),
+            )
+            .let {
+                if (settings.blockTrackingContentSelectionInCustomTrackingProtection == "private") {
+                    it.forPrivateSessionsOnly()
+                } else {
+                    it
+                }
             }
-        }
     }
 
     private fun getCustomCookiePolicy(): CookiePolicy {
@@ -85,12 +84,13 @@ class TrackingProtectionPolicyFactory(
     }
 
     private fun getCustomTrackingCategories(): Array<TrackingProtectionPolicy.TrackingCategory> {
-        val categories = arrayListOf(
-            TrackingProtectionPolicy.TrackingCategory.AD,
-            TrackingProtectionPolicy.TrackingCategory.ANALYTICS,
-            TrackingProtectionPolicy.TrackingCategory.SOCIAL,
-            TrackingProtectionPolicy.TrackingCategory.MOZILLA_SOCIAL,
-        )
+        val categories =
+            arrayListOf(
+                TrackingProtectionPolicy.TrackingCategory.AD,
+                TrackingProtectionPolicy.TrackingCategory.ANALYTICS,
+                TrackingProtectionPolicy.TrackingCategory.SOCIAL,
+                TrackingProtectionPolicy.TrackingCategory.MOZILLA_SOCIAL,
+            )
 
         if (settings.blockTrackingContentInCustomTrackingProtection) {
             categories.add(TrackingProtectionPolicy.TrackingCategory.SCRIPTS_AND_SUB_RESOURCES)
@@ -122,30 +122,17 @@ class TrackingProtectionPolicyFactory(
     private fun getAllowConvenienceTrackingProtection(): Boolean {
         return when {
             settings.useStandardTrackingProtection -> true
-            settings.useStrictTrackingProtection ->
-                settings.strictAllowListBaselineTrackingProtection &&
-                    settings.strictAllowListConvenienceTrackingProtection
-            settings.useCustomTrackingProtection ->
-                settings.customAllowListBaselineTrackingProtection &&
-                    settings.customAllowListConvenienceTrackingProtection
-            else -> false
+            settings.useStrictTrackingProtection -> settings.strictAllowListConvenienceTrackingProtection
+            else -> settings.customAllowListConvenienceTrackingProtection
         }
     }
 }
 
 @VisibleForTesting
-internal fun TrackingProtectionPolicyForSessionTypes.applyTCPIfNeeded(
-    settings: Settings,
-): TrackingProtectionPolicyForSessionTypes {
-    val updatedCookiePolicy = if (settings.enabledTotalCookieProtection) {
-        CookiePolicy.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS
-    } else {
-        cookiePolicy
-    }
-
+internal fun TrackingProtectionPolicyForSessionTypes.applyTCPIfNeeded(): TrackingProtectionPolicyForSessionTypes {
     return TrackingProtectionPolicy.select(
         trackingCategories = trackingCategories,
-        cookiePolicy = updatedCookiePolicy,
+        cookiePolicy = CookiePolicy.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS,
         strictSocialTrackingProtection = strictSocialTrackingProtection,
         cookiePurging = cookiePurging,
         bounceTrackingProtectionMode = bounceTrackingProtectionMode,

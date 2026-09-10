@@ -11,6 +11,8 @@ import android.graphics.Color
 import android.os.Looper.getMainLooper
 import android.view.View
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import mozilla.components.browser.engine.gecko.GeckoEngineView.Companion.DARK_COVER
 import mozilla.components.browser.engine.gecko.selection.GeckoSelectionActionDelegate
 import mozilla.components.concept.engine.mediaquery.PreferredColorScheme
@@ -21,12 +23,11 @@ import mozilla.components.support.test.whenever
 import mozilla.components.test.ReflectionUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.mockito.Mockito.doReturn
 import org.mockito.Mockito.never
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
@@ -161,9 +162,10 @@ class GeckoEngineViewTest {
 
     @Test
     fun `after rendering currentSelection should be a GeckoSelectionActionDelegate`() {
-        val engineView = GeckoEngineView(context).apply {
-            selectionActionDelegate = mock()
-        }
+        val engineView =
+            GeckoEngineView(context).apply {
+                selectionActionDelegate = mock()
+            }
         val engineSession = mock<GeckoEngineSession>()
         val geckoSession = mock<GeckoSession>()
         val geckoView = mock<NestedGeckoView>()
@@ -173,16 +175,17 @@ class GeckoEngineViewTest {
 
         engineView.render(engineSession)
 
-        assertTrue(engineView.currentSelection is GeckoSelectionActionDelegate)
+        assertIs<GeckoSelectionActionDelegate>(engineView.currentSelection)
     }
 
     @Test
     fun `will attach and detach selection action delegate when rendering and releasing`() {
         val delegate: SelectionActionDelegate = mock()
 
-        val engineView = GeckoEngineView(context).apply {
-            selectionActionDelegate = delegate
-        }
+        val engineView =
+            GeckoEngineView(context).apply {
+                selectionActionDelegate = delegate
+            }
         val engineSession = mock<GeckoEngineSession>()
         val geckoSession = mock<GeckoSession>()
         val geckoView = mock<NestedGeckoView>()
@@ -195,8 +198,8 @@ class GeckoEngineViewTest {
         val captor = argumentCaptor<GeckoSession.SelectionActionDelegate>()
         verify(geckoSession).selectionActionDelegate = captor.capture()
 
-        assertTrue(captor.value is GeckoSelectionActionDelegate)
-        val capturedDelegate = captor.value as GeckoSelectionActionDelegate
+        val capturedDelegate = captor.value
+        assertIs<GeckoSelectionActionDelegate>(capturedDelegate)
 
         assertEquals(delegate, capturedDelegate.customDelegate)
 
@@ -211,9 +214,10 @@ class GeckoEngineViewTest {
     fun `will attach and detach selection action delegate when rendering new session`() {
         val delegate: SelectionActionDelegate = mock()
 
-        val engineView = GeckoEngineView(context).apply {
-            selectionActionDelegate = delegate
-        }
+        val engineView =
+            GeckoEngineView(context).apply {
+                selectionActionDelegate = delegate
+            }
         val engineSession = mock<GeckoEngineSession>()
         val geckoSession = mock<GeckoSession>()
         val geckoView = mock<NestedGeckoView>()
@@ -226,8 +230,8 @@ class GeckoEngineViewTest {
         val captor = argumentCaptor<GeckoSession.SelectionActionDelegate>()
         verify(geckoSession).selectionActionDelegate = captor.capture()
 
-        assertTrue(captor.value is GeckoSelectionActionDelegate)
-        val capturedDelegate = captor.value as GeckoSelectionActionDelegate
+        val capturedDelegate = captor.value
+        assertIs<GeckoSelectionActionDelegate>(capturedDelegate)
 
         assertEquals(delegate, capturedDelegate.customDelegate)
 
@@ -238,10 +242,37 @@ class GeckoEngineViewTest {
         engineView.render(
             mock<GeckoEngineSession>().apply {
                 whenever(this.geckoSession).thenReturn(mock())
-            },
+            }
         )
 
         verify(geckoSession).selectionActionDelegate = null
+    }
+
+    fun `WHEN rendering a new session THEN start observing scroll events`() {
+        val listener: GeckoVerticalScrollListener = mock()
+        val engineView =
+            GeckoEngineView(context).apply {
+                verticalScrollListener = listener
+            }
+        val geckoSession: GeckoSession = mock()
+        val engineSession = mock<GeckoEngineSession>()
+        doReturn(geckoSession).`when`(engineSession).geckoSession
+
+        engineView.render(engineSession)
+
+        verify(listener).observe(geckoSession)
+    }
+
+    fun `WHEN releasing a session THEN stop observing scroll events`() {
+        val listener: GeckoVerticalScrollListener = mock()
+        val engineView =
+            GeckoEngineView(context).apply {
+                verticalScrollListener = listener
+            }
+
+        engineView.release()
+
+        verify(listener).release()
     }
 
     @Test

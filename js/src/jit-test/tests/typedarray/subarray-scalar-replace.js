@@ -1,4 +1,4 @@
-// |jit-test| --ion-limit-script-size=off
+// |jit-test| --ion-limit-script-size=off; --ion-osr=off; --ion-inlining=off
 
 // Test scalar replacement of TypedArray.prototype.subarray objects.
 //
@@ -22,7 +22,7 @@ function testLengthAndByteLength() {
   var i32 = new Int32Array(10);
   var i64 = new BigInt64Array(10);
 
-  for (var i = 0; i < 100; ++i) {
+  function inner() {
     var sub_i8 = i8.subarray();
     assertEq(sub_i8.length, 10);
     assertEq(sub_i8.byteLength, 10 * Int8Array.BYTES_PER_ELEMENT);
@@ -38,6 +38,9 @@ function testLengthAndByteLength() {
     assertEq(sub_i64.byteLength, 6 * BigInt64Array.BYTES_PER_ELEMENT);
     assertRecoveredOnBailout(sub_i64, true);
   }
+  for (var i = 0; i < 100; ++i) {
+    inner();
+  }
 }
 testLengthAndByteLength();
 
@@ -47,7 +50,7 @@ function testByteOffset() {
   var i32 = new Int32Array(new ArrayBuffer(20 * Int32Array.BYTES_PER_ELEMENT), 8, 10);
   var i64 = new BigInt64Array(new ArrayBuffer(20 * BigInt64Array.BYTES_PER_ELEMENT), 16, 10);
 
-  for (var i = 0; i < 100; ++i) {
+  function inner() {
     var sub_i8 = i8.subarray();
     assertEq(sub_i8.byteOffset, 4);
     assertRecoveredOnBailout(sub_i8, true);
@@ -60,6 +63,9 @@ function testByteOffset() {
     assertEq(sub_i64.byteOffset, 16 + 3 * BigInt64Array.BYTES_PER_ELEMENT);
     assertRecoveredOnBailout(sub_i64, true);
   }
+  for (var i = 0; i < 100; ++i) {
+    inner();
+  }
 }
 testByteOffset();
 
@@ -69,7 +75,7 @@ function testGetElement() {
   var i32 = new Int32Array(10).map((v, k) => k * 1000);
   var i64 = new BigInt64Array(10).map((v, k) => BigInt(k) * 1_000_000_000_000n);
 
-  for (var i = 0; i < 100; ++i) {
+  function inner() {
     var sub_i8 = i8.subarray();
     var sum = 0;
     for (var j = 0; j < sub_i8.length; ++j) {
@@ -94,8 +100,48 @@ function testGetElement() {
     assertEq(sum, 8_000_000_000_000n + 9_000_000_000_000n);
     assertRecoveredOnBailout(sub_i64, true);
   }
+  for (var i = 0; i < 100; ++i) {
+    inner();
+  }
 }
 testGetElement();
+
+// Test atomic get-element access of scalar replaced |subarray| works.
+function testGetElementAtomic() {
+  var i8 = new Int8Array(10).map((v, k) => k);
+  var i32 = new Int32Array(10).map((v, k) => k * 1000);
+  var i64 = new BigInt64Array(10).map((v, k) => BigInt(k) * 1_000_000_000_000n);
+
+  function inner() {
+    var sub_i8 = i8.subarray();
+    var sum = 0;
+    for (var j = 0; j < sub_i8.length; ++j) {
+      sum += Atomics.load(sub_i8, j);
+    }
+    assertEq(sum, 0 + 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9);
+    assertRecoveredOnBailout(sub_i8, true);
+
+    var sub_i32 = i32.subarray(-6);
+    var sum = 0;
+    for (var j = 0; j < sub_i32.length; ++j) {
+      sum += Atomics.load(sub_i32, j);
+    }
+    assertEq(sum, 4000 + 5000 + 6000 + 7000 + 8000 + 9000);
+    assertRecoveredOnBailout(sub_i32, true);
+
+    var sub_i64 = i64.subarray(8, 100);
+    var sum = 0n;
+    for (var j = 0; j < sub_i64.length; ++j) {
+      sum += Atomics.load(sub_i64, j);
+    }
+    assertEq(sum, 8_000_000_000_000n + 9_000_000_000_000n);
+    assertRecoveredOnBailout(sub_i64, true);
+  }
+  for (var i = 0; i < 100; ++i) {
+    inner();
+  }
+}
+testGetElementAtomic();
 
 // Test set-element access of scalar replaced |subarray| works.
 function testSetElement() {
@@ -103,27 +149,24 @@ function testSetElement() {
   var i32 = new Int32Array(10);
   var i64 = new BigInt64Array(10);
 
-  for (var i = 0; i < 100; ++i) {
+  function inner() {
     i8.fill(0);
     i32.fill(0);
     i64.fill(0n);
 
     var sub_i8 = i8.subarray();
-    var sum = 0;
     for (var j = 0; j < sub_i8.length; ++j) {
       sub_i8[j] = j * 10;
     }
     assertRecoveredOnBailout(sub_i8, true);
 
     var sub_i32 = i32.subarray(-6);
-    var sum = 0;
     for (var j = 0; j < sub_i32.length; ++j) {
       sub_i32[j] = j * 1000;
     }
     assertRecoveredOnBailout(sub_i32, true);
 
     var sub_i64 = i64.subarray(8, 100);
-    var sum = 0n;
     for (var j = 0; j < sub_i64.length; ++j) {
       sub_i64[j] = BigInt(j + 1) * 1111n;
     }
@@ -133,8 +176,50 @@ function testSetElement() {
     assertEqArray(i32, [0, 0, 0, 0, 0, 1000, 2000, 3000, 4000, 5000]);
     assertEqArray(i64, [0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 1111n, 2222n]);
   }
+  for (var i = 0; i < 100; ++i) {
+    inner();
+  }
 }
 testSetElement();
+
+// Test atomic set-element access of scalar replaced |subarray| works.
+function testSetElementAtomic() {
+  var i8 = new Int8Array(10);
+  var i32 = new Int32Array(10);
+  var i64 = new BigInt64Array(10);
+
+  function inner() {
+    i8.fill(0);
+    i32.fill(0);
+    i64.fill(0n);
+
+    var sub_i8 = i8.subarray();
+    for (var j = 0; j < sub_i8.length; ++j) {
+      Atomics.store(sub_i8, j, j * 10);
+    }
+    assertRecoveredOnBailout(sub_i8, true);
+
+    var sub_i32 = i32.subarray(-6);
+    for (var j = 0; j < sub_i32.length; ++j) {
+      Atomics.store(sub_i32, j, j * 1000);
+    }
+    assertRecoveredOnBailout(sub_i32, true);
+
+    var sub_i64 = i64.subarray(8, 100);
+    for (var j = 0; j < sub_i64.length; ++j) {
+      Atomics.store(sub_i64, j, BigInt(j + 1) * 1111n);
+    }
+    assertRecoveredOnBailout(sub_i64, true);
+
+    assertEqArray(i8, [0, 10, 20, 30, 40, 50, 60, 70, 80, 90]);
+    assertEqArray(i32, [0, 0, 0, 0, 0, 1000, 2000, 3000, 4000, 5000]);
+    assertEqArray(i64, [0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n, 1111n, 2222n]);
+  }
+  for (var i = 0; i < 100; ++i) {
+    inner();
+  }
+}
+testSetElementAtomic();
 
 // Test |fill| with scalar replaced |subarray| works.
 function testFill() {
@@ -142,7 +227,7 @@ function testFill() {
   var i32 = new Int32Array(10);
   var i64 = new BigInt64Array(10);
 
-  for (var i = 0; i < 100; ++i) {
+  function inner() {
     i8.fill(0);
     i32.fill(0);
     i64.fill(0n);
@@ -163,6 +248,9 @@ function testFill() {
     assertEqArray(i32, [0, 1234, 1234, 1234, 1234, 0, 0, 0, 0, 0]);
     assertEqArray(i64, [0n, 0n, 0n, 0x123456789abcdefn, 0n, 0n, 0n, 0n, 0n, 0n]);
   }
+  for (var i = 0; i < 100; ++i) {
+    inner();
+  }
 }
 testFill();
 
@@ -176,7 +264,7 @@ function testSetSource() {
   var i32_source = new Int32Array(10).map((v, k) => k * 1000);
   var i64_source = new BigInt64Array(10).map((v, k) => BigInt(k) * 1_000_000_000_000n);
 
-  for (var i = 0; i < 100; ++i) {
+  function inner() {
     i8.fill(0);
     i32.fill(0);
     i64.fill(0n);
@@ -197,6 +285,9 @@ function testSetSource() {
     assertEqArray(i32, [0, 0, 0, 2000, 3000, 4000, 5000, 6000, 7000, 0]);
     assertEqArray(i64, [0n, 0n, 0n, 0n, 0n, 5000000000000n, 6000000000000n, 0n, 0n, 0n]);
   }
+  for (var i = 0; i < 100; ++i) {
+    inner();
+  }
 }
 testSetSource();
 
@@ -210,7 +301,7 @@ function testSetTarget() {
   var i32_source = new Int32Array(2).map((v, k) => (k + 1) * 1000);
   var i64_source = new BigInt64Array(4).map((v, k) => BigInt(k + 1) * 0x1111_1111n);
 
-  for (var i = 0; i < 100; ++i) {
+  function inner() {
     i8.fill(0);
     i32.fill(0);
     i64.fill(0n);
@@ -231,6 +322,9 @@ function testSetTarget() {
     assertEqArray(i32, [0, 0, 0, 0, 0, 1000, 2000, 0, 0, 0]);
     assertEqArray(i64, [0n, 0n, 0n, 0x1111_1111n, 0x2222_2222n, 0x3333_3333n, 0x4444_4444n, 0n, 0n, 0n]);
   }
+  for (var i = 0; i < 100; ++i) {
+    inner();
+  }
 }
 testSetTarget();
 
@@ -242,7 +336,7 @@ function testSubarray() {
 
   var i64_one = new BigInt64Array([1n, 1n]);
 
-  for (var i = 0; i < 100; ++i) {
+  function inner() {
     i8.fill(0);
     i32.fill(0);
     i64.fill(0n);
@@ -287,6 +381,9 @@ function testSubarray() {
     assertEqArray(i32, [0, 0, 0, 0, 100, 100, 100, 0, 0, 0]);
     assertEqArray(i64, [0n, 0n, 0n, 0n, 0n, 0n, 1n, 1n, 0n, 0n]);
   }
+  for (var i = 0; i < 100; ++i) {
+    inner();
+  }
 }
 testSubarray();
 
@@ -299,7 +396,7 @@ function testSubarrayChain4() {
   var i64_one = new BigInt64Array([1n, 1n]);
   var i64_two = new BigInt64Array([2n]);
 
-  for (var i = 0; i < 100; ++i) {
+  function inner() {
     i8.fill(0);
     i32.fill(0);
     i64.fill(0n);
@@ -375,6 +472,9 @@ function testSubarrayChain4() {
     assertEqArray(i8, [0, 0, 0, 0, 0, 0, 10, 20, 30, 40]);
     assertEqArray(i32, [0, 0, 0, 0, 100, 100, 200, 0, 0, 0]);
     assertEqArray(i64, [0n, 0n, 0n, 0n, 0n, 2n, 1n, 1n, 0n, 0n]);
+  }
+  for (var i = 0; i < 100; ++i) {
+    inner();
   }
 }
 testSubarrayChain4();

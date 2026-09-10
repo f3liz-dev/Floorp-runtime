@@ -20,7 +20,15 @@ const lazy = XPCOMUtils.declareLazy({
       prefix: "SearchEngine",
       maxLogLevel: lazy.SearchUtils.loggingEnabled ? "Debug" : "Warn",
     }),
+  settingsRedesignEnabled: {
+    pref: "browser.settings-redesign.enabled",
+    default: false,
+  },
 });
+
+// Longer search terms provide no user benefit and make the submission URL
+// expensive to build.
+export const MAX_SEARCH_TERM_LENGTH = 32000;
 
 // Supported OpenSearch parameters
 // See https://web.archive.org/web/20060203040832/http://opensearch.a9.com/spec/1.1/querysyntax/#core
@@ -107,10 +115,7 @@ export class QueryParameter {
    */
   constructor(name, value) {
     if (!name || value == null) {
-      throw Components.Exception(
-        "missing name or value for QueryParameter!",
-        Cr.NS_ERROR_INVALID_ARG
-      );
+      throw new TypeError("missing name or value for QueryParameter");
     }
 
     this.name = name;
@@ -136,68 +141,17 @@ export class QueryParameter {
 }
 
 /**
- * Perform OpenSearch parameter substitution on a parameter value.
- *
- * @see https://web.archive.org/web/20060203040832/http://opensearch.a9.com/spec/1.1/querysyntax/#core
- *
- * @param {string} paramValue
- *   The OpenSearch search parameters.
- * @param {string} searchTerms
- *   The user-provided search terms. This string will inserted into
- *   paramValue as the value of the searchTerms parameter.
- *   This value must already be escaped appropriately - it is inserted
- *   as-is.
- * @param {string} queryCharset
- *   The character set of the search engine to use for query encoding.
- * @returns {string}
- *   An updated parameter string.
+ * @typedef {object} SearchSubmissionData
+ * @property {nsIURI} uri
+ *   The full URI to use for the search query.
+ * @property {?nsIMIMEInputStream} postData
+ *   The post data to use when opening the search query (if any).
+ * @property {string} partnerCode
+ *   The partner code that is used within the search query. This should be
+ *   used when recording telemetry.
+ * @property {string} telemetryId
+ *   The telemetry id for recording in legacy telemetry.
  */
-function paramSubstitution(paramValue, searchTerms, queryCharset) {
-  const PARAM_REGEXP = /\{(\w+)(\??)\}/g;
-  return paramValue.replace(PARAM_REGEXP, function (match, name, optional) {
-    // {searchTerms} is by far the most common param so handle it first.
-    if (name == "searchTerms") {
-      return searchTerms;
-    }
-
-    // {inputEncoding} is the second most common param.
-    if (name == OS_PARAM_INPUT_ENCODING) {
-      return queryCharset;
-    }
-
-    // Handle languages for URL results.
-    if (name == PARAM_ACCEPT_LANGUAGES) {
-      let languages = Services.prefs
-        .getComplexValue("intl.accept_languages", Ci.nsIPrefLocalizedString)
-        .data.replace(/\s+/g, "");
-
-      return languages || "";
-    }
-
-    // Handle the less common OpenSearch parameters we're confident about.
-    if (name == OS_PARAM_LANGUAGE) {
-      return Services.locale.requestedLocale || OS_PARAM_LANGUAGE_DEF;
-    }
-    if (name == OS_PARAM_OUTPUT_ENCODING) {
-      return OS_PARAM_OUTPUT_ENCODING_DEF;
-    }
-
-    // At this point, if a parameter is optional, just omit it.
-    if (optional) {
-      return "";
-    }
-
-    // Replace unsupported parameters that only have hardcoded default values.
-    for (let param of OS_UNSUPPORTED_PARAMS) {
-      if (name == param[0]) {
-        return param[1];
-      }
-    }
-
-    // Don't replace unknown non-optional parameters.
-    return match;
-  });
-}
 
 /**
  * EngineURL holds a query URL and all associated parameters.
@@ -245,6 +199,8 @@ export class EngineURL {
    * @param {string} [options.isNewUntil]
    *   Indicates the date until which the URL is considered new
    *   (format: YYYY-MM-DD).
+   * @param {Map<string, {partnerCode: ?string, telemetryId: ?string}>} [options.partnerCodeMap]
+   *   The partner code to use, if any.
    * @param {boolean} [options.excludePartnerCodeFromTelemetry]
    *   Whether the engine's partner code should be excluded from telemetry when
    *   this URL is visited.
@@ -266,30 +222,22 @@ export class EngineURL {
     method = "GET",
     displayName = "",
     isNewUntil = "",
+    partnerCodeMap = new Map(),
     excludePartnerCodeFromTelemetry = false,
     acceptedContentTypes = null,
   }) {
     if (!type || !method || !template) {
-      throw Components.Exception(
-        "missing type, method or template for EngineURL!",
-        Cr.NS_ERROR_INVALID_ARG
-      );
+      throw new Error("Missing arguments for EngineURL");
     }
 
     this.method = method.toUpperCase();
     if (this.method != "GET" && this.method != "POST") {
-      throw Components.Exception(
-        'method passed to EngineURL must be "GET" or "POST"',
-        Cr.NS_ERROR_INVALID_ARG
-      );
+      throw new TypeError('Method must be "GET" or "POST"');
     }
 
     var templateURI = lazy.SearchUtils.makeURI(template);
     if (!templateURI) {
-      throw Components.Exception(
-        "new EngineURL: template is not a valid URI!",
-        Cr.NS_ERROR_FAILURE
-      );
+      throw new Error("template is not a valid URI");
     }
 
     switch (templateURI.scheme) {
@@ -298,10 +246,7 @@ export class EngineURL {
         this.template = template;
         break;
       default:
-        throw Components.Exception(
-          "new EngineURL: template uses invalid scheme!",
-          Cr.NS_ERROR_FAILURE
-        );
+        throw new Error("template uses an invalid scheme");
     }
 
     this.templateHost = templateURI.host;
@@ -318,6 +263,7 @@ export class EngineURL {
     this.type = type.toLowerCase();
     this.displayName = displayName ?? "";
     this.isNewUntil = isNewUntil ?? "";
+    this.#partnerCodeMap = partnerCodeMap;
     this.excludePartnerCodeFromTelemetry = !!excludePartnerCodeFromTelemetry;
     this.acceptedContentTypes = acceptedContentTypes;
   }
@@ -384,10 +330,12 @@ export class EngineURL {
    *   The user's search terms.
    * @param {string} queryCharset
    *   The character set that is being used for the query.
-   * @returns {Submission}
+   * @param {string} sapSource
+   *   The source of the search request.
+   * @returns {SearchSubmissionData}
    *   The submission data containing the URL and post data for the URL.
    */
-  getSubmission(searchTerms, queryCharset) {
+  getSubmission(searchTerms, queryCharset, sapSource) {
     let escapedSearchTerms;
     try {
       escapedSearchTerms = Services.textToSubURI.ConvertAndEscape(
@@ -405,13 +353,18 @@ export class EngineURL {
     }
 
     let templateURI = new URL(this.template);
-    let paramString = this.#encodeParams(escapedSearchTerms, queryCharset);
+    let paramString = this.#encodeParams(
+      escapedSearchTerms,
+      queryCharset,
+      sapSource
+    );
 
     let postData = null;
-    let query = paramSubstitution(
+    let query = this.#paramSubstitution(
       templateURI.search,
       escapedSearchTerms,
-      queryCharset
+      queryCharset,
+      sapSource
     );
     if (this.method == "GET" && paramString) {
       // Query parameters may be specified in the template url AND in `this.params`.
@@ -442,20 +395,28 @@ export class EngineURL {
     // search terms are part of the file path or ref. We only use '+' if they
     // are part of a query parameter.
     let urlSearchTerms = escapedSearchTerms.replaceAll("+", "%20");
-    templateURI.pathname = paramSubstitution(
+    templateURI.pathname = this.#paramSubstitution(
       // The braces in filePath are percent-encoded, so we
       // decode them to ensure paramSubstitution finds them.
       decodeURIComponent(templateURI.pathname),
       urlSearchTerms,
-      queryCharset
+      queryCharset,
+      sapSource
     );
-    templateURI.hash = paramSubstitution(
+    templateURI.hash = this.#paramSubstitution(
       templateURI.hash,
       urlSearchTerms,
-      queryCharset
+      queryCharset,
+      sapSource
     );
 
-    return new Submission(templateURI.URI, postData);
+    let telemetryData = this.#getPartnerCodeFromSap(sapSource);
+    return {
+      uri: templateURI.URI,
+      postData,
+      partnerCode: telemetryData?.partnerCode,
+      telemetryId: telemetryData?.telemetryId,
+    };
   }
 
   /**
@@ -477,23 +438,99 @@ export class EngineURL {
    *   The user's search terms escaped with the correct charset.
    * @param {string} queryCharset
    *   The character set that is being used for the query.
+   * @param {string} sapSource
+   *   The source of the search request.
    * @returns {string}
    *   Parameter string containing the search terms.
    */
-  #encodeParams(escapedSearchTerms, queryCharset) {
+  #encodeParams(escapedSearchTerms, queryCharset, sapSource) {
     let dataArray = [];
     for (let param of this.params) {
       // QueryPreferenceParameters might not have a preferenced saved, or a valid value.
       if (param.value != null) {
-        let value = paramSubstitution(
+        let value = this.#paramSubstitution(
           param.value,
           escapedSearchTerms,
-          queryCharset
+          queryCharset,
+          sapSource
         );
+        // Don't insert the partner code parameter if the value is empty.
+        // We do allow insertion of other parameters if they are empty as sometimes
+        // they may be required by the server.
+        if (param.value == "{partnerCode}" && value == "") {
+          continue;
+        }
         dataArray.push(param.name + "=" + value);
       }
     }
     return dataArray.join("&");
+  }
+
+  /**
+   * Perform OpenSearch parameter substitution on a parameter value.
+   *
+   * @see https://web.archive.org/web/20060203040832/http://opensearch.a9.com/spec/1.1/querysyntax/#core
+   *
+   * @param {string} paramValue
+   *   The OpenSearch search parameters.
+   * @param {string} searchTerms
+   *   The user-provided search terms. This string will be inserted into
+   *   paramValue as the value of the searchTerms parameter.
+   *   This value must already be escaped appropriately - it is inserted
+   *   as-is.
+   * @param {string} queryCharset
+   *   The character set of the search engine to use for query encoding.
+   * @param {string} sapSource
+   *   The source of the search request.
+   * @returns {string}
+   *   An updated parameter string.
+   */
+  #paramSubstitution(paramValue, searchTerms, queryCharset, sapSource) {
+    const PARAM_REGEXP = /\{(\w+)(\??)\}/g;
+    return paramValue.replace(PARAM_REGEXP, (match, name, optional) => {
+      // {searchTerms} is by far the most common param so handle it first.
+      if (name == "searchTerms") {
+        return searchTerms;
+      }
+
+      // {partnerCode} is also frequent.
+      if (name == "partnerCode") {
+        return this.#getPartnerCodeFromSap(sapSource).partnerCode;
+      }
+
+      // {inputEncoding} is probably the next most common param.
+      if (name == OS_PARAM_INPUT_ENCODING) {
+        return queryCharset;
+      }
+
+      // Handle languages for URL results.
+      if (name == PARAM_ACCEPT_LANGUAGES) {
+        return Services.locale.acceptLanguages.replace(/\s+/g, "");
+      }
+
+      // Handle the less common OpenSearch parameters we're confident about.
+      if (name == OS_PARAM_LANGUAGE) {
+        return Services.locale.requestedLocale || OS_PARAM_LANGUAGE_DEF;
+      }
+      if (name == OS_PARAM_OUTPUT_ENCODING) {
+        return OS_PARAM_OUTPUT_ENCODING_DEF;
+      }
+
+      // At this point, if a parameter is optional, just omit it.
+      if (optional) {
+        return "";
+      }
+
+      // Replace unsupported parameters that only have hardcoded default values.
+      for (let param of OS_UNSUPPORTED_PARAMS) {
+        if (name == param[0]) {
+          return param[1];
+        }
+      }
+
+      // Don't replace unknown non-optional parameters.
+      return match;
+    });
   }
 
   _hasRelation(rel) {
@@ -538,15 +575,28 @@ export class EngineURL {
 
     return json;
   }
+
+  /**
+   * Returns the partner code and telemetry id to use for the SAP.
+   *
+   * @param {string} sapSource
+   * @returns {{partnerCode: ?string, telemetryId: ?string}}
+   */
+  #getPartnerCodeFromSap(sapSource) {
+    if (this.#partnerCodeMap.has(sapSource)) {
+      return this.#partnerCodeMap.get(sapSource);
+    }
+    return this.#partnerCodeMap.get("default");
+  }
+
+  /** @type {Map<string, {partnerCode: ?string, telemetryId: ?string}>} */
+  #partnerCodeMap;
 }
 
 /**
  * SearchEngine is the base class that all search engine classes inherit from.
- *
- * @implements {nsISearchEngine}
  */
 export class SearchEngine {
-  QueryInterface = ChromeUtils.generateQI(["nsISearchEngine"]);
   // Data set by the user.
   _metaData = {};
 
@@ -560,28 +610,38 @@ export class SearchEngine {
   _loadPath = null;
 
   /**
-   *The engine's name.
+   * The engine's name.
    *
    * @type {string}
    */
   _name = null;
-  // The name of the charset used to submit the search terms.
+  /**
+   * @type {?string}
+   *   The name of the charset used to submit the search terms.
+   */
   _queryCharset = null;
-  // The order hint from the configuration (if any).
-  _orderHint = null;
-  // The telemetry id from the configuration (if any).
-  _telemetryId = null;
-  // Set to true once the engine has been added to the store, and the initial
-  // notification sent. This allows to skip sending notifications during
-  // initialization.
+  /**
+   * Set to true once the engine has been added to the store, and the initial
+   * notification sent. This allows to skip sending notifications during
+   * initialization.
+   */
   _engineAddedToStore = false;
-  // The aliases coming from the engine definition (via webextension
-  // keyword field for example).
+  /**
+   * @type {string[]}
+   *   The aliases coming from the engine definition (via webextension keyword
+   *   field for example).
+   */
   _definedAliases = [];
-  // The urls associated with this engine.
+  /**
+   * @type {EngineURL[]}
+   *   The urls associated with this engine.
+   */
   _urls = [];
-  // The known public suffix of the search url, cached in memory to avoid
-  // repeated look-ups.
+  /**
+   * @type {string}
+   *   The known public suffix of the search url, cached in memory to avoid
+   *   repeated look-ups.
+   */
   _searchUrlPublicSuffix = null;
   /**
    * The unique id of the Search Engine.
@@ -623,7 +683,7 @@ export class SearchEngine {
    * this Engine that has the given type string.  (This corresponds to the
    * "type" attribute in the "Url" node in the OpenSearch spec.)
    *
-   * @param {string} type
+   * @param {Values<typeof lazy.SearchUtils.URL_TYPE>} type
    *   The type to match the EngineURL's type attribute.
    * @param {string} [rel]
    *   Only return URLs that with this rel value.
@@ -668,15 +728,19 @@ export class SearchEngine {
    * @param {string} iconURL
    *   A URI string pointing to the engine's icon.
    *   Must have http[s], data, or moz-extension protocol.
-   * @param {number} [size]
+   * @param {object} options
+   *   The options object
+   * @param {number} [options.size]
    *   Width and height of the icon (determined automatically if not provided).
-   * @param {boolean} [override]
+   * @param {boolean} [options.override]
    * Whether the new URI should override an existing one.
+   * @param {object} [options.originAttributes]
+   *   The origin attributes to use to load the icon.
    * @returns {Promise<void>}
    *   Resolves when the icon was set.
    *   Rejects with an Error if there was an error.
    */
-  async _setIcon(iconURL, size, override = true) {
+  async _setIcon(iconURL, options = { override: true }) {
     lazy.logConsole.debug(
       "_setIcon: Setting icon url for",
       this.name,
@@ -684,8 +748,12 @@ export class SearchEngine {
       limitURILength(iconURL)
     );
 
-    [iconURL, size] = await this._downloadAndRescaleIcon(iconURL, size);
-    this._addIconToMap(iconURL, size, override);
+    let size;
+    [iconURL, size] = await this._downloadAndRescaleIcon(iconURL, {
+      size: options.size,
+      originAttributes: options.originAttributes,
+    });
+    this._addIconToMap(iconURL, size, options.override);
 
     if (this._engineAddedToStore) {
       lazy.SearchUtils.notifyAction(
@@ -703,17 +771,23 @@ export class SearchEngine {
    * @param {string} iconURL
    *   A URI string pointing to the engine's icon.
    *   Must have http[s], data, or moz-extension protocol.
-   * @param {number} [size]
+   * @param {object} options
+   *   The options object
+   * @param {number} [options.size]
    *   Width and height of the icon (determined automatically if not provided).
+   * @param {object} [options.originAttributes]
+   *   The origin attributes to use to load the icon.
    * @returns {Promise<[string, number]>}
    *   Resolves to [dataURL, size] if successful and rejects if there was an error.
    */
-  async _downloadAndRescaleIcon(iconURL, size) {
+  async _downloadAndRescaleIcon(iconURL, options = {}) {
     let uri = lazy.SearchUtils.makeURI(iconURL);
 
     if (!uri) {
       throw new Error(`Invalid URI`);
     }
+
+    let size = options.size;
 
     switch (uri.scheme) {
       case "moz-extension": {
@@ -727,7 +801,10 @@ export class SearchEngine {
       case "data":
       case "http":
       case "https": {
-        let [byteArray, contentType] = await lazy.SearchUtils.fetchIcon(uri);
+        let [byteArray, contentType] = await lazy.SearchUtils.fetchIcon(
+          uri,
+          options.originAttributes
+        );
         if (byteArray.length > lazy.SearchUtils.MAX_ICON_SIZE) {
           lazy.logConsole.debug(
             `Rescaling icon for search engine ${this.name}.`
@@ -905,6 +982,14 @@ export class SearchEngine {
     }
   }
 
+  /**
+   * Checks to see if the search url matches the manifest details.
+   *
+   * @param {object} details
+   * @param {string} details.search_url
+   * @param {string} details.search_url_get_params
+   * @param {string} details.search_url_post_params
+   */
   checkSearchUrlMatchesManifest(details) {
     let existingUrl = this.getURLOfType(lazy.SearchUtils.URL_TYPE.SEARCH);
 
@@ -920,13 +1005,22 @@ export class SearchEngine {
       }
     );
 
-    let existingSubmission = existingUrl.getSubmission("", this.queryCharset);
-    let newSubmission = newUrl.getSubmission("", this.queryCharset);
+    // These two calls should use the default source, so that we're comparing
+    // the same thing.
+    let existingSubmission = existingUrl.getSubmission(
+      "",
+      this.queryCharset,
+      "default"
+    );
+    let newSubmission = newUrl.getSubmission("", this.queryCharset, "default");
 
     return (
       existingSubmission.uri.equals(newSubmission.uri) &&
-      existingSubmission.postData?.data.data ==
-        newSubmission.postData?.data.data
+      // The input streams returned are `nsIStringInputStream`s which also
+      // implement `nsISupportsCString`.
+      existingSubmission.postData?.data.QueryInterface(Ci.nsISupportsCString)
+        .data ==
+        newSubmission.postData?.data.QueryInterface(Ci.nsISupportsCString).data
     );
   }
 
@@ -960,7 +1054,7 @@ export class SearchEngine {
         this.setAttr("overriddenBy", engine.id);
         this.setAttr("overriddenByOpenSearch", engine.toJSON());
       } else {
-        this.setAttr("overriddenBy", engine._extensionID);
+        this.setAttr("overriddenBy", engine.extensionID);
       }
     } else {
       this._urls = [];
@@ -1029,7 +1123,6 @@ export class SearchEngine {
       json.queryCharset || lazy.SearchUtils.DEFAULT_QUERY_CHARSET;
     this._iconMapObj = json._iconMapObj || null;
     this._metaData = json._metaData || {};
-    this._orderHint = json._orderHint || null;
     this._definedAliases = json._definedAliases || [];
     // These changed keys in Firefox 80, maintain the old keys
     // for backwards compatibility.
@@ -1063,8 +1156,6 @@ export class SearchEngine {
       "_iconMapObj",
       "_metaData",
       "_urls",
-      "_orderHint",
-      "_telemetryId",
       "_filePath",
       "_definedAliases",
     ];
@@ -1083,6 +1174,24 @@ export class SearchEngine {
     return json;
   }
 
+  /**
+   * Gets an attribute from the engine.
+   *
+   * @param {string} name
+   * @returns {any}
+   */
+  getAttr(name) {
+    return this._metaData[name] || undefined;
+  }
+
+  /**
+   * Sets an attribute on the engine.
+   *
+   * @param {string} name
+   * @param {any} val
+   * @param {boolean} sendNotification
+   *   Whether to send a notification if the attribute has changed.
+   */
   setAttr(name, val, sendNotification = false) {
     // Cache whether the attribute actually changes so we don't lose that info
     // when updating `_metaData`.
@@ -1096,10 +1205,11 @@ export class SearchEngine {
     }
   }
 
-  getAttr(name) {
-    return this._metaData[name] || undefined;
-  }
-
+  /**
+   * Clears an attribute on the engine.
+   *
+   * @param {string} name
+   */
   clearAttr(name) {
     delete this._metaData[name];
   }
@@ -1138,10 +1248,11 @@ export class SearchEngine {
    * Gets the order hint for this engine. This is determined from the search
    * configuration when the engine is initialized.
    *
-   * @type {number}
+   * @type {?number}
    */
   get orderHint() {
-    return this._orderHint;
+    // Overridden in derived classes.
+    return null;
   }
 
   /**
@@ -1153,6 +1264,12 @@ export class SearchEngine {
     return this.getAttr("alias") || "";
   }
 
+  /**
+   * Set the user-defined alias. When not an empty string, this should be a
+   * unique identifier.
+   *
+   * @type {string}
+   */
   set alias(val) {
     var value = val ? val.trim() : "";
     this.setAttr("alias", value, true);
@@ -1180,62 +1297,53 @@ export class SearchEngine {
    * - other-<name>: The engine name prefixed by `other-` for non-config-engines.
    *
    * @returns {string}
+   * @deprecated This should not be used for new telemetry. It is a combined
+   * field that contains multiple values. Report separate
+   * id/partner_code/other fields instead.
    */
   get telemetryId() {
-    let telemetryId = this._telemetryId || `other-${this.name}`;
-    if (this.getAttr("overriddenBy")) {
-      return telemetryId + "-addon";
-    }
-    return telemetryId;
+    return `other-${this.name}`;
   }
 
   /**
-   * Return the built-in identifier of config engines.
+   * Whether the engine is hidden from the user.
    *
-   * @returns {?string}
-   *   Returns a valid if this is a built-in engine, null otherwise.
+   * @returns {boolean}
    */
-  get identifier() {
-    return null;
-  }
-
   get hidden() {
     return this.getAttr("hidden") || false;
   }
 
+  /**
+   * @param {boolean} val
+   *   Whether the engine should be hidden from the user.
+   */
   set hidden(val) {
     var value = !!val;
     this.setAttr("hidden", value, true);
   }
 
+  /**
+   * Whether the associated one off button should be hidden from the user.
+   *
+   * @returns {boolean}
+   */
   get hideOneOffButton() {
+    if (lazy.settingsRedesignEnabled) {
+      // This setting is no longer supported after the settings redesign, so
+      // always return false.
+      return false;
+    }
     return this.getAttr("hideOneOffButton") || false;
   }
+
+  /**
+   * @param {boolean} val
+   *   Whether the engine should be hidden from the user.
+   */
   set hideOneOffButton(val) {
     const value = !!val;
     this.setAttr("hideOneOffButton", value, true);
-  }
-
-  /**
-   * This method should be overridden by app provided config engines.
-   *
-   * @returns {boolean}
-   *   Whether this engine is an app provided config engine, i.e. it comes
-   *   from the search-config-v2 and active in the user's environment.
-   */
-  get isAppProvided() {
-    return false;
-  }
-
-  /**
-   * This method should be overridden by config search engines.
-   *
-   * @returns {boolean}
-   *   Whether this engine is a config search engine, i.e. it comes from
-   *   the search-config-v2.
-   */
-  get isConfigEngine() {
-    return false;
   }
 
   /**
@@ -1264,14 +1372,20 @@ export class SearchEngine {
     return this.getAttr("overriddenBy");
   }
 
+  /**
+   * Whether or not this engine is a "general" search engine, e.g. is it for
+   * generally searching the web, or does it have a specific purpose like
+   * shopping.
+   */
   get isGeneralPurposeEngine() {
     return false;
   }
 
-  get _hasUpdates() {
-    return false;
-  }
-
+  /**
+   * The display name of the search engine.
+   *
+   * This is a unique identifier, but the `id` should be used for most operations.
+   */
   get name() {
     return this._name;
   }
@@ -1283,6 +1397,9 @@ export class SearchEngine {
     return this._loadPath;
   }
 
+  /**
+   * The query character set to use for encoding searces for this engine.
+   */
   get queryCharset() {
     return this._queryCharset || lazy.SearchUtils.DEFAULT_QUERY_CHARSET;
   }
@@ -1297,11 +1414,13 @@ export class SearchEngine {
    * @param {Values<typeof lazy.SearchUtils.URL_TYPE>} [responseType]
    *   The MIME type that we'd like to receive in response
    *   to this submission.  If null, will default to "text/html".
-   * @returns {nsISearchSubmission|null}
+   * @param {string} [sapSource]
+   *   The source of the search request.
+   * @returns {?SearchSubmissionData}
    *   The submission data. If no appropriate submission can be determined for
    *   the request type, this may be null.
    */
-  getSubmission(searchTerms, responseType) {
+  getSubmission(searchTerms, responseType, sapSource = "default") {
     // We can't use a default parameter as that doesn't work correctly with
     // the idl interfaces.
     if (!responseType) {
@@ -1322,7 +1441,16 @@ export class SearchEngine {
       lazy.logConsole.warn("getSubmission: searchTerms is empty!");
     }
 
-    return url.getSubmission(searchTerms, this.queryCharset);
+    if (searchTerms.length > MAX_SEARCH_TERM_LENGTH) {
+      searchTerms = searchTerms.substring(0, MAX_SEARCH_TERM_LENGTH);
+      // Avoid splitting a surrogate pair.
+      let last = searchTerms.charCodeAt(searchTerms.length - 1);
+      if (last >= 0xd800 && last <= 0xdbff) {
+        searchTerms = searchTerms.slice(0, -1);
+      }
+    }
+
+    return url.getSubmission(searchTerms, this.queryCharset, sapSource);
   }
 
   /**
@@ -1335,7 +1463,9 @@ export class SearchEngine {
   get searchURLWithNoTerms() {
     return this.getURLOfType(lazy.SearchUtils.URL_TYPE.SEARCH).getSubmission(
       "",
-      this.queryCharset
+      this.queryCharset,
+      // Use the default source, as this is used for non submission checks.
+      "default"
     ).uri;
   }
 
@@ -1429,6 +1559,14 @@ export class SearchEngine {
     return uriParams.get(termsParameterName) ?? "";
   }
 
+  /**
+   * Returns the name of the parameter used for the search terms for a submission
+   * URL of type `SearchUtils.URL_TYPE.SEARCH`.
+   *
+   * @returns {string}
+   *   The name of the parameter, or empty string if no parameter can be found
+   *   or is not supported (e.g. POST).
+   */
   get searchUrlQueryParamName() {
     return (
       this.getURLOfType(lazy.SearchUtils.URL_TYPE.SEARCH).searchTermParamName ||
@@ -1436,6 +1574,13 @@ export class SearchEngine {
     );
   }
 
+  /**
+   * Returns the public suffix for the submission URL of type
+   * `SearchUtils.URL_TYPE.SEARCH`.
+   *
+   * @returns {string}
+   *   The public suffix, or empty string if one cannot be found.
+   */
   get searchUrlPublicSuffix() {
     if (this._searchUrlPublicSuffix != null) {
       return this._searchUrlPublicSuffix;
@@ -1446,12 +1591,21 @@ export class SearchEngine {
     return (this._searchUrlPublicSuffix = searchURLPublicSuffix);
   }
 
-  // from nsISearchEngine
+  /**
+   * Determines whether the engine can return responses in the given
+   * MIME type. Returns true if the engine spec has a URL with the
+   * given responseType, false otherwise.
+   *
+   * @param {Values<typeof lazy.SearchUtils.URL_TYPE>} type
+   *   The MIME type to check for.
+   */
   supportsResponseType(type) {
     return this.getURLOfType(type) != null;
   }
 
-  // from nsISearchEngine
+  /**
+   * The domain from which search results are returned for this engine.
+   */
   get searchUrlDomain() {
     let url = this.getURLOfType(lazy.SearchUtils.URL_TYPE.SEARCH);
     if (url) {
@@ -1469,7 +1623,9 @@ export class SearchEngine {
   get searchForm() {
     let url = this.getURLOfType(lazy.SearchUtils.URL_TYPE.SEARCH_FORM);
     if (url) {
-      return url.getSubmission("", this.queryCharset).uri.spec;
+      // Using "default" should be fine here, since we won't typically apply
+      // partner codes to search forms.
+      return url.getSubmission("", this.queryCharset, "default").uri.spec;
     }
     return this.searchURLWithNoTerms.prePath;
   }
@@ -1495,10 +1651,6 @@ export class SearchEngine {
       path: templateUrl.filePath.toLowerCase(),
       termsParameterName,
     };
-  }
-
-  get wrappedJSObject() {
-    return this;
   }
 
   /**
@@ -1546,9 +1698,9 @@ export class SearchEngine {
   speculativeConnect(options) {
     if (!options || !options.window) {
       console.error(
-        "invalid options arg passed to nsISearchEngine.speculativeConnect"
+        "invalid options arg passed to SearchEngine.speculativeConnect"
       );
-      throw Components.Exception("", Cr.NS_ERROR_INVALID_ARG);
+      throw new TypeError("invalid options arguments");
     }
     let connector = Services.io.QueryInterface(Ci.nsISpeculativeConnect);
 
@@ -1582,7 +1734,9 @@ export class SearchEngine {
     if (this.supportsResponseType(lazy.SearchUtils.URL_TYPE.SUGGEST_JSON)) {
       let suggestURI = this.getSubmission(
         "dummy",
-        lazy.SearchUtils.URL_TYPE.SUGGEST_JSON
+        lazy.SearchUtils.URL_TYPE.SUGGEST_JSON,
+        // Doesn't matter what we use here - this is for pre-connection only.
+        "default"
       ).uri;
       if (suggestURI.prePath != searchURI.prePath) {
         try {
@@ -1595,6 +1749,9 @@ export class SearchEngine {
     }
   }
 
+  /**
+   * The unique identifier of the search engine.
+   */
   get id() {
     return this.#id;
   }
@@ -1618,24 +1775,5 @@ export class SearchEngine {
   #uuid() {
     let uuid = Services.uuid.generateUUID().toString();
     return uuid.slice(1, uuid.length - 1);
-  }
-}
-
-/**
- * @implements {nsISearchSubmission}.
- */
-class Submission {
-  QueryInterface = ChromeUtils.generateQI(["nsISearchSubmission"]);
-
-  constructor(uri, postData = null) {
-    this._uri = uri;
-    this._postData = postData;
-  }
-
-  get uri() {
-    return this._uri;
-  }
-  get postData() {
-    return this._postData;
   }
 }

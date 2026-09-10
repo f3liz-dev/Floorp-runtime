@@ -1,6 +1,4 @@
-/* -*- indent-tabs-mode: nil; js-indent-level: 2 -*-
- * vim: sw=2 ts=2 sts=2 et
- * this source code form is subject to the terms of the mozilla public license,
+/* this source code form is subject to the terms of the mozilla public license,
  * v. 2.0. if a copy of the mpl was not distributed with this file, you can
  * obtain one at http://mozilla.org/mpl/2.0/. */
 
@@ -31,7 +29,14 @@ const { sinon } = ChromeUtils.importESModule(
 const ACTION = BackgroundUpdate.ACTION;
 
 let ACTIONS_ALL = new Set(Object.values(ACTION));
-let ACTIONS_THROTTLED = new Set([ACTION.EXPERIMENTER, ACTION.SUBMIT_PING]);
+let ACTIONS_UNTHROTTLED = ACTIONS_ALL.difference(
+  new Set([ACTION.UPDATE_CHECK])
+);
+let ACTIONS_THROTTLED = new Set([
+  ACTION.EXPERIMENTER,
+  ACTION.SUBMIT_PING,
+  ACTION.UPDATE_CHECK,
+]);
 let ACTIONS_DEBOUNCED = new Set([]);
 
 const HOUR_IN_SECONDS = 60 * 60;
@@ -181,7 +186,7 @@ add_task(async function test_disabled() {
         lastBrowsedDays: 100,
         lastTaskRunHours: 0,
       },
-      ACTIONS_ALL
+      ACTIONS_UNTHROTTLED
     );
 
     // Test with the task never having run before.
@@ -190,7 +195,7 @@ add_task(async function test_disabled() {
         lastBrowsedDays: 100,
         lastTaskRunUnset: true,
       },
-      ACTIONS_ALL
+      ACTIONS_UNTHROTTLED
     );
   } finally {
     Services.prefs.setBoolPref(
@@ -207,7 +212,7 @@ add_task(async function test_all() {
       lastBrowsedDays: 10,
       lastTaskRunHours: 0,
     },
-    ACTIONS_ALL
+    ACTIONS_UNTHROTTLED
   );
 
   await testWithActionsToPerform(
@@ -215,7 +220,7 @@ add_task(async function test_all() {
       lastBrowsedDays: 10,
       lastTaskRunHours: 23,
     },
-    ACTIONS_ALL
+    ACTIONS_UNTHROTTLED
   );
 
   await testWithActionsToPerform(
@@ -223,7 +228,7 @@ add_task(async function test_all() {
       lastBrowsedDays: 10,
       lastTaskRunHours: 48,
     },
-    ACTIONS_ALL
+    ACTIONS_UNTHROTTLED
   );
 
   // Test the boundary condition.
@@ -232,7 +237,7 @@ add_task(async function test_all() {
       lastBrowsedDays: 10,
       lastTaskRunHours: 0,
     },
-    ACTIONS_ALL
+    ACTIONS_UNTHROTTLED
   );
 
   await testWithActionsToPerform(
@@ -240,7 +245,7 @@ add_task(async function test_all() {
       lastBrowsedDays: 10,
       lastTaskRunHours: 23,
     },
-    ACTIONS_ALL
+    ACTIONS_UNTHROTTLED
   );
 
   await testWithActionsToPerform(
@@ -248,7 +253,7 @@ add_task(async function test_all() {
       lastBrowsedDays: 10,
       lastTaskRunHours: 48,
     },
-    ACTIONS_ALL
+    ACTIONS_UNTHROTTLED
   );
 
   // Test with the task never having run before.
@@ -257,7 +262,7 @@ add_task(async function test_all() {
       lastBrowsedDays: 10,
       lastTaskRunUnset: true,
     },
-    ACTIONS_ALL
+    ACTIONS_UNTHROTTLED
   );
 
   // Test the boundary condition.
@@ -266,7 +271,7 @@ add_task(async function test_all() {
       lastBrowsedDays: 14,
       lastTaskRunHours: 48,
     },
-    ACTIONS_ALL
+    ACTIONS_UNTHROTTLED
   );
 });
 
@@ -383,6 +388,9 @@ async function testRunActions(actions) {
     [ACTION.UPDATE]: sandbox
       .stub(Actions, "attemptBackgroundUpdate")
       .resolves(AppUpdater.STATUS.NO_UPDATES_FOUND),
+    [ACTION.UPDATE_CHECK]: sandbox
+      .stub(Actions, "checkForUpdate")
+      .resolves(AppUpdater.STATUS.NO_UPDATES_FOUND),
     [ACTION.SUBMIT_PING]: sandbox
       .stub(Actions, "maybeSubmitBackgroundUpdatePing")
       .returns(null),
@@ -403,8 +411,8 @@ async function testRunActions(actions) {
   }
 }
 
-add_task(async function test_runActionsAll() {
-  await testRunActions(ACTIONS_ALL);
+add_task(async function test_runActionsUnthrottled() {
+  await testRunActions(ACTIONS_UNTHROTTLED);
 });
 
 add_task(async function test_runActionsThrottled() {

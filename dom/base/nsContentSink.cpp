@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -20,16 +18,20 @@
 #include "mozilla/Components.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/PresShellWidgetListener.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_content.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/StoragePrincipalHelper.h"
 #include "mozilla/css/Loader.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/HTMLDNSPrefetch.h"
 #include "mozilla/dom/LinkStyle.h"
+#include "mozilla/dom/ModuleLoader.h"
 #include "mozilla/dom/MutationObservers.h"
 #include "mozilla/dom/ReferrerInfo.h"
 #include "mozilla/dom/SRILogHelper.h"
@@ -66,7 +68,6 @@
 #include "nsSandboxFlags.h"
 #include "nsString.h"
 #include "nsStringFwd.h"
-#include "nsViewManager.h"
 #include "nsWidgetsCID.h"
 using namespace mozilla;
 using namespace mozilla::css;
@@ -96,7 +97,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsContentSink)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mParser)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocShell)
-  NS_IMPL_CYCLE_COLLECTION_UNLINK(mCSSLoader)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mNodeInfoManager)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mScriptLoader)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_WEAK_REFERENCE
@@ -105,7 +105,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(nsContentSink)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocument)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mParser)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocShell)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCSSLoader)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mNodeInfoManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mScriptLoader)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
@@ -163,7 +162,7 @@ nsresult nsContentSink::Init(Document* aDoc, nsIURI* aURI,
 
   mDocumentURI = aURI;
   mDocShell = do_QueryInterface(aContainer);
-  mScriptLoader = mDocument->ScriptLoader();
+  mScriptLoader = mDocument->GetScriptLoader();
 
   if (!mRunsToCompletion) {
     if (mDocShell) {
@@ -175,8 +174,6 @@ nsresult nsContentSink::Init(Document* aDoc, nsIURI* aURI,
 
     ProcessHTTPHeaders(aChannel);
   }
-
-  mCSSLoader = aDoc->CSSLoader();
 
   mNodeInfoManager = aDoc->NodeInfoManager();
 
@@ -218,11 +215,14 @@ nsContentSink::StyleSheetLoaded(StyleSheet* aSheet, bool aWasDeferred,
     ScrollToRef();
   }
 
-  mScriptLoader->RemoveParserBlockingScriptExecutionBlocker();
+  if (mScriptLoader) {
+    mScriptLoader->RemoveParserBlockingScriptExecutionBlocker();
 
-  if (loadedAllSheets &&
-      mDocument->GetReadyStateEnum() >= Document::READYSTATE_INTERACTIVE) {
-    mScriptLoader->DeferCheckpointReached();
+    if (loadedAllSheets &&
+        mDocument->GetReadyStateEnum() >= Document::READYSTATE_INTERACTIVE) {
+      const RefPtr<ScriptLoader> scriptLoader = mScriptLoader;
+      scriptLoader->DeferCheckpointReached();
+    }
   }
 
   return NS_OK;
@@ -316,14 +316,24 @@ nsresult nsContentSink::ProcessLinkFromHeader(const net::LinkHeader& aHeader,
     }
 
     if (linkTypes & LinkStyle::ePRELOAD) {
-      PreloadHref(aHeader.mHref, aHeader.mAs, aHeader.mType, aHeader.mMedia,
-                  aHeader.mNonce, aHeader.mIntegrity, aHeader.mSrcset,
-                  aHeader.mSizes, aHeader.mCrossOrigin, aHeader.mReferrerPolicy,
-                  aEarlyHintPreloaderId, aHeader.mFetchPriority);
+      PreloadHref(aHeader.mHref, aHeader.mAs, aHeader.mRel, aHeader.mType,
+                  aHeader.mMedia, aHeader.mNonce, aHeader.mIntegrity,
+                  aHeader.mSrcset, aHeader.mSizes, aHeader.mCrossOrigin,
+                  aHeader.mReferrerPolicy, aEarlyHintPreloaderId,
+                  aHeader.mFetchPriority);
+    }
+
+    if (linkTypes & LinkStyle::eCOMPRESSION_DICTIONARY) {
+      PreloadHref(aHeader.mHref, u"fetch"_ns, aHeader.mRel, aHeader.mType,
+                  aHeader.mMedia, aHeader.mNonce, aHeader.mIntegrity,
+                  aHeader.mSrcset, aHeader.mSizes, aHeader.mCrossOrigin,
+                  aHeader.mReferrerPolicy, aEarlyHintPreloaderId,
+                  aHeader.mFetchPriority);
     }
 
     if ((linkTypes & LinkStyle::eMODULE_PRELOAD) &&
-        mDocument->ScriptLoader()->GetModuleLoader()) {
+        mDocument->GetScriptLoader() &&
+        mDocument->GetScriptLoader()->GetModuleLoader()) {
       PreloadModule(aHeader.mHref, aHeader.mAs, aHeader.mMedia, aHeader.mNonce,
                     aHeader.mIntegrity, aHeader.mCrossOrigin,
                     aHeader.mReferrerPolicy, aEarlyHintPreloaderId,
@@ -399,15 +409,17 @@ nsresult nsContentSink::ProcessStyleLinkFromHeader(
       fetchPriority,
   };
 
-  auto loadResultOrErr =
-      mCSSLoader->LoadStyleLink(info, mRunsToCompletion ? nullptr : this);
+  auto loadResultOrErr = mDocument->EnsureCSSLoader().LoadStyleLink(
+      info, mRunsToCompletion ? nullptr : this);
   if (loadResultOrErr.isErr()) {
     return loadResultOrErr.unwrapErr();
   }
 
   if (loadResultOrErr.inspect().ShouldBlock() && !mRunsToCompletion) {
     ++mPendingSheetCount;
-    mScriptLoader->AddParserBlockingScriptExecutionBlocker();
+    if (mScriptLoader) {
+      mScriptLoader->AddParserBlockingScriptExecutionBlocker();
+    }
   }
 
   return NS_OK;
@@ -431,21 +443,21 @@ void nsContentSink::PrefetchHref(const nsAString& aHref, const nsAString& aAs,
   }
 }
 
-void nsContentSink::PreloadHref(const nsAString& aHref, const nsAString& aAs,
-                                const nsAString& aType, const nsAString& aMedia,
-                                const nsAString& aNonce,
-                                const nsAString& aIntegrity,
-                                const nsAString& aSrcset,
-                                const nsAString& aSizes, const nsAString& aCORS,
-                                const nsAString& aReferrerPolicy,
-                                uint64_t aEarlyHintPreloaderId,
-                                const nsAString& aFetchPriority) {
+void nsContentSink::PreloadHref(
+    const nsAString& aHref, const nsAString& aAs, const nsAString& aRel,
+    const nsAString& aType, const nsAString& aMedia, const nsAString& aNonce,
+    const nsAString& aIntegrity, const nsAString& aSrcset,
+    const nsAString& aSizes, const nsAString& aCORS,
+    const nsAString& aReferrerPolicy, uint64_t aEarlyHintPreloaderId,
+    const nsAString& aFetchPriority) {
   auto encoding = mDocument->GetDocumentCharacterSet();
   nsCOMPtr<nsIURI> uri;
   NS_NewURI(getter_AddRefs(uri), aHref, encoding, mDocument->GetDocBaseURI());
   if (!uri) {
-    // URL parsing failed.
-    return;
+    if (!aAs.LowerCaseEqualsASCII("image") || aSrcset.IsEmpty()) {
+      // URL parsing failed.
+      return;
+    }
   }
 
   nsAttrValue asAttr;
@@ -459,13 +471,13 @@ void nsContentSink::PreloadHref(const nsAString& aHref, const nsAString& aAs,
   if (policyType == nsIContentPolicy::TYPE_INVALID ||
       !mozilla::net::CheckPreloadAttrs(asAttr, mimeType, aMedia, mDocument)) {
     // Ignore preload wrong or empty attributes.
-    mozilla::net::WarnIgnoredPreload(*mDocument, *uri);
+    mozilla::net::WarnIgnoredPreload(*mDocument, uri, aSrcset);
     return;
   }
 
   mDocument->Preloads().PreloadLinkHeader(
-      uri, aHref, policyType, aAs, aType, aNonce, aIntegrity, aSrcset, aSizes,
-      aCORS, aReferrerPolicy, aEarlyHintPreloaderId, aFetchPriority);
+      uri, aHref, policyType, aAs, aRel, aType, aNonce, aIntegrity, aSrcset,
+      aSizes, aCORS, aReferrerPolicy, aEarlyHintPreloaderId, aFetchPriority);
 }
 
 void nsContentSink::PreloadModule(
@@ -473,9 +485,14 @@ void nsContentSink::PreloadModule(
     const nsAString& aNonce, const nsAString& aIntegrity,
     const nsAString& aCORS, const nsAString& aReferrerPolicy,
     uint64_t aEarlyHintPreloaderId, const nsAString& aFetchPriority) {
-  ModuleLoader* moduleLoader = mDocument->ScriptLoader()->GetModuleLoader();
+  dom::ScriptLoader* scriptLoader = mDocument->GetScriptLoader();
+  if (!scriptLoader) {
+    return;
+  }
+  ModuleLoader* moduleLoader = scriptLoader->GetModuleLoader();
 
-  if (!StaticPrefs::network_modulepreload()) {
+  if (!StaticPrefs::network_modulepreload() &&
+      !StaticPrefs::dom_multiple_import_maps_enabled()) {
     // Keep behavior from https://phabricator.services.mozilla.com/D149371,
     // prior to main implementation of modulepreload
     moduleLoader->DisallowImportMaps();
@@ -503,12 +520,14 @@ void nsContentSink::PreloadModule(
     return;
   }
 
-  moduleLoader->DisallowImportMaps();
+  if (!StaticPrefs::dom_multiple_import_maps_enabled()) {
+    moduleLoader->DisallowImportMaps();
+  }
 
   mDocument->Preloads().PreloadLinkHeader(
-      uri, aHref, nsIContentPolicy::TYPE_SCRIPT, u"script"_ns, u"module"_ns,
-      aNonce, aIntegrity, u""_ns, u""_ns, aCORS, aReferrerPolicy,
-      aEarlyHintPreloaderId, aFetchPriority);
+      uri, aHref, nsIContentPolicy::TYPE_SCRIPT, u"script"_ns,
+      u"modulepreload"_ns, u"module"_ns, aNonce, aIntegrity, u""_ns, u""_ns,
+      aCORS, aReferrerPolicy, aEarlyHintPreloaderId, aFetchPriority);
 }
 
 void nsContentSink::PrefetchDNS(const nsAString& aHref) {
@@ -585,7 +604,7 @@ void nsContentSink::StartLayout(bool aIgnorePendingSheets) {
   if (aIgnorePendingSheets) {
     nsContentUtils::ReportToConsole(
         nsIScriptError::warningFlag, "Layout"_ns, mDocument,
-        nsContentUtils::eLAYOUT_PROPERTIES, "ForcedLayoutStart");
+        PropertiesFile::LAYOUT_PROPERTIES, "ForcedLayoutStart");
   }
 
   // Notify on all our content.  If none of our presshells have started layout
@@ -767,9 +786,7 @@ nsresult nsContentSink::DidProcessATokenImpl() {
   if (StaticPrefs::content_sink_pending_event_mode() != 0 &&
       !mHasPendingEvent &&
       (mDeflectedCount % StaticPrefs::content_sink_event_probe_rate()) == 0) {
-    nsViewManager* vm = presShell->GetViewManager();
-    NS_ENSURE_TRUE(vm, NS_ERROR_FAILURE);
-    nsCOMPtr<nsIWidget> widget = vm->GetRootWidget();
+    nsIWidget* widget = presShell->GetRootWidget();
     mHasPendingEvent = widget && widget->HasPendingInputEvent();
   }
 
@@ -832,10 +849,10 @@ void nsContentSink::DidBuildModelImpl(bool aTerminated) {
              "Bad readyState");
   mDocument->SetReadyStateInternal(Document::READYSTATE_INTERACTIVE);
 
-  if (mScriptLoader) {
-    mScriptLoader->ParsingComplete(aTerminated);
+  if (const RefPtr<ScriptLoader> scriptLoader = mScriptLoader) {
+    scriptLoader->ParsingComplete(aTerminated);
     if (!mPendingSheetCount) {
-      mScriptLoader->DeferCheckpointReached();
+      scriptLoader->DeferCheckpointReached();
     }
   }
 
@@ -868,7 +885,7 @@ void nsContentSink::DropParserAndPerfHint(void) {
   // Drop our reference to the parser to get rid of a circular
   // reference.
   RefPtr<nsParserBase> kungFuDeathGrip = std::move(mParser);
-  mozilla::Unused << kungFuDeathGrip;
+  (void)kungFuDeathGrip;
 
   // Call UnblockOnload only if mRunsToComletion is false and if
   // we have already started loading because it's possible that this function
@@ -882,7 +899,7 @@ void nsContentSink::DropParserAndPerfHint(void) {
 }
 
 bool nsContentSink::IsScriptExecutingImpl() {
-  return !!mScriptLoader->GetCurrentScript();
+  return mScriptLoader && mScriptLoader->GetCurrentScript();
 }
 
 void nsContentSink::ContinueParsingDocumentAfterCurrentScriptImpl() {
@@ -904,11 +921,7 @@ nsresult nsContentSink::WillParseImpl(void) {
   uint32_t currentTime = PR_IntervalToMicroseconds(PR_IntervalNow());
 
   if (StaticPrefs::content_sink_enable_perf_mode() == 0) {
-    nsViewManager* vm = presShell->GetViewManager();
-    NS_ENSURE_TRUE(vm, NS_ERROR_FAILURE);
-    uint32_t lastEventTime;
-    vm->GetLastUserEventTime(lastEventTime);
-
+    uint32_t lastEventTime = PresShellWidgetListener::GetLastUserEventTime();
     bool newDynLower = mDocument->IsInBackgroundWindow() ||
                        ((currentTime - mBeginLoadTime) >
                             StaticPrefs::content_sink_initial_perf_time() &&
@@ -951,6 +964,9 @@ void nsContentSink::WillBuildModelImpl() {
 /* static */
 void nsContentSink::NotifyDocElementCreated(Document* aDoc) {
   MOZ_ASSERT(nsContentUtils::IsSafeToRunScript());
+
+  // This process just created a document. Ensure it's been marked as untrusted.
+  mozilla::dom::ContentChild::MaybeBecomeUntrusted();
 
   nsCOMPtr<nsIObserverService> observerService =
       mozilla::services::GetObserverService();

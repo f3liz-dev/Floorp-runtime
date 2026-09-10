@@ -9,6 +9,16 @@ prefs = [
 
 ["browser_BrowserWindowTracker.js"]
 
+["browser_BrowserWindowTracker_minimize.js"]
+skip-if = [
+  "os == 'linux' && os_version == '22.04' && arch == 'x86_64' && display == 'wayland'", # Bug 2057872
+]
+
+["browser_CrashFileCleaner.js"]
+run-if = [
+  "crashreporter",
+]
+
 ["browser_EveryWindow.js"]
 
 ["browser_HomePage_add_button.js"]
@@ -21,9 +31,16 @@ prefs = [
 
 ["browser_PermissionUI.js"]
 
+["browser_PermissionUI_notification_nimbus.js"]
+
 ["browser_PermissionUI_prompts.js"]
 
 ["browser_ProcessHangNotifications.js"]
+
+["browser_ReducedProtectionNotification.js"]
+https_first_disabled = true
+
+["browser_ReducedProtectionNotification_permanentPB.js"]
 
 ["browser_SitePermissions.js"]
 
@@ -41,6 +58,9 @@ support-files = [
   "../../../components/tabbrowser/test/browser/tabs/file_mediaPlayback.html",
   "../../../base/content/test/general/audio.ogg",
 ]
+skip-if = [
+  "os == 'mac' && os_version == '15.30' && arch == 'aarch64' && opt", # Bug 1781868
+]
 
 ["browser_Telemetry_numberOfSiteOrigins.js"]
 support-files = ["contain_iframe.html"]
@@ -54,7 +74,12 @@ support-files = [
 ["browser_URILoadingHelper_chromeless.js"]
 
 ["browser_UnsubmittedCrashHandler.js"]
-run-if = ["crashreporter"]
+run-if = [
+  "crashreporter",
+]
+
+["browser_UpdatePolicyEnforcer.js"]
+
 
 ["browser_UsageTelemetry.js"]
 https_first_disabled = true
@@ -62,8 +87,14 @@ https_first_disabled = true
 ["browser_UsageTelemetry_domains.js"]
 https_first_disabled = true
 
+["browser_UsageTelemetry_idleDaily.js"]
+
 ["browser_UsageTelemetry_interaction.js"]
 https_first_disabled = true
+skip-if = [
+  "os == 'win' && os_version == '11.26100' && opt && verify-standalone",
+  "os == 'win' && os_version == '11.26200' && opt && verify-standalone",
+]
 
 ["browser_UsageTelemetry_private_and_restore.js"]
 https_first_disabled = true
@@ -76,7 +107,12 @@ https_first_disabled = true
 ["browser_preloading_tab_moving.js"]
 
 ["browser_taskbar_preview.js"]
-run-if = ["os == 'win'"]
+run-if = [
+  "os == 'win'",
+]
 
 ["browser_urlBar_zoom.js"]
-skip-if = ["os == 'linux' && os_version == '24.04' && processor == 'x86_64' && display == 'x11' && debug && swgl"] # Bug 1775794
+skip-if = [
+  "os == 'linux' && os_version == '24.04' && arch == 'x86_64' && display == 'x11'", # Bug 1775794
+  "os == 'mac' && os_version == '10.15' && arch == 'x86_64' && debug", # Bug 1775794
+]

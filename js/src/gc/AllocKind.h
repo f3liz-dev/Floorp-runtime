@@ -1,7 +1,4 @@
-
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -15,7 +12,6 @@
 #include "mozilla/EnumeratedArray.h"
 #include "mozilla/EnumeratedRange.h"
 
-#include <iterator>
 #include <stdint.h>
 
 #include "js/TraceKind.h"
@@ -72,6 +68,10 @@ namespace gc {
     D(OBJECT4,             Object,       JSObject,              JSObject_Slots4,       None,       true,   true) \
     D(OBJECT4_FOREGROUND,  Object,       JSObject,              JSObject_Slots4,       Foreground, true,   true) \
     D(OBJECT4_BACKGROUND,  Object,       JSObject,              JSObject_Slots4,       Background, true,   true) \
+    D(ARRAYBUFFER6,        Object,       JSObject,              JSObject_Slots6,       Background, true,   true) \
+    D(OBJECT6,             Object,       JSObject,              JSObject_Slots6,       None,       true,   true) \
+    D(OBJECT6_FOREGROUND,  Object,       JSObject,              JSObject_Slots6,       Foreground, true,   true) \
+    D(OBJECT6_BACKGROUND,  Object,       JSObject,              JSObject_Slots6,       Background, true,   true) \
     D(ARRAYBUFFER8,        Object,       JSObject,              JSObject_Slots8,       Background, true,   true) \
     D(OBJECT8,             Object,       JSObject,              JSObject_Slots8,       None,       true,   true) \
     D(OBJECT8_FOREGROUND,  Object,       JSObject,              JSObject_Slots8,       Foreground, true,   true) \
@@ -99,7 +99,7 @@ namespace gc {
     D(ATOM,                String,       js::NormalAtom,        js::NormalAtom,        Background, false,  false) \
     D(SYMBOL,              Symbol,       JS::Symbol,            JS::Symbol,            None,       false,  false) \
     D(JITCODE,             JitCode,      js::jit::JitCode,      js::jit::JitCode,      Foreground, false,  false) \
-    D(SCOPE,               Scope,        js::Scope,             js::Scope,             Background, false,  true) \
+    D(SCOPE,               Scope,        js::Scope,             js::Scope,             None,       false,  true) \
     D(REGEXP_SHARED,       RegExpShared, js::RegExpShared,      js::RegExpShared,      Background, false,  true)
 
 #define FOR_EACH_NONOBJECT_NURSERY_ALLOCKIND(D) \

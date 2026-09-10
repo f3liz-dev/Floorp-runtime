@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -19,19 +17,13 @@
 #include "js/loader/ScriptKind.h"
 #include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/Assertions.h"
-#include "mozilla/Atomics.h"
 #include "mozilla/CORSMode.h"
-#include "mozilla/LinkedList.h"
-#include "mozilla/Maybe.h"
-#include "mozilla/MaybeOneOf.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/PreloaderBase.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/TaskController.h"  // mozilla::Task
 #include "mozilla/Utf8.h"            // mozilla::Utf8Unit
-#include "mozilla/Variant.h"
-#include "mozilla/Vector.h"
 #include "mozilla/dom/SRIMetadata.h"
 #include "mozilla/net/UrlClassifierCommon.h"
 #include "nsCOMPtr.h"
@@ -141,7 +133,8 @@ class ScriptLoadContext : public JS::loader::LoadContextBase,
   virtual ~ScriptLoadContext();
 
  public:
-  explicit ScriptLoadContext(nsIScriptElement* aScriptElement = nullptr);
+  explicit ScriptLoadContext(nsIScriptElement* aScriptElement = nullptr,
+                             const nsAString& aSourceText = VoidString());
 
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(ScriptLoadContext,
@@ -164,6 +157,28 @@ class ScriptLoadContext : public JS::loader::LoadContextBase,
   void BlockOnload(Document* aDocument);
 
   void MaybeUnblockOnload();
+
+  // Set for a <link rel=modulepreload> whose module is fetching, fetched or
+  // cached, i.e. one that doesn't create a channel to start a network request,
+  // and so has to report its own result through
+  // NotifyPreloadCoalescingResult(). See ScriptLoader::NotifyPreloadCoalescing.
+  void SetIsCoalescedModulePreload() { mIsCoalescedModulePreload = true; }
+
+  // Called by the module loader when this request stopped waiting on an
+  // in-progress fetch of the same URL. Only a coalesced module preload has
+  // anything to report at that point.
+  void NotifyModuleWaitFinished() {
+    if (mIsCoalescedModulePreload) {
+      NotifyPreloadCoalescingResult();
+    }
+  }
+
+  // https://html.spec.whatwg.org/multipage/links.html#link-type-modulepreload
+  //
+  // Fires the load/error event of a coalesced module preload from the top-level
+  // module's result. Fires nothing while the module is still fetching; the
+  // caller notifies us again once the fetch resolves or is canceled.
+  void NotifyPreloadCoalescingResult();
 
   enum class ScriptMode : uint8_t {
     eBlocking,
@@ -205,12 +220,6 @@ class ScriptLoadContext : public JS::loader::LoadContextBase,
   // NOTE: This is called also for imported modules.
   //       The consumer allows nullptr.
   inline nsIScriptElement* GetScriptElementForTrace() const {
-    return mScriptElement;
-  }
-
-  // Event target for beforescriptexecute/afterscriptexecute events.
-  inline nsIScriptElement* GetScriptElementForExecuteEvents() const {
-    MOZ_ASSERT(mScriptElement);
     return mScriptElement;
   }
 
@@ -294,11 +303,27 @@ class ScriptLoadContext : public JS::loader::LoadContextBase,
   bool mIsNonAsyncScriptInserted;  // True if we live in
                                    // mNonAsyncExternalScriptInsertedRequests
   bool mIsXSLT;                    // True if we live in mXSLTRequests.
-  bool mInCompilingList;     // True if we are in mOffThreadCompilingRequests.
-  net::ClassificationFlags   // Classification flags
-      mClassificationFlags;  // of the source of the script.
-  bool mWasCompiledOMT;      // True if the script has been compiled off main
-                             // thread.
+  bool mInCompilingList;  // True if we are in mOffThreadCompilingRequests.
+  bool mWasCompiledOMT;   // True if the script has been compiled off main
+                          // thread.
+  // Set on preloading scripts or modules.
+  bool mIsPreload;
+
+  // Set on a coalesced <link rel=modulepreload> request, i.e. the preloading
+  // module is already fetching, or fetched, or cached. Unlike the eLinkPreload
+  // script mode, this isn't cleared when a <script> element steals the preload,
+  // because the element that coalesced onto it is still waiting for its event.
+  bool mIsCoalescedModulePreload;
+
+  // For preload requests, we defer reporting errors to the console until the
+  // request is used.
+  nsresult mUnreportedPreloadError;
+
+  uint32_t mLineNo;
+  JS::ColumnNumberOneOrigin mColumnNo;
+
+  // Classification flags of the source of the script.
+  net::ClassificationFlags mClassificationFlags;
 
   // Task that performs off-thread compilation or off-thread decode.
   // This field is used to take the result of the task, or cancel the task.
@@ -307,12 +332,6 @@ class ScriptLoadContext : public JS::loader::LoadContextBase,
   // result or cancelling the task.
   RefPtr<CompileOrDecodeTask> mCompileOrDecodeTask;
 
-  uint32_t mLineNo;
-  JS::ColumnNumberOneOrigin mColumnNo;
-
-  // Set on scripts and top level modules.
-  bool mIsPreload;
-
   // Non-null if there is a document that this request is blocking from loading.
   RefPtr<Document> mLoadBlockedDocument;
 
@@ -320,9 +339,7 @@ class ScriptLoadContext : public JS::loader::LoadContextBase,
   // This is valid only for classic script and top-level module script.
   nsCOMPtr<nsIScriptElement> mScriptElement;
 
-  // For preload requests, we defer reporting errors to the console until the
-  // request is used.
-  nsresult mUnreportedPreloadError;
+  nsString mSourceText;
 };
 
 }  // namespace mozilla::dom

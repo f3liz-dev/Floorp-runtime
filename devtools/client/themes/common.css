@@ -25,7 +25,7 @@
      the colors fall back to their "default" values */
   --toggle-disabled-track-border-color: var(--toggle-track-border-color);
   --toggle-disabled-track-color-pressed: var(--toggle-track-color-pressed);
-  --toggle-disabled-thumb-color: var(--toggle-disabled-thumb-color);
+  --toggle-disabled-thumb-color: var(--toggle-thumb-color);
   --toggle-track-disabled-opacity: 0.5;
   /* We don't have distinct :hover style in regular themes, the colors fall back to their
      "default" values */
@@ -413,15 +413,18 @@ iframe {
 }
 
 /* Standalone buttons */
-.devtools-button[data-standalone] {
+.devtools-button.devtools-button-standalone {
   min-height: 28px;
   padding: 4px 6px;
-  border: 1px solid transparent;
+  border: 1px solid light-dark(rgba(138, 161, 180, 0.2), var(--grey-50));
   background: var(--toolbarbutton-background);
-}
-
-.theme-light .devtools-button[data-standalone] {
-  border-color: rgba(138, 161, 180, 0.2);
+  /* prettier-ignore */
+  color: light-dark(
+    var(--grey-70),
+    /* In dark mode, --grey-40 will only give us a AA contrast score, but --grey-30
+       is a bit too harsh, so we mix the color just enough to get a AAA score */
+    color-mix(in srgb, var(--grey-30) 70%, var(--grey-40))
+  );
 }
 
 /* Selectable button which is unchecked. */
@@ -581,6 +584,7 @@ iframe {
 
 /* Display an outline on the container when the child input is focused. If another element
    is focused (e.g. a button), we only want the outline on that element */
+/* stylelint-disable-next-line stylelint-plugin-mozilla/no-has-selector */
 .devtools-searchbox:focus-within:has(input:focus-visible) {
   outline: var(--theme-focus-outline);
   outline-color: var(--theme-focus-textinput-outline-color);
@@ -776,6 +780,7 @@ iframe {
   transform: scaleX(1);
 }
 
+/* stylelint-disable-next-line stylelint-plugin-mozilla/no-has-selector */
 .devtools-tab.selected .devtools-tab-line,
 /* don't show the line when focus is visible to prevent overlapping with the outline */
 .tabs-menu-item.is-active .devtools-tab-line:not(:has(+ [role="tab"]:focus-visible)) {
@@ -890,4 +895,41 @@ html[dir="rtl"] .devtools-checkbox-toggle:checked {
   background-position:
     0 0,
     10px 10px;
+}
+
+/******************************************************************************/
+/* Jump to definition button */
+
+button.jump-definition {
+  display: inline-block;
+  height: 16px;
+  width: 20px;
+  margin-left: 0.25em;
+  vertical-align: middle;
+  background: center url("chrome://devtools/content/shared/components/reps/images/jump-definition.svg") no-repeat;
+  border-color: transparent;
+  stroke: var(--theme-icon-color);
+  -moz-context-properties: stroke;
+  cursor: pointer;
+}
+
+button.jump-definition:hover {
+  stroke: var(--theme-icon-checked-color);
+}
+
+:root[forced-colors-active] button.jump-definition {
+  border: 1px solid ButtonText;
+  border-radius: 2px;
+  background-color: ButtonFace;
+}
+
+:root[forced-colors-active] button.jump-definition:hover {
+  stroke: var(--theme-icon-hover-color);
+  border-color: var(--theme-icon-hover-color);
+}
+
+/* In High Contrast Mode, the button has a solid background, so we only need
+    to set a different color for the icon when we are not in HCM */
+:root:not([forced-colors-active]) .tree-node.focused button.jump-definition {
+  stroke: currentColor;
 }

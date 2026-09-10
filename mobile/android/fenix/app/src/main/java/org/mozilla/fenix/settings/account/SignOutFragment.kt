@@ -12,6 +12,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.appcompat.app.AppCompatDialogFragment
 import androidx.lifecycle.lifecycleScope
+import com.google.android.material.R as materialR
 import com.google.android.material.bottomsheet.BottomSheetBehavior
 import com.google.android.material.bottomsheet.BottomSheetDialog
 import kotlinx.coroutines.launch
@@ -25,7 +26,8 @@ class SignOutFragment : AppCompatDialogFragment() {
     private lateinit var accountManager: FxaAccountManager
 
     private var _binding: FragmentSignOutBinding? = null
-    private val binding get() = _binding!!
+    private val binding
+        get() = _binding!!
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,8 +37,7 @@ class SignOutFragment : AppCompatDialogFragment() {
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog =
         BottomSheetDialog(requireContext(), this.theme).apply {
             setOnShowListener {
-                val bottomSheet =
-                    findViewById<View>(com.google.android.material.R.id.design_bottom_sheet) as FrameLayout
+                val bottomSheet = findViewById<View>(materialR.id.design_bottom_sheet) as FrameLayout
                 val behavior = BottomSheetBehavior.from(bottomSheet)
                 behavior.state = BottomSheetBehavior.STATE_EXPANDED
             }
@@ -50,12 +51,11 @@ class SignOutFragment : AppCompatDialogFragment() {
         accountManager = requireComponents.backgroundServices.accountManager
         _binding = FragmentSignOutBinding.inflate(inflater, container, false)
 
-        binding.signOutMessage.text = String.format(
-            binding.root.context.getString(
-                R.string.sign_out_confirmation_message_2,
-            ),
-            binding.root.context.getString(R.string.app_name),
-        )
+        binding.signOutMessage.text =
+            String.format(
+                binding.root.context.getString(R.string.sign_out_confirmation_message_2),
+                binding.root.context.getString(R.string.app_name),
+            )
         return binding.root
     }
 
@@ -63,17 +63,18 @@ class SignOutFragment : AppCompatDialogFragment() {
         super.onViewCreated(view, savedInstanceState)
 
         binding.signOutDisconnect.setOnClickListener {
-            lifecycleScope.launch {
-                requireComponents
-                    .backgroundServices.accountAbnormalities.userRequestedLogout()
-                accountManager.logout()
-            }.invokeOnCompletion {
-                runIfFragmentIsAttached {
-                    if (this.isVisible) {
-                        dismiss()
+            lifecycleScope
+                .launch {
+                    requireComponents.backgroundServices.accountAbnormalities.userRequestedLogout()
+                    accountManager.logout()
+                }
+                .invokeOnCompletion {
+                    runIfFragmentIsAttached {
+                        if (this.isVisible) {
+                            dismiss()
+                        }
                     }
                 }
-            }
         }
 
         binding.signOutCancel.setOnClickListener {

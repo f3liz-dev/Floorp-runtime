@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -13,7 +11,6 @@
 #include "js/loader/ModuleLoadRequest.h"
 #include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/StaticPrefs_dom.h"
-#include "mozilla/Unused.h"
 #include "mozilla/Utf8.h"  // mozilla::Utf8Unit
 #include "mozilla/dom/Document.h"
 #include "nsContentUtils.h"
@@ -34,7 +31,7 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(ScriptLoadContext)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(ScriptLoadContext,
                                                 JS::loader::LoadContextBase)
-  MOZ_ASSERT(!tmp->mCompileOrDecodeTask);
+  tmp->MaybeCancelOffThreadScript();
   tmp->MaybeUnblockOnload();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mScriptElement);
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
@@ -49,7 +46,8 @@ NS_IMPL_ADDREF_INHERITED(ScriptLoadContext, JS::loader::LoadContextBase)
 NS_IMPL_RELEASE_INHERITED(ScriptLoadContext, JS::loader::LoadContextBase)
 
 ScriptLoadContext::ScriptLoadContext(
-    nsIScriptElement* aScriptElement /* = nullptr */)
+    nsIScriptElement* aScriptElement /* = nullptr */,
+    const nsAString& aSourceText /* = VoidString() */)
     : JS::loader::LoadContextBase(JS::loader::ContextKind::Window),
       mScriptMode(ScriptMode::eBlocking),
       mScriptFromHead(false),
@@ -59,18 +57,22 @@ ScriptLoadContext::ScriptLoadContext(
       mIsNonAsyncScriptInserted(false),
       mIsXSLT(false),
       mInCompilingList(false),
-      mClassificationFlags({0, 0}),
       mWasCompiledOMT(false),
+      mIsPreload(false),
+      mIsCoalescedModulePreload(false),
+      mUnreportedPreloadError(NS_OK),
       mLineNo(1),
       mColumnNo(0),
-      mIsPreload(false),
+      mClassificationFlags({0, 0}),
       mScriptElement(aScriptElement),
-      mUnreportedPreloadError(NS_OK) {}
+      mSourceText(aSourceText) {}
 
 ScriptLoadContext::~ScriptLoadContext() {
   MOZ_ASSERT(NS_IsMainThread());
 
-  // Off-thread parsing must have completed or cancelled by this point.
+  // A request can be abandoned after off-thread compilation completes but
+  // before execution steals the result.
+  MaybeCancelOffThreadScript();
   MOZ_DIAGNOSTIC_ASSERT(!mCompileOrDecodeTask);
 
   mRequest = nullptr;
@@ -88,6 +90,36 @@ void ScriptLoadContext::MaybeUnblockOnload() {
   if (mLoadBlockedDocument) {
     mLoadBlockedDocument->UnblockOnload(false);
     mLoadBlockedDocument = nullptr;
+  }
+}
+
+void ScriptLoadContext::NotifyPreloadCoalescingResult() {
+  MOZ_ASSERT(mIsCoalescedModulePreload);
+
+  if (HasStopped()) {
+    return;
+  }
+
+  MOZ_ASSERT(!Channel());
+
+  JS::loader::ModuleLoadRequest* request = mRequest->AsModuleRequest();
+  MOZ_ASSERT(request->IsTopLevel());
+
+  if (request->mModuleScript) {
+    // Fetching produced a module script, even if it has a parse error.
+    NotifyStop(NS_OK);
+    MOZ_ASSERT(HasStopped());
+  } else if (request->IsFinished()) {
+    // The fetch failed, or the request was canceled before it finished. Either
+    // way there will be no module script, so this is the element's last chance
+    // to hear about the load.
+    NotifyStop(NS_ERROR_FAILURE);
+    MOZ_ASSERT(HasStopped());
+  } else {
+    // The top-level module is still being fetched.
+    // The result of the fetch will be notified via
+    // ModuleLoaderBase::ResumeWaitingRequests or Cancel.
+    MOZ_ASSERT(request->IsFetching());
   }
 }
 
@@ -129,7 +161,8 @@ void ScriptLoadContext::PrioritizeAsPreload(nsIChannel* aChannel) {
 }
 
 bool ScriptLoadContext::IsPreload() const {
-  if (mRequest->IsModuleRequest() && !mRequest->IsTopLevel()) {
+  if (mRequest->IsModuleRequest() &&
+      mRequest->AsModuleRequest()->IsStaticImport()) {
     JS::loader::ModuleLoadRequest* root =
         mRequest->AsModuleRequest()->GetRootModule();
     return root->GetScriptLoadContext()->IsPreload();
@@ -147,7 +180,12 @@ bool ScriptLoadContext::HasScriptElement() const { return !!mScriptElement; }
 
 void ScriptLoadContext::GetInlineScriptText(nsAString& aText) const {
   MOZ_ASSERT(mIsInline);
-  mScriptElement->GetScriptText(aText);
+  if (mSourceText.IsVoid()) {
+    // Lazily retrieve the text of inline script, see bug 1376651.
+    mScriptElement->GetScriptText(aText);
+  } else {
+    aText.Append(mSourceText);
+  }
 }
 
 void ScriptLoadContext::GetHintCharset(nsAString& aCharset) const {
@@ -219,8 +257,8 @@ void ScriptLoadContext::GetProfilerLabel(nsACString& aOutString) {
   }
 
   nsAutoCString url;
-  if (mRequest->mURI) {
-    mRequest->mURI->GetAsciiSpec(url);
+  if (mRequest->URI()) {
+    mRequest->URI()->GetAsciiSpec(url);
   } else {
     url = "<unknown>";
   }

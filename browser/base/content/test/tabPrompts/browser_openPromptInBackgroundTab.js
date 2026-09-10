@@ -6,7 +6,7 @@ const { PermissionTestUtils } = ChromeUtils.importESModule(
 
 const ROOT = getRootDirectory(gTestPath).replace(
   "chrome://mochitests/content/",
-  // eslint-disable-next-line @microsoft/sdl/no-insecure-url
+  // eslint-disable-next-line sdl/no-insecure-url
   "http://example.com/"
 );
 let pageWithAlert = ROOT + "openPromptOffTimeout.html";
@@ -52,9 +52,9 @@ add_task(async function test_modal_ui() {
   // switch tab back, and check the checkbox is displayed:
   await BrowserTestUtils.switchTab(gBrowser, openedTab);
   // check the prompt is there
-  let promptElements = openedTab.linkedBrowser.parentNode.querySelectorAll(
-    ".content-prompt-dialog"
-  );
+  let promptElements = openedTab.linkedBrowser
+    .closest(".browserSidebarContainer")
+    .querySelectorAll(".content-prompt-dialog");
 
   let dialogBox = gBrowser.getTabDialogBox(openedTab.linkedBrowser);
   let contentPromptManager = dialogBox.getContentDialogManager();
@@ -123,7 +123,7 @@ add_task(async function test_modal_ui() {
   let openedTabSelectedPromise = BrowserTestUtils.waitForAttribute(
     "selected",
     openedTab,
-    "true"
+    true
   );
 
   // switch to other tab again

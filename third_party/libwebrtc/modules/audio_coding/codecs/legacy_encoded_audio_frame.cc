@@ -11,9 +11,16 @@
 #include "modules/audio_coding/codecs/legacy_encoded_audio_frame.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <span>
 #include <utility>
+#include <vector>
 
+#include "api/audio_codecs/audio_decoder.h"
+#include "rtc_base/buffer.h"
 #include "rtc_base/checks.h"
 
 namespace webrtc {
@@ -30,7 +37,7 @@ size_t LegacyEncodedAudioFrame::Duration() const {
 }
 
 std::optional<AudioDecoder::EncodedAudioFrame::DecodeResult>
-LegacyEncodedAudioFrame::Decode(ArrayView<int16_t> decoded) const {
+LegacyEncodedAudioFrame::Decode(std::span<int16_t> decoded) const {
   AudioDecoder::SpeechType speech_type = AudioDecoder::kSpeech;
   const int ret = decoder_->Decode(
       payload_.data(), payload_.size(), decoder_->SampleRateHz(),
@@ -39,7 +46,8 @@ LegacyEncodedAudioFrame::Decode(ArrayView<int16_t> decoded) const {
   if (ret < 0)
     return std::nullopt;
 
-  return DecodeResult{static_cast<size_t>(ret), speech_type};
+  return DecodeResult{.num_decoded_samples = static_cast<size_t>(ret),
+                      .speech_type = speech_type};
 }
 
 std::vector<AudioDecoder::ParseResult> LegacyEncodedAudioFrame::SplitBySamples(

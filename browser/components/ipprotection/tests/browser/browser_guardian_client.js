@@ -5,9 +5,8 @@
 "use strict";
 
 const { GuardianClient } = ChromeUtils.importESModule(
-  "resource:///modules/ipprotection/GuardianClient.sys.mjs"
+  "moz-src:///toolkit/components/ipprotection/fxa/GuardianClient.sys.mjs"
 );
-
 function makeGuardianServer(
   arg = {
     enroll: (_request, _response) => {},
@@ -23,12 +22,6 @@ function makeGuardianServer(
   return server;
 }
 
-const testGuardianConfig = server => ({
-  withToken: async cb => cb("test-token"),
-  guardianEndpoint: `http://localhost:${server.identity.primaryPort}`,
-  fxaOrigin: `http://localhost:${server.identity.primaryPort}`,
-});
-
 const testcases = [
   {
     name: "Successful enrollment",
@@ -37,6 +30,16 @@ const testcases = [
       ok: true,
       error: undefined,
     },
+    experimentType: "alpha",
+  },
+  {
+    name: "Successful enrollment with custom experiment",
+    responseURL: "/oauth/success?code=abc123",
+    expects: {
+      ok: true,
+      error: undefined,
+    },
+    experimentType: "beta",
   },
   {
     name: "Failed enrollment - error in success URL",
@@ -45,20 +48,32 @@ const testcases = [
       ok: false,
       error: "generic_error",
     },
+    experimentType: "alpha",
   },
 ];
 
 // Run each test case as a separate task to ensure clean state
 testcases
-  .map(({ name, responseURL, expects }) => {
+  .map(({ name, responseURL, expects, experimentType }) => {
     return async () => {
       requestLongerTimeout(2); // Increase timeout for this test case
       info(`Running test case: ${name}`);
 
-      // Create a Guardian server with custom enroll handler that redirects to our test URL
       const server = makeGuardianServer({
         enroll: (request, response) => {
           info(`Handling enroll request, redirecting to ${responseURL}`);
+
+          // Assert that the experiment query parameter is present
+          const queryParams = new URLSearchParams(request.queryString);
+          Assert.ok(
+            queryParams.has("experiment"),
+            "Request should include 'experiment' query parameter"
+          );
+          Assert.equal(
+            queryParams.get("experiment"),
+            experimentType,
+            `Experiment type should be '${experimentType}'`
+          );
 
           // Set up a proper HTTP redirect
           response.setStatusLine(request.httpVersion, 302, "Found");
@@ -72,14 +87,19 @@ testcases
         },
       });
 
-      // Create a client with our test server
-      const client = new GuardianClient(testGuardianConfig(server));
+      const serverOrigin = `http://localhost:${server.identity.primaryPort}`;
+      await SpecialPowers.pushPrefEnv({
+        set: [
+          ["browser.ipProtection.guardian.endpoint", serverOrigin],
+          ["identity.fxaccounts.remote.root", serverOrigin],
+        ],
+      });
+
+      const client = new GuardianClient();
 
       try {
-        // Call the actual enroll method - no mocking!
-        const result = await client.enroll();
+        const result = await client.enrollWithFxa(experimentType);
 
-        // Check the results
         Assert.equal(
           result.ok,
           expects.ok,
@@ -100,6 +120,7 @@ testcases
           );
         }
       } finally {
+        await SpecialPowers.popPrefEnv();
         server.stop();
       }
     };

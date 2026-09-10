@@ -13,7 +13,7 @@
 #include <memory>
 #include <utility>
 
-#include "api/environment/environment_factory.h"
+#include "api/environment/environment.h"
 #include "api/ice_transport_factory.h"
 #include "api/ice_transport_interface.h"
 #include "api/make_ref_counted.h"
@@ -22,8 +22,9 @@
 #include "p2p/test/fake_port_allocator.h"
 #include "rtc_base/internal/default_socket_server.h"
 #include "rtc_base/socket_server.h"
-#include "rtc_base/thread.h"
+#include "test/create_test_environment.h"
 #include "test/gtest.h"
+#include "test/run_loop.h"
 
 namespace webrtc {
 
@@ -37,12 +38,12 @@ class IceTransportTest : public ::testing::Test {
 
  private:
   std::unique_ptr<SocketServer> socket_server_;
-  AutoSocketServerThread main_thread_;
+  test::RunLoop main_thread_;
 };
 
 TEST_F(IceTransportTest, CreateNonSelfDeletingTransport) {
-  auto cricket_transport =
-      std::make_unique<FakeIceTransport>("name", 0, nullptr);
+  auto cricket_transport = std::make_unique<FakeIceTransportInternal>(
+      CreateTestEnvironment(), "name", 0, nullptr);
   auto ice_transport =
       make_ref_counted<IceTransportWithPointer>(cricket_transport.get());
   EXPECT_EQ(ice_transport->internal(), cricket_transport.get());
@@ -51,8 +52,9 @@ TEST_F(IceTransportTest, CreateNonSelfDeletingTransport) {
 }
 
 TEST_F(IceTransportTest, CreateSelfDeletingTransport) {
-  FakePortAllocator port_allocator(CreateEnvironment(), socket_server());
-  IceTransportInit init;
+  Environment env = CreateTestEnvironment();
+  FakePortAllocator port_allocator(env, socket_server());
+  IceTransportInit init(env);
   init.set_port_allocator(&port_allocator);
   auto ice_transport = CreateIceTransport(std::move(init));
   EXPECT_NE(nullptr, ice_transport->internal());

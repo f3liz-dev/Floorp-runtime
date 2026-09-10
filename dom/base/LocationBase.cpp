@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,6 +10,7 @@
 #include "mozilla/dom/WindowContext.h"
 #include "nsCOMPtr.h"
 #include "nsContentUtils.h"
+#include "nsDocLoader.h"
 #include "nsDocShellLoadState.h"
 #include "nsError.h"
 #include "nsGlobalWindowInner.h"
@@ -23,16 +22,47 @@
 
 namespace mozilla::dom {
 
-void LocationBase::SetURI(nsIURI* aURI, nsIPrincipal& aSubjectPrincipal,
-                          ErrorResult& aRv, bool aReplace) {
-  RefPtr<BrowsingContext> bc = GetBrowsingContext();
-  if (!bc || bc->IsDiscarded()) {
+static bool IncumbentGlobalHasTransientActivation() {
+  nsGlobalWindowInner* window = nsContentUtils::IncumbentInnerWindow();
+  return window && window->GetWindowContext() && window->GetWindowContext() &&
+         window->GetWindowContext()->HasValidTransientUserGestureActivation();
+}
+
+// https://html.spec.whatwg.org/#location-object-navigate
+void LocationBase::Navigate(nsIURI* aURI, nsIPrincipal& aSubjectPrincipal,
+                            ErrorResult& aRv,
+                            NavigationHistoryBehavior aHistoryHandling) {
+  // Step 1
+  RefPtr<BrowsingContext> navigable = GetBrowsingContext();
+  if (!navigable || navigable->IsDiscarded()) {
     return;
   }
 
-  bc->Navigate(aURI, aSubjectPrincipal, aRv,
-               aReplace ? NavigationHistoryBehavior::Replace
-                        : NavigationHistoryBehavior::Push);
+  // Step 2-3, except the check for if document is completely loaded.
+  bool needsCompletelyLoadedDocument = !IncumbentGlobalHasTransientActivation();
+
+  // Make the load's referrer reflect changes to the document's URI caused by
+  // push/replaceState, if possible.  First, get the document corresponding to
+  // fp.  If the document's original URI (i.e. its URI before
+  // push/replaceState) matches the principal's URI, use the document's
+  // current URI as the referrer.  If they don't match, use the principal's
+  // URI.
+  //
+  // The triggering principal for this load should be the principal of the
+  // incumbent document (which matches where the referrer information is
+  // coming from) when there is an incumbent document, and the subject
+  // principal otherwise.  Note that the URI in the triggering principal
+  // may not match the referrer URI in various cases, notably including
+  // the cases when the incumbent document's document URI was modified
+  // after the document was loaded.
+
+  nsCOMPtr<nsPIDOMWindowInner> incumbent =
+      do_QueryInterface(mozilla::dom::GetIncumbentGlobal());
+  nsCOMPtr<Document> doc = incumbent ? incumbent->GetDoc() : nullptr;
+
+  // Step 4
+  navigable->Navigate(aURI, doc, aSubjectPrincipal, aRv, aHistoryHandling,
+                      needsCompletelyLoadedDocument);
 }
 
 void LocationBase::SetHref(const nsACString& aHref,
@@ -66,35 +96,12 @@ void LocationBase::SetHrefWithBase(const nsACString& aHref, nsIURI* aBase,
     return;
   }
 
-  /* Check with the scriptContext if it is currently processing a script tag.
-   * If so, this must be a <script> tag with a location.href in it.
-   * we want to do a replace load, in such a situation.
-   * In other cases, for example if a event handler or a JS timer
-   * had a location.href in it, we want to do a normal load,
-   * so that the new url will be appended to Session History.
-   * This solution is tricky. Hopefully it isn't going to bite
-   * anywhere else. This is part of solution for bug # 39938, 72197
-   */
-  bool inScriptTag = false;
-  nsIScriptContext* scriptContext = nullptr;
-  nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(GetEntryGlobal());
-  if (win) {
-    scriptContext = nsGlobalWindowInner::Cast(win)->GetContextInternal();
+  NavigationHistoryBehavior historyHandling = NavigationHistoryBehavior::Auto;
+  if (aReplace) {
+    historyHandling = NavigationHistoryBehavior::Replace;
   }
 
-  if (scriptContext) {
-    if (scriptContext->GetProcessingScriptTag()) {
-      // Now check to make sure that the script is running in our window,
-      // since we only want to replace if the location is set by a
-      // <script> tag in the same window.  See bug 178729.
-      nsCOMPtr<nsIDocShell> docShell(GetDocShell());
-      nsCOMPtr<nsIScriptGlobalObject> ourGlobal =
-          docShell ? docShell->GetScriptGlobalObject() : nullptr;
-      inScriptTag = (ourGlobal == scriptContext->GetGlobalObject());
-    }
-  }
-
-  SetURI(newUri, aSubjectPrincipal, aRv, aReplace || inScriptTag);
+  Navigate(newUri, aSubjectPrincipal, aRv, historyHandling);
 }
 
 void LocationBase::Replace(const nsACString& aUrl,

@@ -2,9 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
-import { PROMISE } from "../utils/middleware/promise";
+const {
+  PROMISE,
+} = require("resource://devtools/client/shared/redux/middleware/promise.js");
 import {
-  getSourceTextContent,
+  getSourceTextContentForSource,
   getSettledSourceTextContent,
   getSourcesEpoch,
   getBreakpointsForSource,
@@ -21,7 +23,7 @@ import { memoizeableAction } from "../../utils/memoizableAction";
 
 import { getEditor } from "../../utils/editor/index";
 
-async function loadGeneratedSource(sourceActor, { client }) {
+async function loadGeneratedSource(sourceActor) {
   // If no source actor can be found then the text for the
   // source cannot be loaded.
   if (!sourceActor) {
@@ -30,9 +32,10 @@ async function loadGeneratedSource(sourceActor, { client }) {
 
   let response;
   try {
-    response = await client.sourceContents(sourceActor);
+    response =
+      await sourceActor.targetFront.getSourceContentForResource(sourceActor);
   } catch (e) {
-    throw new Error(`sourceContents failed: ${e}`);
+    throw new Error(`targetFront.getSourceContentForResource failed: ${e}`);
   }
 
   return {
@@ -86,7 +89,7 @@ async function loadGeneratedSourceTextPromise(sourceActor, thunkArgs) {
     type: "LOAD_GENERATED_SOURCE_TEXT",
     sourceActor,
     epoch,
-    [PROMISE]: loadGeneratedSource(sourceActor, thunkArgs),
+    [PROMISE]: loadGeneratedSource(sourceActor),
   });
 
   await onSourceTextContentAvailable(
@@ -113,10 +116,10 @@ async function loadOriginalSourceTextPromise(source, thunkArgs) {
  * Function called everytime a new original or generated source gets its text content
  * fetched from the server and registered in the reducer.
  *
- * @param {Object} source
- * @param {Object} sourceActor (optional)
+ * @param {object} source
+ * @param {object} sourceActor (optional)
  *        If this is a generated source, we expect a precise source actor.
- * @param {Object} thunkArgs
+ * @param {object} thunkArgs
  */
 async function onSourceTextContentAvailable(
   source,
@@ -159,7 +162,8 @@ async function onSourceTextContentAvailable(
 
 /**
  * Loads the source text for the generated source based of the source actor
- * @param {Object} sourceActor
+ *
+ * @param {object} sourceActor
  *                 There can be more than one source actor per source
  *                 so the source actor needs to be specified. This is
  *                 required for generated sources but will be null for
@@ -173,12 +177,10 @@ export const loadGeneratedSourceText = memoizeableAction(
         return null;
       }
 
-      const sourceTextContent = getSourceTextContent(
+      const sourceTextContent = getSourceTextContentForSource(
         getState(),
-        createLocation({
-          source: sourceActor.sourceObject,
-          sourceActor,
-        })
+        sourceActor.sourceObject,
+        sourceActor
       );
 
       if (!sourceTextContent || sourceTextContent.state === "pending") {
@@ -201,7 +203,8 @@ export const loadGeneratedSourceText = memoizeableAction(
 
 /**
  * Loads the source text for an original source and source actor
- * @param {Object} source
+ *
+ * @param {object} source
  *                 The original source to load the source text
  */
 export const loadOriginalSourceText = memoizeableAction(
@@ -212,11 +215,9 @@ export const loadOriginalSourceText = memoizeableAction(
         return null;
       }
 
-      const sourceTextContent = getSourceTextContent(
+      const sourceTextContent = getSourceTextContentForSource(
         getState(),
-        createLocation({
-          source,
-        })
+        source
       );
       if (!sourceTextContent || sourceTextContent.state === "pending") {
         return sourceTextContent;

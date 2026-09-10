@@ -32,6 +32,7 @@ enum class PacketType {
 enum class PacketInfoProtocolType {
   kUnknown,
   kUdp,
+  kDtls,
   kTcp,
   kSsltcp,
   kTls,
@@ -70,15 +71,5 @@ struct RTC_EXPORT SentPacketInfo {
 
 }  //  namespace webrtc
 
-// Re-export symbols from the webrtc namespace for backwards compatibility.
-// TODO(bugs.webrtc.org/4222596): Remove once all references are updated.
-#ifdef WEBRTC_ALLOW_DEPRECATED_NAMESPACES
-namespace rtc {
-using ::webrtc::PacketInfo;
-using SentPacket = ::webrtc::SentPacketInfo;
-using ::webrtc::PacketInfoProtocolType;
-using ::webrtc::PacketType;
-}  // namespace rtc
-#endif  // WEBRTC_ALLOW_DEPRECATED_NAMESPACES
 
 #endif  // RTC_BASE_NETWORK_SENT_PACKET_H_

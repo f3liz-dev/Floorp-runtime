@@ -10,8 +10,12 @@
 
 #include "common_video/h264/sps_parser.h"
 
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <span>
+
 #include "common_video/h264/h264_common.h"
-#include "rtc_base/arraysize.h"
 #include "rtc_base/bit_buffer.h"
 #include "rtc_base/buffer.h"
 #include "test/gtest.h"
@@ -107,7 +111,7 @@ void GenerateFakeSps(uint16_t width,
   }
 
   out_buffer->Clear();
-  H264::WriteRbsp(MakeArrayView(rbsp, byte_count), out_buffer);
+  H264::WriteRbsp(std::span(rbsp, byte_count), out_buffer);
 }
 
 TEST(H264SpsParserTest, TestSampleSPSHdLandscape) {

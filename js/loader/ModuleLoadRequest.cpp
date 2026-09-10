@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -7,11 +5,11 @@
 #include "ModuleLoadRequest.h"
 
 #include "mozilla/DebugOnly.h"
-#include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/dom/ScriptLoadContext.h"
+#include "mozilla/HoldDropJSObjects.h"
 
-#include "LoadedScript.h"
 #include "LoadContextBase.h"
+#include "LoadedScript.h"
 #include "ModuleLoaderBase.h"
 
 namespace JS::loader {
@@ -28,11 +26,8 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(ModuleLoadRequest)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(ModuleLoadRequest,
                                                 ScriptLoadRequest)
-  tmp->mReferrerScript = nullptr;
-  tmp->mModuleRequestObj = nullptr;
-  tmp->mPayload.setUndefined();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mLoader, mRootModule, mModuleScript)
-  tmp->ClearDynamicImport();
+  tmp->ClearImport();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(ModuleLoadRequest,
@@ -48,20 +43,25 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(ModuleLoadRequest,
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 ModuleLoadRequest::ModuleLoadRequest(
-    nsIURI* aURI, ModuleType aModuleType,
-    mozilla::dom::ReferrerPolicy aReferrerPolicy,
-    ScriptFetchOptions* aFetchOptions,
-    const mozilla::dom::SRIMetadata& aIntegrity, nsIURI* aReferrer,
-    LoadContextBase* aContext, Kind aKind, ModuleLoaderBase* aLoader,
-    ModuleLoadRequest* aRootModule)
-    : ScriptLoadRequest(ScriptKind::eModule, aURI, aReferrerPolicy,
-                        aFetchOptions, aIntegrity, aReferrer, aContext),
-      mIsTopLevel(aKind == Kind::TopLevel || aKind == Kind::DynamicImport),
+    ModuleType aModuleType, const mozilla::dom::SRIMetadata& aIntegrity,
+    nsIURI* aReferrer, LoadContextBase* aContext, Kind aKind,
+    ModuleLoaderBase* aLoader, ModuleLoadRequest* aRootModule)
+    : ScriptLoadRequest(ScriptKind::eModule, aIntegrity, aReferrer, aContext),
+      mKind(aKind),
       mModuleType(aModuleType),
       mIsDynamicImport(aKind == Kind::DynamicImport),
+      mErroredLoadingImports(false),
       mLoader(aLoader),
       mRootModule(aRootModule) {
   MOZ_ASSERT(mLoader);
+}
+
+ModuleLoadRequest::~ModuleLoadRequest() {
+  MOZ_ASSERT(!mReferrerScript);
+  MOZ_ASSERT(!mModuleRequestObj);
+  MOZ_ASSERT(mPayload.isUndefined());
+
+  DropJSObjects(this);
 }
 
 nsIGlobalObject* ModuleLoadRequest::GetGlobalObject() {
@@ -70,22 +70,6 @@ nsIGlobalObject* ModuleLoadRequest::GetGlobalObject() {
 
 bool ModuleLoadRequest::IsErrored() const {
   return !mModuleScript || mModuleScript->HasParseError();
-}
-
-void ModuleLoadRequest::Cancel() {
-  if (IsCanceled()) {
-    return;
-  }
-
-  if (IsFinished()) {
-    return;
-  }
-
-  ScriptLoadRequest::Cancel();
-
-  mModuleScript = nullptr;
-  mReferrerScript = nullptr;
-  mModuleRequestObj = nullptr;
 }
 
 void ModuleLoadRequest::SetReady() {
@@ -108,12 +92,21 @@ void ModuleLoadRequest::ModuleLoaded() {
     return;
   }
 
-  MOZ_ASSERT(IsFetching() || IsPendingFetchingError());
+  MOZ_ASSERT(IsFetching());
 
-  mModuleScript = mLoader->GetFetchedModule(ModuleMapKey(mURI, mModuleType));
-  if (IsErrored()) {
-    ModuleErrored();
-    return;
+  mModuleScript = mLoader->GetFetchedModule(ModuleMapKey(URI(), mModuleType));
+
+  if (FetchInfo()->IsForModulePreload() != mLoadContext->IsPreload()) {
+    FetchInfo()->SetForModulePreload(mLoadContext->IsPreload());
+  }
+
+  // A module script fetched during preload can be reused by a normal load whose
+  // top-level request never matched a preload entry, so the preload-promotion
+  // path never clears the module script's preload flag. Clear it here so the
+  // shared module script reflects that it is now part of a normal load.
+  MOZ_ASSERT(mModuleScript);
+  if (!mLoadContext->IsPreload() && mModuleScript->ForPreload()) {
+    mModuleScript->SetForPreload(false);
   }
 }
 
@@ -127,7 +120,7 @@ void ModuleLoadRequest::LoadFailed() {
     return;
   }
 
-  MOZ_ASSERT(IsFetching() || IsPendingFetchingError());
+  MOZ_ASSERT(IsFetching());
   MOZ_ASSERT(!mModuleScript);
 
   Cancel();
@@ -145,12 +138,18 @@ void ModuleLoadRequest::ModuleErrored() {
 
   MOZ_ASSERT(!IsFinished());
 
+  // Although the “error to rethrow” is only updated during static imports, a
+  // module loaded via a dynamic import may have had its module script
+  // previously fetched by a top-level module load or a static import, which
+  // would have already set the “error to rethrow”. Therefore, if hasRethrow is
+  // true, we do not assert that this request originates from a static import
+  // or a top-level module load.
   mozilla::DebugOnly<bool> hasRethrow =
       mModuleScript && mModuleScript->HasErrorToRethrow();
 
   // When LoadRequestedModules fails, we will set error to rethrow to the module
-  // script and call ModuleErrored().
-  MOZ_ASSERT(IsErrored() || hasRethrow);
+  // script or call SetErroredLoadingImports() and then call ModuleErrored().
+  MOZ_ASSERT(IsErrored() || hasRethrow || mErroredLoadingImports);
 
   if (IsFinished()) {
     // Cancelling an outstanding import will error this request.
@@ -163,25 +162,33 @@ void ModuleLoadRequest::ModuleErrored() {
 
 void ModuleLoadRequest::LoadFinished() {
   RefPtr<ModuleLoadRequest> request(this);
-  if (IsTopLevel() && IsDynamicImport()) {
+  if (IsDynamicImport()) {
     mLoader->RemoveDynamicImport(request);
   }
 
   mLoader->OnModuleLoadComplete(request);
 }
 
-void ModuleLoadRequest::SetDynamicImport(LoadedScript* aReferencingScript,
-                                         Handle<JSObject*> aModuleRequestObj,
-                                         Handle<JSObject*> aPromise) {
+void ModuleLoadRequest::NotifyModuleWaitFinished() {
+  if (HasScriptLoadContext()) {
+    GetScriptLoadContext()->NotifyModuleWaitFinished();
+  }
+}
+
+void ModuleLoadRequest::SetImport(Handle<JSScript*> aReferrerScript,
+                                  Handle<JSObject*> aModuleRequestObj,
+                                  Handle<Value> aPayload) {
   MOZ_ASSERT(mPayload.isUndefined());
 
+  mReferrerScript = aReferrerScript;
   mModuleRequestObj = aModuleRequestObj;
-  mPayload = ObjectValue(*aPromise);
+  mPayload = aPayload;
 
   mozilla::HoldJSObjects(this);
 }
 
-void ModuleLoadRequest::ClearDynamicImport() {
+void ModuleLoadRequest::ClearImport() {
+  mReferrerScript = nullptr;
   mModuleRequestObj = nullptr;
   mPayload = UndefinedValue();
 }

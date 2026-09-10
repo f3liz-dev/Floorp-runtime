@@ -1,6 +1,4 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- * This Source Code Form is subject to the terms of the Mozilla Public
+/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
@@ -9,10 +7,44 @@
 
 #include "jit/loong64/MacroAssembler-loong64.h"
 
+#include "mozilla/MathAlgorithms.h"
+
+#include <bit>
+#include <optional>
+#include <utility>
+
 namespace js {
 namespace jit {
 
 //{{{ check_macroassembler_style
+
+// If |mask| is a contiguous run of one-bits, return its [msb, lsb] range.
+static inline constexpr std::optional<std::pair<uint32_t, uint32_t>>
+GetContiguousMaskRange(uint64_t mask) {
+  if (mask == 0) {
+    return std::nullopt;
+  }
+  const uint32_t lsb = std::countr_zero(mask);
+  const uint64_t shifted = mask >> lsb;
+  if (!std::has_single_bit(shifted + 1)) {
+    return std::nullopt;
+  }
+  return std::make_pair(lsb + mozilla::FloorLog2(shifted), lsb);
+}
+
+static void And32ForBranch(MacroAssembler& masm, Register scratch, Register lhs,
+                           Imm32 rhs, bool preserveMagnitude) {
+  if (const auto maybeRange = GetContiguousMaskRange(rhs.value)) {
+    const auto [msb, lsb] = *maybeRange;
+    masm.as_bstrpick_d(scratch, lhs, msb, lsb);
+    if (preserveMagnitude && lsb != 0) {
+      // Only shift when the exact magnitude is interesting.
+      masm.as_slli_d(scratch, scratch, lsb);
+    }
+  } else {
+    masm.ma_and(scratch, lhs, rhs);
+  }
+}
 
 void MacroAssembler::move64(Register64 src, Register64 dest) {
   movePtr(src.reg, dest.reg);
@@ -128,26 +160,23 @@ void MacroAssembler::andPtr(Imm32 imm, Register src, Register dest) {
   ma_and(dest, src, imm);
 }
 
+void MacroAssembler::andPtr(Imm32 imm, const Address& dest) {
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(dest, scratch);
+  andPtr(imm, scratch);
+  storePtr(scratch, dest);
+}
+
 void MacroAssembler::and64(Imm64 imm, Register64 dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   ma_li(scratch, ImmWord(imm.value));
   as_and(dest.reg, dest.reg, scratch);
 }
 
 void MacroAssembler::and64(Register64 src, Register64 dest) {
   as_and(dest.reg, dest.reg, src.reg);
-}
-
-void MacroAssembler::and64(const Operand& src, Register64 dest) {
-  if (src.getTag() == Operand::MEM) {
-    ScratchRegisterScope scratch(*this);
-    Register64 scratch64(scratch);
-
-    load64(src.toAddress(), scratch64);
-    and64(scratch64, dest);
-  } else {
-    and64(Register64(src.toReg()), dest);
-  }
 }
 
 void MacroAssembler::and32(Register src, Register dest) {
@@ -163,20 +192,23 @@ void MacroAssembler::and32(Imm32 imm, Register src, Register dest) {
 }
 
 void MacroAssembler::and32(Imm32 imm, const Address& dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(dest, scratch2);
-  and32(imm, scratch2);
-  store32(scratch2, dest);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(dest, scratch);
+  and32(imm, scratch);
+  store32(scratch, dest);
 }
 
 void MacroAssembler::and32(const Address& src, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(src, scratch2);
-  as_and(dest, dest, scratch2);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(src, scratch);
+  as_and(dest, dest, scratch);
 }
 
 void MacroAssembler::or64(Imm64 imm, Register64 dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   ma_li(scratch, ImmWord(imm.value));
   as_or(dest.reg, dest.reg, scratch);
 }
@@ -192,14 +224,16 @@ void MacroAssembler::or32(Imm32 imm, Register src, Register dest) {
 }
 
 void MacroAssembler::or32(Imm32 imm, const Address& dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(dest, scratch2);
-  or32(imm, scratch2);
-  store32(scratch2, dest);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(dest, scratch);
+  or32(imm, scratch);
+  store32(scratch, dest);
 }
 
 void MacroAssembler::xor64(Imm64 imm, Register64 dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   ma_li(scratch, ImmWord(imm.value));
   as_xor(dest.reg, dest.reg, scratch);
 }
@@ -218,32 +252,8 @@ void MacroAssembler::or64(Register64 src, Register64 dest) {
   as_or(dest.reg, dest.reg, src.reg);
 }
 
-void MacroAssembler::or64(const Operand& src, Register64 dest) {
-  if (src.getTag() == Operand::MEM) {
-    ScratchRegisterScope scratch(asMasm());
-    Register64 scratch64(scratch);
-
-    load64(src.toAddress(), scratch64);
-    or64(scratch64, dest);
-  } else {
-    or64(Register64(src.toReg()), dest);
-  }
-}
-
 void MacroAssembler::xor64(Register64 src, Register64 dest) {
   as_xor(dest.reg, dest.reg, src.reg);
-}
-
-void MacroAssembler::xor64(const Operand& src, Register64 dest) {
-  if (src.getTag() == Operand::MEM) {
-    ScratchRegisterScope scratch(asMasm());
-    Register64 scratch64(scratch);
-
-    load64(src.toAddress(), scratch64);
-    xor64(scratch64, dest);
-  } else {
-    xor64(Register64(src.toReg()), dest);
-  }
 }
 
 void MacroAssembler::xorPtr(Register src, Register dest) {
@@ -271,16 +281,22 @@ void MacroAssembler::xor32(Imm32 imm, Register src, Register dest) {
 }
 
 void MacroAssembler::xor32(Imm32 imm, const Address& dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(dest, scratch2);
-  xor32(imm, scratch2);
-  store32(scratch2, dest);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(dest, scratch);
+  xor32(imm, scratch);
+  store32(scratch, dest);
 }
 
 void MacroAssembler::xor32(const Address& src, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(src, scratch2);
-  xor32(scratch2, dest);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(src, scratch);
+  xor32(scratch, dest);
+}
+
+void MacroAssembler::nor32(Imm32 imm, Register src, Register dest) {
+  ma_nor(dest, src, imm);
 }
 
 // ===============================================================
@@ -317,7 +333,8 @@ void MacroAssembler::addPtr(Imm32 imm, Register dest) {
 }
 
 void MacroAssembler::addPtr(ImmWord imm, Register dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   movePtr(imm, scratch);
   addPtr(scratch, dest);
 }
@@ -326,24 +343,13 @@ void MacroAssembler::add64(Register64 src, Register64 dest) {
   addPtr(src.reg, dest.reg);
 }
 
-void MacroAssembler::add64(const Operand& src, Register64 dest) {
-  if (src.getTag() == Operand::MEM) {
-    ScratchRegisterScope scratch(asMasm());
-    Register64 scratch64(scratch);
-
-    load64(src.toAddress(), scratch64);
-    add64(scratch64, dest);
-  } else {
-    add64(Register64(src.toReg()), dest);
-  }
-}
-
 void MacroAssembler::add64(Imm32 imm, Register64 dest) {
   ma_add_d(dest.reg, dest.reg, imm);
 }
 
 void MacroAssembler::add64(Imm64 imm, Register64 dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   MOZ_ASSERT(dest.reg != scratch);
   mov(ImmWord(imm.value), scratch);
   as_add_d(dest.reg, dest.reg, scratch);
@@ -362,21 +368,31 @@ void MacroAssembler::add32(Imm32 imm, Register src, Register dest) {
 }
 
 void MacroAssembler::add32(Imm32 imm, const Address& dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(dest, scratch2);
-  ma_add_w(scratch2, scratch2, imm);
-  store32(scratch2, dest);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(dest, scratch);
+  ma_add_w(scratch, scratch, imm);
+  store32(scratch, dest);
+}
+
+void MacroAssembler::add32(const Address& src, Register dest) {
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(src, scratch);
+  as_add_w(dest, dest, scratch);
 }
 
 void MacroAssembler::addPtr(Imm32 imm, const Address& dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   loadPtr(dest, scratch);
   addPtr(imm, scratch);
   storePtr(scratch, dest);
 }
 
 void MacroAssembler::addPtr(const Address& src, Register dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   loadPtr(src, scratch);
   addPtr(scratch, dest);
 }
@@ -424,20 +440,9 @@ void MacroAssembler::sub64(Register64 src, Register64 dest) {
   as_sub_d(dest.reg, dest.reg, src.reg);
 }
 
-void MacroAssembler::sub64(const Operand& src, Register64 dest) {
-  if (src.getTag() == Operand::MEM) {
-    ScratchRegisterScope scratch(asMasm());
-    Register64 scratch64(scratch);
-
-    load64(src.toAddress(), scratch64);
-    sub64(scratch64, dest);
-  } else {
-    sub64(Register64(src.toReg()), dest);
-  }
-}
-
 void MacroAssembler::sub64(Imm64 imm, Register64 dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   MOZ_ASSERT(dest.reg != scratch);
   mov(ImmWord(imm.value), scratch);
   as_sub_d(dest.reg, dest.reg, scratch);
@@ -452,22 +457,25 @@ void MacroAssembler::sub32(Imm32 imm, Register dest) {
 }
 
 void MacroAssembler::sub32(const Address& src, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(src, scratch2);
-  as_sub_w(dest, dest, scratch2);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(src, scratch);
+  as_sub_w(dest, dest, scratch);
 }
 
 void MacroAssembler::subPtr(Register src, const Address& dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(dest, scratch2);
-  subPtr(src, scratch2);
-  storePtr(scratch2, dest);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(dest, scratch);
+  subPtr(src, scratch);
+  storePtr(scratch, dest);
 }
 
 void MacroAssembler::subPtr(const Address& addr, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(addr, scratch2);
-  subPtr(scratch2, dest);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(addr, scratch);
+  subPtr(scratch, dest);
 }
 
 void MacroAssembler::subDouble(FloatRegister src, FloatRegister dest) {
@@ -478,8 +486,13 @@ void MacroAssembler::subFloat32(FloatRegister src, FloatRegister dest) {
   as_fsub_s(dest, dest, src);
 }
 
+void MacroAssembler::mul64(const Register64& rhs, const Register64& srcDest) {
+  mul64(rhs, srcDest, Register::Invalid());
+}
+
 void MacroAssembler::mul64(Imm64 imm, const Register64& dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   MOZ_ASSERT(dest.reg != scratch);
   mov(ImmWord(imm.value), scratch);
   as_mul_d(dest.reg, dest.reg, scratch);
@@ -497,25 +510,21 @@ void MacroAssembler::mul64(const Register64& src, const Register64& dest,
   as_mul_d(dest.reg, dest.reg, src.reg);
 }
 
-void MacroAssembler::mul64(const Operand& src, const Register64& dest,
-                           const Register temp) {
-  if (src.getTag() == Operand::MEM) {
-    ScratchRegisterScope scratch(asMasm());
-    Register64 scratch64(scratch);
-
-    load64(src.toAddress(), scratch64);
-    mul64(scratch64, dest, temp);
-  } else {
-    mul64(Register64(src.toReg()), dest, temp);
-  }
-}
-
 void MacroAssembler::mulPtr(Register rhs, Register srcDest) {
   as_mul_d(srcDest, srcDest, rhs);
 }
 
+void MacroAssembler::mulPtr(ImmWord rhs, Register srcDest) {
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  MOZ_ASSERT(srcDest != scratch);
+  mov(rhs, scratch);
+  mulPtr(scratch, srcDest);
+}
+
 void MacroAssembler::mulBy3(Register src, Register dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   MOZ_ASSERT(src != scratch);
   as_add_d(scratch, src, src);
   as_add_d(dest, scratch, src);
@@ -526,13 +535,15 @@ void MacroAssembler::mul32(Register rhs, Register srcDest) {
 }
 
 void MacroAssembler::mul32(Imm32 imm, Register srcDest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   move32(imm, scratch);
   mul32(scratch, srcDest);
 }
 
 void MacroAssembler::mulHighUnsigned32(Imm32 imm, Register src, Register dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   MOZ_ASSERT(src != scratch);
   move32(imm, scratch);
   as_mulh_wu(dest, src, scratch);
@@ -548,7 +559,8 @@ void MacroAssembler::mulDouble(FloatRegister src, FloatRegister dest) {
 
 void MacroAssembler::mulDoublePtr(ImmPtr imm, Register temp,
                                   FloatRegister dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   ScratchDoubleScope fpscratch(asMasm());
   movePtr(imm, scratch);
   loadDouble(Address(scratch, 0), fpscratch);
@@ -556,47 +568,48 @@ void MacroAssembler::mulDoublePtr(ImmPtr imm, Register temp,
 }
 
 void MacroAssembler::inc64(AbsoluteAddress dest) {
-  ScratchRegisterScope scratch(asMasm());
-  SecondScratchRegisterScope scratch2(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  Register scratch2 = temps.Acquire();
   ma_li(scratch, ImmWord(uintptr_t(dest.addr)));
   as_ld_d(scratch2, scratch, 0);
   as_addi_d(scratch2, scratch2, 1);
   as_st_d(scratch2, scratch, 0);
 }
 
-void MacroAssembler::quotient32(Register rhs, Register srcDest,
+void MacroAssembler::quotient32(Register lhs, Register rhs, Register dest,
                                 bool isUnsigned) {
   if (isUnsigned) {
-    as_div_wu(srcDest, srcDest, rhs);
+    as_div_wu(dest, lhs, rhs);
   } else {
-    as_div_w(srcDest, srcDest, rhs);
+    as_div_w(dest, lhs, rhs);
   }
 }
 
-void MacroAssembler::quotient64(Register rhs, Register srcDest,
+void MacroAssembler::quotient64(Register lhs, Register rhs, Register dest,
                                 bool isUnsigned) {
   if (isUnsigned) {
-    as_div_du(srcDest, srcDest, rhs);
+    as_div_du(dest, lhs, rhs);
   } else {
-    as_div_d(srcDest, srcDest, rhs);
+    as_div_d(dest, lhs, rhs);
   }
 }
 
-void MacroAssembler::remainder32(Register rhs, Register srcDest,
+void MacroAssembler::remainder32(Register lhs, Register rhs, Register dest,
                                  bool isUnsigned) {
   if (isUnsigned) {
-    as_mod_wu(srcDest, srcDest, rhs);
+    as_mod_wu(dest, lhs, rhs);
   } else {
-    as_mod_w(srcDest, srcDest, rhs);
+    as_mod_w(dest, lhs, rhs);
   }
 }
 
-void MacroAssembler::remainder64(Register rhs, Register srcDest,
+void MacroAssembler::remainder64(Register lhs, Register rhs, Register dest,
                                  bool isUnsigned) {
   if (isUnsigned) {
-    as_mod_du(srcDest, srcDest, rhs);
+    as_mod_du(dest, lhs, rhs);
   } else {
-    as_mod_d(srcDest, srcDest, rhs);
+    as_mod_d(dest, lhs, rhs);
   }
 }
 
@@ -619,7 +632,8 @@ void MacroAssembler::negateDouble(FloatRegister reg) { as_fneg_d(reg, reg); }
 void MacroAssembler::negateFloat(FloatRegister reg) { as_fneg_s(reg, reg); }
 
 void MacroAssembler::abs32(Register src, Register dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   as_srai_w(scratch, src, 31);
   as_xor(dest, src, scratch);
   as_sub_w(dest, dest, scratch);
@@ -639,6 +653,38 @@ void MacroAssembler::sqrtFloat32(FloatRegister src, FloatRegister dest) {
 
 void MacroAssembler::sqrtDouble(FloatRegister src, FloatRegister dest) {
   as_fsqrt_d(dest, src);
+}
+
+void MacroAssembler::min32(Register lhs, Register rhs, Register dest) {
+  minMaxPtr(lhs, rhs, dest, /* isMax = */ false);
+}
+
+void MacroAssembler::min32(Register lhs, Imm32 rhs, Register dest) {
+  minMaxPtr(lhs, ImmWord(rhs.value), dest, /* isMax = */ false);
+}
+
+void MacroAssembler::max32(Register lhs, Register rhs, Register dest) {
+  minMaxPtr(lhs, rhs, dest, /* isMax = */ true);
+}
+
+void MacroAssembler::max32(Register lhs, Imm32 rhs, Register dest) {
+  minMaxPtr(lhs, ImmWord(rhs.value), dest, /* isMax = */ true);
+}
+
+void MacroAssembler::minPtr(Register lhs, Register rhs, Register dest) {
+  minMaxPtr(lhs, rhs, dest, /* isMax = */ false);
+}
+
+void MacroAssembler::minPtr(Register lhs, ImmWord rhs, Register dest) {
+  minMaxPtr(lhs, rhs, dest, /* isMax = */ false);
+}
+
+void MacroAssembler::maxPtr(Register lhs, Register rhs, Register dest) {
+  minMaxPtr(lhs, rhs, dest, /* isMax = */ true);
+}
+
+void MacroAssembler::maxPtr(Register lhs, ImmWord rhs, Register dest) {
+  minMaxPtr(lhs, rhs, dest, /* isMax = */ true);
 }
 
 void MacroAssembler::minFloat32(FloatRegister other, FloatRegister srcDest,
@@ -673,7 +719,7 @@ void MacroAssembler::lshift32(Imm32 imm, Register dest) {
 }
 
 void MacroAssembler::lshift32(Imm32 imm, Register src, Register dest) {
-  as_slli_w(dest, src, imm.value % 32);
+  as_slli_w(dest, src, imm.value & 0x1f);
 }
 
 void MacroAssembler::flexibleLshift32(Register src, Register dest) {
@@ -687,6 +733,11 @@ void MacroAssembler::lshift64(Register shift, Register64 dest) {
 void MacroAssembler::lshift64(Imm32 imm, Register64 dest) {
   MOZ_ASSERT(0 <= imm.value && imm.value < 64);
   as_slli_d(dest.reg, dest.reg, imm.value);
+}
+
+void MacroAssembler::lshift64(Imm32 imm, Register64 src, Register64 dest) {
+  MOZ_ASSERT(0 <= imm.value && imm.value < 64);
+  as_slli_d(dest.reg, src.reg, imm.value);
 }
 
 void MacroAssembler::lshiftPtr(Register shift, Register dest) {
@@ -715,7 +766,7 @@ void MacroAssembler::rshift32(Imm32 imm, Register dest) {
 }
 
 void MacroAssembler::rshift32(Imm32 imm, Register src, Register dest) {
-  as_srli_w(dest, src, imm.value % 32);
+  as_srli_w(dest, src, imm.value & 0x1f);
 }
 
 void MacroAssembler::flexibleRshift32(Register src, Register dest) {
@@ -732,7 +783,7 @@ void MacroAssembler::rshift32Arithmetic(Imm32 imm, Register dest) {
 
 void MacroAssembler::rshift32Arithmetic(Imm32 imm, Register src,
                                         Register dest) {
-  as_srai_w(dest, src, imm.value % 32);
+  as_srai_w(dest, src, imm.value & 0x1f);
 }
 
 void MacroAssembler::flexibleRshift32Arithmetic(Register src, Register dest) {
@@ -748,9 +799,20 @@ void MacroAssembler::rshift64(Imm32 imm, Register64 dest) {
   as_srli_d(dest.reg, dest.reg, imm.value);
 }
 
+void MacroAssembler::rshift64(Imm32 imm, Register64 src, Register64 dest) {
+  MOZ_ASSERT(0 <= imm.value && imm.value < 64);
+  as_srli_d(dest.reg, src.reg, imm.value);
+}
+
 void MacroAssembler::rshift64Arithmetic(Imm32 imm, Register64 dest) {
   MOZ_ASSERT(0 <= imm.value && imm.value < 64);
   as_srai_d(dest.reg, dest.reg, imm.value);
+}
+
+void MacroAssembler::rshift64Arithmetic(Imm32 imm, Register64 src,
+                                        Register64 dest) {
+  MOZ_ASSERT(0 <= imm.value && imm.value < 64);
+  as_srai_d(dest.reg, src.reg, imm.value);
 }
 
 void MacroAssembler::rshift64Arithmetic(Register shift, Register64 dest) {
@@ -797,7 +859,8 @@ void MacroAssembler::flexibleRshiftPtrArithmetic(Register shift,
 // Rotation functions
 
 void MacroAssembler::rotateLeft(Register count, Register input, Register dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   as_sub_w(scratch, zero, count);
   as_rotr_w(dest, input, scratch);
 }
@@ -809,7 +872,8 @@ void MacroAssembler::rotateLeft(Imm32 count, Register input, Register dest) {
 void MacroAssembler::rotateLeft64(Register count, Register64 src,
                                   Register64 dest, Register temp) {
   MOZ_ASSERT(temp == Register::Invalid());
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   as_sub_d(scratch, zero, count);
   as_rotr_d(dest.reg, src.reg, scratch);
 }
@@ -853,7 +917,8 @@ void MacroAssembler::ctz64(Register64 src, Register64 dest) {
 
 void MacroAssembler::popcnt64(Register64 input, Register64 output,
                               Register tmp) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   as_or(output.reg, input.reg, zero);
   as_srai_d(tmp, input.reg, 1);
   ma_li(scratch, Imm32(0x55555555));
@@ -886,7 +951,7 @@ void MacroAssembler::ctz32(Register src, Register dest, bool knownNotZero) {
 }
 
 void MacroAssembler::popcnt32(Register input, Register output, Register tmp) {
-  // Equivalent to GCC output of mozilla::CountPopulation32()
+  // Equivalent to GCC output of std::popcount()
   as_or(output, input, zero);
   as_srai_w(tmp, input, 1);
   ma_and(tmp, tmp, Imm32(0x55555555));
@@ -910,8 +975,9 @@ void MacroAssembler::popcnt32(Register input, Register output, Register tmp) {
 
 void MacroAssembler::cmp8Set(Condition cond, Address lhs, Imm32 rhs,
                              Register dest) {
-  SecondScratchRegisterScope scratch2(*this);
-  MOZ_ASSERT(scratch2 != lhs.base);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  MOZ_ASSERT(scratch != lhs.base);
 
   switch (cond) {
     case Assembler::Equal:
@@ -920,16 +986,16 @@ void MacroAssembler::cmp8Set(Condition cond, Address lhs, Imm32 rhs,
     case Assembler::AboveOrEqual:
     case Assembler::Below:
     case Assembler::BelowOrEqual:
-      load8ZeroExtend(lhs, scratch2);
-      ma_cmp_set(dest, scratch2, Imm32(uint8_t(rhs.value)), cond);
+      load8ZeroExtend(lhs, scratch);
+      ma_cmp_set(dest, scratch, Imm32(uint8_t(rhs.value)), cond);
       break;
 
     case Assembler::GreaterThan:
     case Assembler::GreaterThanOrEqual:
     case Assembler::LessThan:
     case Assembler::LessThanOrEqual:
-      load8SignExtend(lhs, scratch2);
-      ma_cmp_set(dest, scratch2, Imm32(int8_t(rhs.value)), cond);
+      load8SignExtend(lhs, scratch);
+      ma_cmp_set(dest, scratch, Imm32(int8_t(rhs.value)), cond);
       break;
 
     default:
@@ -939,8 +1005,9 @@ void MacroAssembler::cmp8Set(Condition cond, Address lhs, Imm32 rhs,
 
 void MacroAssembler::cmp16Set(Condition cond, Address lhs, Imm32 rhs,
                               Register dest) {
-  SecondScratchRegisterScope scratch2(*this);
-  MOZ_ASSERT(scratch2 != lhs.base);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  MOZ_ASSERT(scratch != lhs.base);
 
   switch (cond) {
     case Assembler::Equal:
@@ -949,16 +1016,16 @@ void MacroAssembler::cmp16Set(Condition cond, Address lhs, Imm32 rhs,
     case Assembler::AboveOrEqual:
     case Assembler::Below:
     case Assembler::BelowOrEqual:
-      load16ZeroExtend(lhs, scratch2);
-      ma_cmp_set(dest, scratch2, Imm32(uint16_t(rhs.value)), cond);
+      load16ZeroExtend(lhs, scratch);
+      ma_cmp_set(dest, scratch, Imm32(uint16_t(rhs.value)), cond);
       break;
 
     case Assembler::GreaterThan:
     case Assembler::GreaterThanOrEqual:
     case Assembler::LessThan:
     case Assembler::LessThanOrEqual:
-      load16SignExtend(lhs, scratch2);
-      ma_cmp_set(dest, scratch2, Imm32(int16_t(rhs.value)), cond);
+      load16SignExtend(lhs, scratch);
+      ma_cmp_set(dest, scratch, Imm32(int16_t(rhs.value)), cond);
       break;
 
     default:
@@ -1002,8 +1069,9 @@ void MacroAssembler::cmpPtrSet(Condition cond, T1 lhs, T2 rhs, Register dest) {
 
 void MacroAssembler::branch8(Condition cond, const Address& lhs, Imm32 rhs,
                              Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  MOZ_ASSERT(scratch2 != lhs.base);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  MOZ_ASSERT(scratch != lhs.base);
 
   switch (cond) {
     case Assembler::Equal:
@@ -1012,16 +1080,16 @@ void MacroAssembler::branch8(Condition cond, const Address& lhs, Imm32 rhs,
     case Assembler::AboveOrEqual:
     case Assembler::Below:
     case Assembler::BelowOrEqual:
-      load8ZeroExtend(lhs, scratch2);
-      branch32(cond, scratch2, Imm32(uint8_t(rhs.value)), label);
+      load8ZeroExtend(lhs, scratch);
+      branch32(cond, scratch, Imm32(uint8_t(rhs.value)), label);
       break;
 
     case Assembler::GreaterThan:
     case Assembler::GreaterThanOrEqual:
     case Assembler::LessThan:
     case Assembler::LessThanOrEqual:
-      load8SignExtend(lhs, scratch2);
-      branch32(cond, scratch2, Imm32(int8_t(rhs.value)), label);
+      load8SignExtend(lhs, scratch);
+      branch32(cond, scratch, Imm32(int8_t(rhs.value)), label);
       break;
 
     default:
@@ -1031,10 +1099,11 @@ void MacroAssembler::branch8(Condition cond, const Address& lhs, Imm32 rhs,
 
 void MacroAssembler::branch8(Condition cond, const BaseIndex& lhs, Register rhs,
                              Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  MOZ_ASSERT(scratch2 != lhs.base);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  MOZ_ASSERT(scratch != lhs.base);
 
-  computeScaledAddress(lhs, scratch2);
+  computeScaledAddress(lhs, scratch);
 
   switch (cond) {
     case Assembler::Equal:
@@ -1043,16 +1112,16 @@ void MacroAssembler::branch8(Condition cond, const BaseIndex& lhs, Register rhs,
     case Assembler::AboveOrEqual:
     case Assembler::Below:
     case Assembler::BelowOrEqual:
-      load8ZeroExtend(Address(scratch2, lhs.offset), scratch2);
-      branch32(cond, scratch2, rhs, label);
+      load8ZeroExtend(Address(scratch, lhs.offset), scratch);
+      branch32(cond, scratch, rhs, label);
       break;
 
     case Assembler::GreaterThan:
     case Assembler::GreaterThanOrEqual:
     case Assembler::LessThan:
     case Assembler::LessThanOrEqual:
-      load8SignExtend(Address(scratch2, lhs.offset), scratch2);
-      branch32(cond, scratch2, rhs, label);
+      load8SignExtend(Address(scratch, lhs.offset), scratch);
+      branch32(cond, scratch, rhs, label);
       break;
 
     default:
@@ -1062,8 +1131,9 @@ void MacroAssembler::branch8(Condition cond, const BaseIndex& lhs, Register rhs,
 
 void MacroAssembler::branch16(Condition cond, const Address& lhs, Imm32 rhs,
                               Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  MOZ_ASSERT(scratch2 != lhs.base);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  MOZ_ASSERT(scratch != lhs.base);
 
   switch (cond) {
     case Assembler::Equal:
@@ -1072,16 +1142,16 @@ void MacroAssembler::branch16(Condition cond, const Address& lhs, Imm32 rhs,
     case Assembler::AboveOrEqual:
     case Assembler::Below:
     case Assembler::BelowOrEqual:
-      load16ZeroExtend(lhs, scratch2);
-      branch32(cond, scratch2, Imm32(uint16_t(rhs.value)), label);
+      load16ZeroExtend(lhs, scratch);
+      branch32(cond, scratch, Imm32(uint16_t(rhs.value)), label);
       break;
 
     case Assembler::GreaterThan:
     case Assembler::GreaterThanOrEqual:
     case Assembler::LessThan:
     case Assembler::LessThanOrEqual:
-      load16SignExtend(lhs, scratch2);
-      branch32(cond, scratch2, Imm32(int16_t(rhs.value)), label);
+      load16SignExtend(lhs, scratch);
+      branch32(cond, scratch, Imm32(int16_t(rhs.value)), label);
       break;
 
     default:
@@ -1090,67 +1160,61 @@ void MacroAssembler::branch16(Condition cond, const Address& lhs, Imm32 rhs,
 }
 
 void MacroAssembler::branch32(Condition cond, Register lhs, Register rhs,
-                              Label* label, LhsHighBitsAreClean clean) {
-  if (clean == LhsHighBitsAreClean::No) {
-    ScratchRegisterScope scratch(asMasm());
-    as_slli_w(scratch, lhs, 0);
-    ma_b(scratch, rhs, label, cond);
-    return;
-  }
+                              Label* label) {
   ma_b(lhs, rhs, label, cond);
 }
 
 void MacroAssembler::branch32(Condition cond, Register lhs, Imm32 imm,
-                              Label* label, LhsHighBitsAreClean clean) {
-  if (clean == LhsHighBitsAreClean::No) {
-    SecondScratchRegisterScope scratch(asMasm());
-    as_slli_w(scratch, lhs, 0);
-    ma_b(scratch, imm, label, cond);
-    return;
-  }
+                              Label* label) {
   ma_b(lhs, imm, label, cond);
 }
 
 void MacroAssembler::branch32(Condition cond, const Address& lhs, Register rhs,
                               Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(lhs, scratch2);
-  ma_b(scratch2, rhs, label, cond);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(lhs, scratch);
+  ma_b(scratch, rhs, label, cond);
 }
 
 void MacroAssembler::branch32(Condition cond, const Address& lhs, Imm32 rhs,
                               Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(lhs, scratch2);
-  ma_b(scratch2, rhs, label, cond);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(lhs, scratch);
+  ma_b(scratch, rhs, label, cond);
 }
 
 void MacroAssembler::branch32(Condition cond, const AbsoluteAddress& lhs,
                               Register rhs, Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(lhs, scratch2);
-  ma_b(scratch2, rhs, label, cond);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(lhs, scratch);
+  ma_b(scratch, rhs, label, cond);
 }
 
 void MacroAssembler::branch32(Condition cond, const AbsoluteAddress& lhs,
                               Imm32 rhs, Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(lhs, scratch2);
-  ma_b(scratch2, rhs, label, cond);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(lhs, scratch);
+  ma_b(scratch, rhs, label, cond);
 }
 
 void MacroAssembler::branch32(Condition cond, const BaseIndex& lhs, Imm32 rhs,
                               Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(lhs, scratch2);
-  ma_b(scratch2, rhs, label, cond);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(lhs, scratch);
+  ma_b(scratch, rhs, label, cond);
 }
 
 void MacroAssembler::branch32(Condition cond, wasm::SymbolicAddress addr,
                               Imm32 imm, Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(addr, scratch2);
-  ma_b(scratch2, imm, label, cond);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(addr, scratch);
+  ma_b(scratch, imm, label, cond);
 }
 
 void MacroAssembler::branch64(Condition cond, Register64 lhs, Imm64 val,
@@ -1260,65 +1324,74 @@ void MacroAssembler::branchPtr(Condition cond, Register lhs, ImmWord rhs,
 
 void MacroAssembler::branchPtr(Condition cond, const Address& lhs, Register rhs,
                                Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  branchPtr(cond, scratch2, rhs, label);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  branchPtr(cond, scratch, rhs, label);
 }
 
 void MacroAssembler::branchPtr(Condition cond, const Address& lhs, ImmPtr rhs,
                                Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  branchPtr(cond, scratch2, rhs, label);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  branchPtr(cond, scratch, rhs, label);
 }
 
 void MacroAssembler::branchPtr(Condition cond, const Address& lhs, ImmGCPtr rhs,
                                Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  branchPtr(cond, scratch2, rhs, label);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  branchPtr(cond, scratch, rhs, label);
 }
 
 void MacroAssembler::branchPtr(Condition cond, const Address& lhs, ImmWord rhs,
                                Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  branchPtr(cond, scratch2, rhs, label);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  branchPtr(cond, scratch, rhs, label);
 }
 
 void MacroAssembler::branchPtr(Condition cond, const AbsoluteAddress& lhs,
                                Register rhs, Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  branchPtr(cond, scratch2, rhs, label);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  branchPtr(cond, scratch, rhs, label);
 }
 
 void MacroAssembler::branchPtr(Condition cond, const AbsoluteAddress& lhs,
                                ImmWord rhs, Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  branchPtr(cond, scratch2, rhs, label);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  branchPtr(cond, scratch, rhs, label);
 }
 
 void MacroAssembler::branchPtr(Condition cond, wasm::SymbolicAddress lhs,
                                Register rhs, Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  branchPtr(cond, scratch2, rhs, label);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  branchPtr(cond, scratch, rhs, label);
 }
 
 void MacroAssembler::branchPtr(Condition cond, const BaseIndex& lhs,
                                Register rhs, Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  branchPtr(cond, scratch2, rhs, label);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  branchPtr(cond, scratch, rhs, label);
 }
 
 void MacroAssembler::branchPtr(Condition cond, const BaseIndex& lhs,
                                ImmWord rhs, Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  branchPtr(cond, scratch2, rhs, label);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  branchPtr(cond, scratch, rhs, label);
 }
 
 void MacroAssembler::branchPrivatePtr(Condition cond, const Address& lhs,
@@ -1334,7 +1407,8 @@ void MacroAssembler::branchFloat(DoubleCondition cond, FloatRegister lhs,
 void MacroAssembler::branchTruncateFloat32MaybeModUint32(FloatRegister src,
                                                          Register dest,
                                                          Label* fail) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   ScratchDoubleScope fpscratch(asMasm());
   as_ftintrz_l_s(fpscratch, src);
   as_movfcsr2gr(scratch);
@@ -1359,7 +1433,8 @@ void MacroAssembler::branchDouble(DoubleCondition cond, FloatRegister lhs,
 void MacroAssembler::branchTruncateDoubleMaybeModUint32(FloatRegister src,
                                                         Register dest,
                                                         Label* fail) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   ScratchDoubleScope fpscratch(asMasm());
   as_ftintrz_l_d(fpscratch, src);
   as_movfcsr2gr(scratch);
@@ -1373,7 +1448,8 @@ void MacroAssembler::branchTruncateDoubleMaybeModUint32(FloatRegister src,
 
 void MacroAssembler::branchTruncateDoubleToInt32(FloatRegister src,
                                                  Register dest, Label* fail) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   ScratchDoubleScope fpscratch(asMasm());
 
   // Convert scalar to signed 64-bit fixed-point, rounding toward zero.
@@ -1516,7 +1592,8 @@ void MacroAssembler::branchTest32(Condition cond, Register lhs, Register rhs,
   if (lhs == rhs) {
     ma_b(lhs, rhs, label, cond);
   } else {
-    ScratchRegisterScope scratch(asMasm());
+    UseScratchRegisterScope temps(asMasm());
+    Register scratch = temps.Acquire();
     as_and(scratch, lhs, rhs);
     ma_b(scratch, scratch, label, cond);
   }
@@ -1526,29 +1603,35 @@ void MacroAssembler::branchTest32(Condition cond, Register lhs, Imm32 rhs,
                                   Label* label) {
   MOZ_ASSERT(cond == Zero || cond == NonZero || cond == Signed ||
              cond == NotSigned);
-  SecondScratchRegisterScope scratch2(asMasm());
-  ma_and(scratch2, lhs, rhs);
-  ma_b(scratch2, scratch2, label, cond);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  And32ForBranch(asMasm(), scratch, lhs, rhs,
+                 !(cond == Zero || cond == NonZero));
+  ma_b(scratch, scratch, label, cond);
 }
 
 void MacroAssembler::branchTest32(Condition cond, const Address& lhs, Imm32 rhs,
                                   Label* label) {
   MOZ_ASSERT(cond == Zero || cond == NonZero || cond == Signed ||
              cond == NotSigned);
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(lhs, scratch2);
-  and32(rhs, scratch2);
-  ma_b(scratch2, scratch2, label, cond);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(lhs, scratch);
+  And32ForBranch(asMasm(), scratch, scratch, rhs,
+                 !(cond == Zero || cond == NonZero));
+  ma_b(scratch, scratch, label, cond);
 }
 
 void MacroAssembler::branchTest32(Condition cond, const AbsoluteAddress& lhs,
                                   Imm32 rhs, Label* label) {
   MOZ_ASSERT(cond == Zero || cond == NonZero || cond == Signed ||
              cond == NotSigned);
-  SecondScratchRegisterScope scratch2(asMasm());
-  load32(lhs, scratch2);
-  and32(rhs, scratch2);
-  ma_b(scratch2, scratch2, label, cond);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  load32(lhs, scratch);
+  And32ForBranch(asMasm(), scratch, scratch, rhs,
+                 !(cond == Zero || cond == NonZero));
+  ma_b(scratch, scratch, label, cond);
 }
 
 void MacroAssembler::branchTestPtr(Condition cond, Register lhs, Register rhs,
@@ -1558,7 +1641,8 @@ void MacroAssembler::branchTestPtr(Condition cond, Register lhs, Register rhs,
   if (lhs == rhs) {
     ma_b(lhs, rhs, label, cond);
   } else {
-    ScratchRegisterScope scratch(asMasm());
+    UseScratchRegisterScope temps(asMasm());
+    Register scratch = temps.Acquire();
     as_and(scratch, lhs, rhs);
     ma_b(scratch, scratch, label, cond);
   }
@@ -1568,8 +1652,10 @@ void MacroAssembler::branchTestPtr(Condition cond, Register lhs, Imm32 rhs,
                                    Label* label) {
   MOZ_ASSERT(cond == Zero || cond == NonZero || cond == Signed ||
              cond == NotSigned);
-  ScratchRegisterScope scratch(asMasm());
-  ma_and(scratch, lhs, rhs);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  And32ForBranch(asMasm(), scratch, lhs, rhs,
+                 !(cond == Zero || cond == NonZero));
   ma_b(scratch, scratch, label, cond);
 }
 
@@ -1577,17 +1663,33 @@ void MacroAssembler::branchTestPtr(Condition cond, Register lhs, ImmWord rhs,
                                    Label* label) {
   MOZ_ASSERT(cond == Zero || cond == NonZero || cond == Signed ||
              cond == NotSigned);
-  ScratchRegisterScope scratch(asMasm());
-  ma_li(scratch, rhs);
-  as_and(scratch, lhs, scratch);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+
+  if (is_uintN(rhs.value, 12)) {
+    as_andi(scratch, lhs, static_cast<int32_t>(rhs.value));
+  } else if (const auto maybeRange = GetContiguousMaskRange(
+                 mozilla::BitwiseCast<uint64_t>(rhs.value))) {
+    const auto [msb, lsb] = *maybeRange;
+    as_bstrpick_d(scratch, lhs, msb, lsb);
+    if (!(cond == Zero || cond == NonZero) && lsb != 0) {
+      // Only shift when the exact magnitude is interesting.
+      as_slli_d(scratch, scratch, lsb);
+    }
+  } else {
+    ma_li(scratch, rhs);
+    as_and(scratch, lhs, scratch);
+  }
+
   ma_b(scratch, scratch, label, cond);
 }
 
 void MacroAssembler::branchTestPtr(Condition cond, const Address& lhs,
                                    Imm32 rhs, Label* label) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  branchTestPtr(cond, scratch2, rhs, label);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  branchTestPtr(cond, scratch, rhs, label);
 }
 
 void MacroAssembler::branchTest64(Condition cond, Register64 lhs,
@@ -1616,23 +1718,26 @@ void MacroAssembler::branchTestUndefined(Condition cond, Register tag,
 void MacroAssembler::branchTestUndefined(Condition cond,
                                          const ValueOperand& value,
                                          Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestUndefined(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestUndefined(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestUndefined(Condition cond, const Address& address,
                                          Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestUndefined(cond, tag, label);
 }
 
 void MacroAssembler::branchTestUndefined(Condition cond,
                                          const BaseIndex& address,
                                          Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestUndefined(cond, tag, label);
 }
 
@@ -1644,28 +1749,32 @@ void MacroAssembler::branchTestInt32(Condition cond, Register tag,
 
 void MacroAssembler::branchTestInt32(Condition cond, const ValueOperand& value,
                                      Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestInt32(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestInt32(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestInt32(Condition cond, const Address& address,
                                      Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestInt32(cond, tag, label);
 }
 
 void MacroAssembler::branchTestInt32(Condition cond, const BaseIndex& address,
                                      Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestInt32(cond, tag, label);
 }
 
 void MacroAssembler::branchTestInt32Truthy(bool b, const ValueOperand& value,
                                            Label* label) {
-  ScratchRegisterScope scratch(*this);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
   as_bstrpick_d(scratch, value.valueReg(), 31, 0);
   ma_b(scratch, scratch, label, b ? NonZero : Zero);
 }
@@ -1679,22 +1788,25 @@ void MacroAssembler::branchTestDouble(Condition cond, Register tag,
 
 void MacroAssembler::branchTestDouble(Condition cond, const ValueOperand& value,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestDouble(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestDouble(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestDouble(Condition cond, const Address& address,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestDouble(cond, tag, label);
 }
 
 void MacroAssembler::branchTestDouble(Condition cond, const BaseIndex& address,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestDouble(cond, tag, label);
 }
 
@@ -1715,9 +1827,10 @@ void MacroAssembler::branchTestNumber(Condition cond, Register tag,
 
 void MacroAssembler::branchTestNumber(Condition cond, const ValueOperand& value,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestNumber(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestNumber(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestBoolean(Condition cond, Register tag,
@@ -1729,30 +1842,34 @@ void MacroAssembler::branchTestBoolean(Condition cond, Register tag,
 void MacroAssembler::branchTestBoolean(Condition cond,
                                        const ValueOperand& value,
                                        Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestBoolean(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestBoolean(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestBoolean(Condition cond, const Address& address,
                                        Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestBoolean(cond, tag, label);
 }
 
 void MacroAssembler::branchTestBoolean(Condition cond, const BaseIndex& address,
                                        Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestBoolean(cond, tag, label);
 }
 
 void MacroAssembler::branchTestBooleanTruthy(bool b, const ValueOperand& value,
                                              Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  unboxBoolean(value, scratch2);
-  ma_b(scratch2, scratch2, label, b ? NonZero : Zero);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  unboxBoolean(value, scratch);
+  ma_b(scratch, scratch, label, b ? NonZero : Zero);
 }
 
 void MacroAssembler::branchTestString(Condition cond, Register tag,
@@ -1763,31 +1880,35 @@ void MacroAssembler::branchTestString(Condition cond, Register tag,
 
 void MacroAssembler::branchTestString(Condition cond, const ValueOperand& value,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestString(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestString(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestString(Condition cond, const Address& address,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestString(cond, tag, label);
 }
 
 void MacroAssembler::branchTestString(Condition cond, const BaseIndex& address,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestString(cond, tag, label);
 }
 
 void MacroAssembler::branchTestStringTruthy(bool b, const ValueOperand& value,
                                             Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  unboxString(value, scratch2);
-  load32(Address(scratch2, JSString::offsetOfLength()), scratch2);
-  ma_b(scratch2, Imm32(0), label, b ? NotEqual : Equal);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  unboxString(value, scratch);
+  load32(Address(scratch, JSString::offsetOfLength()), scratch);
+  ma_b(scratch, Imm32(0), label, b ? NotEqual : Equal);
 }
 
 void MacroAssembler::branchTestSymbol(Condition cond, Register tag,
@@ -1798,22 +1919,25 @@ void MacroAssembler::branchTestSymbol(Condition cond, Register tag,
 
 void MacroAssembler::branchTestSymbol(Condition cond, const ValueOperand& value,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestSymbol(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestSymbol(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestSymbol(Condition cond, const BaseIndex& address,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestSymbol(cond, tag, label);
 }
 
 void MacroAssembler::branchTestSymbol(Condition cond, const Address& address,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestSymbol(cond, tag, label);
 }
 
@@ -1825,32 +1949,36 @@ void MacroAssembler::branchTestBigInt(Condition cond, Register tag,
 
 void MacroAssembler::branchTestBigInt(Condition cond, const ValueOperand& value,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestBigInt(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestBigInt(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestBigInt(Condition cond, const Address& address,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestBigInt(cond, tag, label);
 }
 
 void MacroAssembler::branchTestBigInt(Condition cond, const BaseIndex& address,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  computeEffectiveAddress(address, scratch2);
-  splitTag(scratch2, scratch2);
-  branchTestBigInt(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  computeEffectiveAddress(address, scratch);
+  splitTag(scratch, scratch);
+  branchTestBigInt(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestBigIntTruthy(bool b, const ValueOperand& value,
                                             Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  unboxBigInt(value, scratch2);
-  load32(Address(scratch2, BigInt::offsetOfDigitLength()), scratch2);
-  ma_b(scratch2, Imm32(0), label, b ? NotEqual : Equal);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  unboxBigInt(value, scratch);
+  load32(Address(scratch, BigInt::offsetOfDigitLength()), scratch);
+  ma_b(scratch, Imm32(0), label, b ? NotEqual : Equal);
 }
 
 void MacroAssembler::branchTestNull(Condition cond, Register tag,
@@ -1861,22 +1989,25 @@ void MacroAssembler::branchTestNull(Condition cond, Register tag,
 
 void MacroAssembler::branchTestNull(Condition cond, const ValueOperand& value,
                                     Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestNull(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestNull(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestNull(Condition cond, const Address& address,
                                     Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestNull(cond, tag, label);
 }
 
 void MacroAssembler::branchTestNull(Condition cond, const BaseIndex& address,
                                     Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestNull(cond, tag, label);
 }
 
@@ -1888,31 +2019,35 @@ void MacroAssembler::branchTestObject(Condition cond, Register tag,
 
 void MacroAssembler::branchTestObject(Condition cond, const ValueOperand& value,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestObject(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestObject(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestObject(Condition cond, const Address& address,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestObject(cond, tag, label);
 }
 
 void MacroAssembler::branchTestObject(Condition cond, const BaseIndex& address,
                                       Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestObject(cond, tag, label);
 }
 
 void MacroAssembler::branchTestPrimitive(Condition cond,
                                          const ValueOperand& value,
                                          Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  branchTestPrimitive(cond, scratch2, label);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  branchTestPrimitive(cond, scratch, label);
 }
 
 void MacroAssembler::branchTestGCThing(Condition cond, const Address& address,
@@ -1935,8 +2070,9 @@ template <typename T>
 void MacroAssembler::branchTestGCThingImpl(Condition cond, const T& address,
                                            Label* label) {
   MOZ_ASSERT(cond == Equal || cond == NotEqual);
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   ma_b(tag, ImmTag(JS::detail::ValueLowerInclGCThingTag), label,
        (cond == Equal) ? AboveOrEqual : Below);
 }
@@ -1956,29 +2092,42 @@ void MacroAssembler::branchTestMagic(Condition cond, Register tag,
 
 void MacroAssembler::branchTestMagic(Condition cond, const Address& address,
                                      Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestMagic(cond, tag, label);
 }
 
 void MacroAssembler::branchTestMagic(Condition cond, const BaseIndex& address,
                                      Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(address, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(address, scratch);
   branchTestMagic(cond, tag, label);
 }
 
 void MacroAssembler::branchTestMagic(Condition cond, const ValueOperand& value,
                                      Label* label) {
-  SecondScratchRegisterScope scratch2(*this);
-  splitTag(value, scratch2);
-  ma_b(scratch2, ImmTag(JSVAL_TAG_MAGIC), label, cond);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  splitTag(value, scratch);
+  ma_b(scratch, ImmTag(JSVAL_TAG_MAGIC), label, cond);
 }
 
 void MacroAssembler::branchTestMagic(Condition cond, const Address& valaddr,
                                      JSWhyMagic why, Label* label) {
   uint64_t magic = MagicValue(why).asRawBits();
-  SecondScratchRegisterScope scratch(*this);
+  UseScratchRegisterScope temp(*this);
+  Register scratch = temp.Acquire();
+  loadPtr(valaddr, scratch);
+  ma_b(scratch, ImmWord(magic), label, cond);
+}
+
+void MacroAssembler::branchTestMagic(Condition cond, const BaseIndex& valaddr,
+                                     JSWhyMagic why, Label* label) {
+  uint64_t magic = MagicValue(why).asRawBits();
+  UseScratchRegisterScope temp(*this);
+  Register scratch = temp.Acquire();
   loadPtr(valaddr, scratch);
   ma_b(scratch, ImmWord(magic), label, cond);
 }
@@ -1994,8 +2143,9 @@ template <typename T>
 void MacroAssembler::testNumberSet(Condition cond, const T& src,
                                    Register dest) {
   MOZ_ASSERT(cond == Equal || cond == NotEqual);
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(src, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(src, scratch);
   ma_cmp_set(dest, tag, ImmTag(JS::detail::ValueUpperInclNumberTag),
              cond == Equal ? BelowOrEqual : Above);
 }
@@ -2004,8 +2154,9 @@ template <typename T>
 void MacroAssembler::testBooleanSet(Condition cond, const T& src,
                                     Register dest) {
   MOZ_ASSERT(cond == Equal || cond == NotEqual);
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(src, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(src, scratch);
   ma_cmp_set(dest, tag, ImmTag(JSVAL_TAG_BOOLEAN), cond);
 }
 
@@ -2013,8 +2164,9 @@ template <typename T>
 void MacroAssembler::testStringSet(Condition cond, const T& src,
                                    Register dest) {
   MOZ_ASSERT(cond == Equal || cond == NotEqual);
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(src, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(src, scratch);
   ma_cmp_set(dest, tag, ImmTag(JSVAL_TAG_STRING), cond);
 }
 
@@ -2022,8 +2174,9 @@ template <typename T>
 void MacroAssembler::testSymbolSet(Condition cond, const T& src,
                                    Register dest) {
   MOZ_ASSERT(cond == Equal || cond == NotEqual);
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(src, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(src, scratch);
   ma_cmp_set(dest, tag, ImmTag(JSVAL_TAG_SYMBOL), cond);
 }
 
@@ -2031,59 +2184,67 @@ template <typename T>
 void MacroAssembler::testBigIntSet(Condition cond, const T& src,
                                    Register dest) {
   MOZ_ASSERT(cond == Equal || cond == NotEqual);
-  SecondScratchRegisterScope scratch2(*this);
-  Register tag = extractTag(src, scratch2);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  Register tag = extractTag(src, scratch);
   ma_cmp_set(dest, tag, ImmTag(JSVAL_TAG_BIGINT), cond);
 }
 
 void MacroAssembler::branchToComputedAddress(const BaseIndex& addr) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(addr, scratch2);
-  branch(scratch2);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(addr, scratch);
+  branch(scratch);
 }
 
 void MacroAssembler::cmp32Move32(Condition cond, Register lhs, Imm32 rhs,
                                  Register src, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  cmp32Set(cond, lhs, rhs, scratch2);
-  moveIfNotZero(dest, src, scratch2);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  cmp32Set(cond, lhs, rhs, scratch);
+  ma_cselnz(dest, src, dest, scratch, scratch);
 }
 
 void MacroAssembler::cmp32Move32(Condition cond, Register lhs, Register rhs,
                                  Register src, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  cmp32Set(cond, lhs, rhs, scratch2);
-  moveIfNotZero(dest, src, scratch2);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  cmp32Set(cond, lhs, rhs, scratch);
+  ma_cselnz(dest, src, dest, scratch, scratch);
 }
 
 void MacroAssembler::cmp32Move32(Condition cond, Register lhs,
                                  const Address& rhs, Register src,
                                  Register dest) {
-  SecondScratchRegisterScope scratch2(*this);
-  MOZ_ASSERT(lhs != scratch2 && src != scratch2 && dest != scratch2);
-  load32(rhs, scratch2);
-  cmp32Move32(cond, lhs, scratch2, src, dest);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
+  MOZ_ASSERT(lhs != scratch && src != scratch && dest != scratch);
+  load32(rhs, scratch);
+  cmp32Move32(cond, lhs, scratch, src, dest);
 }
 
 void MacroAssembler::cmp32MovePtr(Condition cond, Register lhs, Imm32 rhs,
                                   Register src, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  cmp32Set(cond, lhs, rhs, scratch2);
-  moveIfNotZero(dest, src, scratch2);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  cmp32Set(cond, lhs, rhs, scratch);
+  ma_cselnz(dest, src, dest, scratch, scratch);
 }
 
 void MacroAssembler::cmpPtrMovePtr(Condition cond, Register lhs, Imm32 rhs,
                                    Register src, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  cmpPtrSet(cond, lhs, rhs, scratch2);
-  moveIfNotZero(dest, src, scratch2);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  cmpPtrSet(cond, lhs, rhs, scratch);
+  ma_cselnz(dest, src, dest, scratch, scratch);
 }
 
 void MacroAssembler::cmpPtrMovePtr(Condition cond, Register lhs, Register rhs,
                                    Register src, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  cmpPtrSet(cond, lhs, rhs, scratch2);
-  moveIfNotZero(dest, src, scratch2);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  cmpPtrSet(cond, lhs, rhs, scratch);
+  ma_cselnz(dest, src, dest, scratch, scratch);
 }
 
 void MacroAssembler::cmpPtrMovePtr(Condition cond, Register lhs,
@@ -2095,7 +2256,8 @@ void MacroAssembler::cmpPtrMovePtr(Condition cond, Register lhs,
 void MacroAssembler::cmp32Load32(Condition cond, Register lhs,
                                  const Address& rhs, const Address& src,
                                  Register dest) {
-  ScratchRegisterScope scratch(*this);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
   MOZ_ASSERT(lhs != scratch && dest != scratch);
   load32(rhs, scratch);
   cmp32Load32(cond, lhs, scratch, src, dest);
@@ -2195,31 +2357,31 @@ void MacroAssembler::spectreBoundsCheckPtr(Register index,
 // ========================================================================
 // Memory access primitives.
 
-FaultingCodeOffset MacroAssembler::storeFloat32(FloatRegister src,
-                                                const Address& addr) {
-  return ma_fst_s(src, addr);
-}
-FaultingCodeOffset MacroAssembler::storeFloat32(FloatRegister src,
-                                                const BaseIndex& addr) {
-  return ma_fst_s(src, addr);
-}
-
-FaultingCodeOffset MacroAssembler::storeDouble(FloatRegister src,
+FaultingCodeRange MacroAssembler::storeFloat32(FloatRegister src,
                                                const Address& addr) {
+  return ma_fst_s(src, addr);
+}
+FaultingCodeRange MacroAssembler::storeFloat32(FloatRegister src,
+                                               const BaseIndex& addr) {
+  return ma_fst_s(src, addr);
+}
+
+FaultingCodeRange MacroAssembler::storeDouble(FloatRegister src,
+                                              const Address& addr) {
   return ma_fst_d(src, addr);
 }
-FaultingCodeOffset MacroAssembler::storeDouble(FloatRegister src,
-                                               const BaseIndex& addr) {
+FaultingCodeRange MacroAssembler::storeDouble(FloatRegister src,
+                                              const BaseIndex& addr) {
   return ma_fst_d(src, addr);
 }
 
-FaultingCodeOffset MacroAssembler::storeFloat16(FloatRegister src,
-                                                const Address& dest, Register) {
+FaultingCodeRange MacroAssembler::storeFloat16(FloatRegister src,
+                                               const Address& dest, Register) {
   MOZ_CRASH("Not supported for this target");
 }
-FaultingCodeOffset MacroAssembler::storeFloat16(FloatRegister src,
-                                                const BaseIndex& dest,
-                                                Register) {
+FaultingCodeRange MacroAssembler::storeFloat16(FloatRegister src,
+                                               const BaseIndex& dest,
+                                               Register) {
   MOZ_CRASH("Not supported for this target");
 }
 
@@ -2233,7 +2395,8 @@ void MacroAssembler::memoryBarrier(MemoryBarrier barrier) {
 // Clamping functions.
 
 void MacroAssembler::clampIntToUint8(Register reg) {
-  ScratchRegisterScope scratch(*this);
+  UseScratchRegisterScope temps(*this);
+  Register scratch = temps.Acquire();
   // If reg is < 0, then we want to clamp to 0.
   as_slti(scratch, reg, 0);
   as_masknez(reg, reg, scratch);
@@ -2254,7 +2417,8 @@ void MacroAssembler::fallibleUnboxPtr(const ValueOperand& src, Register dest,
   // fail if scratch != 0
   //
   // Note: src and dest can be the same register
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   MOZ_ASSERT(src.valueReg() != scratch);
   mov(ImmShiftedTag(type), scratch);
   as_xor(dest, src.valueReg(), scratch);
@@ -2274,6 +2438,37 @@ void MacroAssembler::fallibleUnboxPtr(const BaseIndex& src, Register dest,
   fallibleUnboxPtr(ValueOperand(dest), dest, type, fail);
 }
 
+// ===============================================================
+// 128-bit arithmetic
+
+void MacroAssembler::wasmAddSubI128HI64(Register lhsLo, Register lhsHi,
+                                        Register rhsLo, Register rhsHi,
+                                        Register output, bool isAdd) {
+  // Require: the output is not the same as any of the inputs.
+  MOZ_RELEASE_ASSERT(output != lhsLo && output != lhsHi && output != rhsLo &&
+                     output != rhsHi);
+  // We use `output` as a temp to hold the carry or borrow.
+  if (isAdd) {
+    as_add_d(output, lhsLo, rhsLo);   // output = lhsLo + rhsLo
+    as_sltu(output, output, lhsLo);   // output = carry from `lhsLo + rhsLo`
+    as_add_d(output, output, lhsHi);  // output = carry + lhsHi
+    as_add_d(output, output, rhsHi);  // output = carry + lhsHi + rhsHi
+  } else {
+    as_sltu(output, lhsLo, rhsLo);    // output = borrow from `lhsLo - rhsLo`
+    as_sub_d(output, lhsHi, output);  // output = lhsHi - borrow
+    as_sub_d(output, output, rhsHi);  // output = lhsHi - borrow - rhsHi
+  }
+}
+
+void MacroAssembler::wasmMulI64WideHI64(Register lhs, Register rhs,
+                                        Register output, bool isSigned) {
+  if (isSigned) {
+    as_mulh_d(output, lhs, rhs);
+  } else {
+    as_mulh_du(output, lhs, rhs);
+  }
+}
+
 //}}} check_macroassembler_style
 // ===============================================================
 
@@ -2283,15 +2478,17 @@ void MacroAssembler::fallibleUnboxPtr(const BaseIndex& src, Register dest,
 template <>
 inline void MacroAssembler::cmpPtrSet(Assembler::Condition cond, Address lhs,
                                       ImmPtr rhs, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  loadPtr(lhs, scratch2);
-  cmpPtrSet(cond, Register(scratch2), rhs, dest);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  loadPtr(lhs, scratch);
+  cmpPtrSet(cond, Register(scratch), rhs, dest);
 }
 
 template <>
 inline void MacroAssembler::cmpPtrSet(Assembler::Condition cond, Register lhs,
                                       Address rhs, Register dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   MOZ_ASSERT(lhs != scratch);
   loadPtr(rhs, scratch);
   cmpPtrSet(cond, lhs, Register(scratch), dest);
@@ -2300,16 +2497,18 @@ inline void MacroAssembler::cmpPtrSet(Assembler::Condition cond, Register lhs,
 template <>
 inline void MacroAssembler::cmpPtrSet(Assembler::Condition cond, Address lhs,
                                       Register rhs, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  MOZ_ASSERT(rhs != scratch2);
-  loadPtr(lhs, scratch2);
-  cmpPtrSet(cond, Register(scratch2), rhs, dest);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  MOZ_ASSERT(rhs != scratch);
+  loadPtr(lhs, scratch);
+  cmpPtrSet(cond, Register(scratch), rhs, dest);
 }
 
 template <>
 inline void MacroAssembler::cmp32Set(Assembler::Condition cond, Register lhs,
                                      Address rhs, Register dest) {
-  ScratchRegisterScope scratch(asMasm());
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
   MOZ_ASSERT(lhs != scratch);
   load32(rhs, scratch);
   cmp32Set(cond, lhs, Register(scratch), dest);
@@ -2318,10 +2517,11 @@ inline void MacroAssembler::cmp32Set(Assembler::Condition cond, Register lhs,
 template <>
 inline void MacroAssembler::cmp32Set(Assembler::Condition cond, Address lhs,
                                      Register rhs, Register dest) {
-  SecondScratchRegisterScope scratch2(asMasm());
-  MOZ_ASSERT(rhs != scratch2);
-  load32(lhs, scratch2);
-  cmp32Set(cond, Register(scratch2), rhs, dest);
+  UseScratchRegisterScope temps(asMasm());
+  Register scratch = temps.Acquire();
+  MOZ_ASSERT(rhs != scratch);
+  load32(lhs, scratch);
+  cmp32Set(cond, Register(scratch), rhs, dest);
 }
 
 void MacroAssemblerLOONG64Compat::incrementInt32Value(const Address& addr) {

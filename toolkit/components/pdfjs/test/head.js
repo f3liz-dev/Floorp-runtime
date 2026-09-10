@@ -1,29 +1,23 @@
+// A page render can be cancelled, for example by the scale change the sidebar
+// triggers when it opens, and then no "textlayerrendered" is dispatched for it.
+// So check the state of the DOM instead of pairing up the render events.
 function waitForPdfJS(browser, url = null) {
-  // Runs tests after all "load" event handlers have fired off
-  const loadPromise = new Promise(resolve => {
-    let pageCounter = 0;
-    const removeEventListener1 = BrowserTestUtils.addContentEventListener(
-      browser,
-      "pagerender",
-      () => {
-        pageCounter += 1;
-      },
-      { capture: false, wantUntrusted: true }
-    );
-    const removeEventListener2 = BrowserTestUtils.addContentEventListener(
-      browser,
-      "textlayerrendered",
-      () => {
-        pageCounter -= 1;
-        if (pageCounter === 0) {
-          removeEventListener1();
-          removeEventListener2();
-          resolve();
-        }
-      },
-      { capture: false, wantUntrusted: true }
-    );
-  });
+  const loadPromise = BrowserTestUtils.waitForContentEvent(
+    browser,
+    "textlayerrendered",
+    false,
+    event => {
+      const doc = event.target.ownerDocument || event.target;
+      const pages = doc.querySelectorAll(".page[data-loaded='true']");
+      return (
+        !!pages.length &&
+        Array.from(pages).every(page =>
+          page.querySelector(".textLayer:not([hidden]) .endOfContent")
+        )
+      );
+    },
+    true
+  );
   if (url) {
     BrowserTestUtils.startLoadingURIString(browser, url);
   }
@@ -86,7 +80,17 @@ async function waitForPdfJSAllLayers(browser, url, layers) {
     annotationEditorPromise,
   ]);
 
-  await SpecialPowers.spawn(browser, [layers], async function (layers) {
+  await waitForPdfJSLayers(browser, layers);
+}
+
+/**
+ * Wait for each page's expected PDF layers.
+ *
+ * @param {MozBrowser|BrowsingContext} target Target containing the viewer.
+ * @param {Array<Array<string>>} layers Expected layer classes by page.
+ */
+async function waitForPdfJSLayers(target, layers) {
+  await SpecialPowers.spawn(target, [layers], async function (layers) {
     const { ContentTaskUtils } = ChromeUtils.importESModule(
       "resource://testing-common/ContentTaskUtils.sys.mjs"
     );
@@ -162,6 +166,7 @@ async function waitForSelector(
 }
 
 async function click(browser, selector) {
+  info(`Click on: ${selector}`);
   await waitForSelector(browser, selector);
   await SpecialPowers.spawn(browser, [selector], async function (sel) {
     const el = content.document.querySelector(sel);
@@ -185,7 +190,8 @@ async function waitForTelemetry(browser) {
 
 /**
  * Enable an editor (Ink, FreeText, ...).
- * @param {Object} browser
+ *
+ * @param {object} browser
  * @param {string} name
  */
 async function enableEditor(browser, name, expectedPageRendered) {
@@ -232,9 +238,10 @@ async function enableEditor(browser, name, expectedPageRendered) {
 
 /**
  * The text layer contains some spans with the text of the pdf.
- * @param {Object} browser
+ *
+ * @param {object} browser
  * @param {string} text
- * @returns {Object} the bbox of the span containing the text.
+ * @returns {object} the bbox of the span containing the text.
  */
 async function getSpanBox(browser, text, pageNumber = 1) {
   return SpecialPowers.spawn(
@@ -274,7 +281,8 @@ async function getSpanBox(browser, text, pageNumber = 1) {
 
 /**
  * Count the number of elements corresponding to the given selector.
- * @param {Object} browser
+ *
+ * @param {object} browser
  * @param {string} selector
  * @returns
  */
@@ -290,7 +298,8 @@ async function countElements(browser, selector) {
 
 /**
  * Click at the given coordinates.
- * @param {Object} browser
+ *
+ * @param {object} browser
  * @param {number} x
  * @param {number} y
  * @param {number} n
@@ -322,7 +331,8 @@ async function clickAt(browser, x, y, n = 1) {
 
 /**
  * Click on the element corresponding to the given selector.
- * @param {Object} browser
+ *
+ * @param {object} browser
  * @param {string} selector
  */
 async function clickOn(browser, selector) {
@@ -349,7 +359,8 @@ function focusEditorLayer(browser) {
 
 /**
  * Focus an element corresponding to the given selector.
- * @param {Object} browser
+ *
+ * @param {object} browser
  * @param {string} selector
  * @returns
  */
@@ -387,13 +398,14 @@ async function hitKey(browser, char) {
 
 /**
  * Write some text using the keyboard.
- * @param {Object} browser
+ *
+ * @param {object} browser
  * @param {string} text
  */
 async function write(browser, text) {
   info(`Write: ${text}`);
   for (const char of text.split("")) {
-    hitKey(browser, char);
+    await hitKey(browser, char);
   }
 }
 
@@ -407,9 +419,10 @@ async function escape(browser) {
 
 /**
  * Add a FreeText annotation and write some text inside.
- * @param {Object} browser
+ *
+ * @param {object} browser
  * @param {string} text
- * @param {Object} box
+ * @param {object} box
  */
 async function addFreeText(browser, text, box) {
   info("Add FreeText: " + text);
@@ -425,7 +438,7 @@ async function addFreeText(browser, text, box) {
 
 async function waitForEditors(browser, selector, count) {
   info(`Wait for ${count} editors`);
-  await BrowserTestUtils.waitForCondition(
+  await TestUtils.waitForCondition(
     async () => (await countElements(browser, selector)) === count
   );
 }
@@ -496,6 +509,22 @@ async function cleanupDownloads(listId = Downloads.PUBLIC) {
   }
 }
 
+async function closeDownloadPanel() {
+  if (DownloadsPanel.panel.state !== "closed") {
+    const hiddenPromise = BrowserTestUtils.waitForEvent(
+      DownloadsPanel.panel,
+      "popuphidden"
+    );
+    DownloadsPanel.hidePanel();
+    await hiddenPromise;
+  }
+  is(
+    DownloadsPanel.panel.state,
+    "closed",
+    "Check that the download panel is closed"
+  );
+}
+
 function makePDFJSHandler() {
   let mimeService = Cc["@mozilla.org/mime;1"].getService(Ci.nsIMIMEService);
   let handlerInfo = mimeService.getFromTypeAndExtension(
@@ -537,7 +566,7 @@ async function testTelemetryEventExtra(record, expected, clear = true) {
 }
 
 function waitForPreviewVisible() {
-  return BrowserTestUtils.waitForCondition(function () {
+  return TestUtils.waitForCondition(function () {
     let preview = document.querySelector(".printPreviewBrowser");
     return preview && BrowserTestUtils.isVisible(preview);
   });
@@ -545,7 +574,7 @@ function waitForPreviewVisible() {
 
 function closePreview() {
   EventUtils.synthesizeKey("KEY_Escape");
-  return BrowserTestUtils.waitForCondition(
+  return TestUtils.waitForCondition(
     () => !document.querySelector(".printPreviewBrowser")
   );
 }

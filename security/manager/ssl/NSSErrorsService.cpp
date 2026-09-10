@@ -4,10 +4,10 @@
 
 #include "NSSErrorsService.h"
 
+#include "mozpkix/pkixnss.h"
 #include "nsIStringBundle.h"
 #include "nsNSSComponent.h"
 #include "nsServiceManagerUtils.h"
-#include "mozpkix/pkixnss.h"
 #include "secerr.h"
 #include "sslerr.h"
 
@@ -158,6 +158,27 @@ NSSErrorsService::GetErrorClass(nsresult aXPCOMErrorCode,
 
   // Otherwise, this must be a TLS error.
   *aErrorClass = ERROR_CLASS_SSL_PROTOCOL;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+NSSErrorsService::IsErrorOverridable(nsresult aXPCOMErrorCode, bool* _retval) {
+  if (!_retval) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  if (NS_ERROR_GET_MODULE(aXPCOMErrorCode) != NS_ERROR_MODULE_SECURITY ||
+      NS_ERROR_GET_SEVERITY(aXPCOMErrorCode) != NS_ERROR_SEVERITY_ERROR) {
+    return NS_ERROR_FAILURE;
+  }
+
+  int32_t aNSPRCode = -1 * NS_ERROR_GET_CODE(aXPCOMErrorCode);
+
+  if (!mozilla::psm::IsNSSErrorCode(aNSPRCode)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  *_retval = ErrorIsOverridable(aNSPRCode);
   return NS_OK;
 }
 

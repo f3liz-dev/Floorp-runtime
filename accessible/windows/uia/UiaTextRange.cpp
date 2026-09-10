@@ -1,18 +1,18 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "UiaTextRange.h"
 
+#include <comdef.h>
+#include <propvarutil.h>
+
+#include <unordered_set>
+
+#include "TextLeafRange.h"
 #include "mozilla/a11y/HyperTextAccessibleBase.h"
 #include "nsAccUtils.h"
 #include "nsIAccessibleTypes.h"
-#include "TextLeafRange.h"
-#include <comdef.h>
-#include <propvarutil.h>
-#include <unordered_set>
 
 namespace mozilla::a11y {
 
@@ -318,7 +318,7 @@ UiaTextRange::Clone(__RPC__deref_out_opt ITextRangeProvider** aRetVal) {
   if (!range) {
     return CO_E_OBJNOTCONNECTED;
   }
-  RefPtr uiaRange = new UiaTextRange(range);
+  auto uiaRange = MakeRefPtr<UiaTextRange>(range);
   uiaRange.forget(aRetVal);
   return S_OK;
 }
@@ -418,7 +418,7 @@ UiaTextRange::FindAttribute(TEXTATTRIBUTEID aAttributeId, VARIANT aVal,
       } else if (matchingRangeStart) {
         // We fell out of a matching range. We're moving forward, so the
         // matching range is [matchingRangeStart, startPoint).
-        RefPtr uiaRange = new UiaTextRange(
+        auto uiaRange = MakeRefPtr<UiaTextRange>(
             TextLeafRange{matchingRangeStart.value(), startPoint});
         uiaRange.forget(aRetVal);
         return S_OK;
@@ -432,7 +432,7 @@ UiaTextRange::FindAttribute(TEXTATTRIBUTEID aAttributeId, VARIANT aVal,
     if (matchingRangeStart) {
       // We found a start point and reached the end of the range. The result is
       // [matchingRangeStart, stopPoint].
-      RefPtr uiaRange = new UiaTextRange(
+      auto uiaRange = MakeRefPtr<UiaTextRange>(
           TextLeafRange{matchingRangeStart.value(), range.End()});
       uiaRange.forget(aRetVal);
       return S_OK;
@@ -451,8 +451,8 @@ UiaTextRange::FindAttribute(TEXTATTRIBUTEID aAttributeId, VARIANT aVal,
       } else if (matchingRangeEnd) {
         // We fell out of a matching range. We're moving backward, so the
         // matching range is [endPoint, matchingRangeEnd).
-        RefPtr uiaRange =
-            new UiaTextRange(TextLeafRange{endPoint, matchingRangeEnd.value()});
+        auto uiaRange = MakeRefPtr<UiaTextRange>(
+            TextLeafRange{endPoint, matchingRangeEnd.value()});
         uiaRange.forget(aRetVal);
         return S_OK;
       }
@@ -465,7 +465,7 @@ UiaTextRange::FindAttribute(TEXTATTRIBUTEID aAttributeId, VARIANT aVal,
     if (matchingRangeEnd) {
       // We found an end point and reached the start of the range. The result is
       // [range.Start(), matchingRangeEnd).
-      RefPtr uiaRange = new UiaTextRange(
+      auto uiaRange = MakeRefPtr<UiaTextRange>(
           TextLeafRange{range.Start(), matchingRangeEnd.value()});
       uiaRange.forget(aRetVal);
       return S_OK;
@@ -566,7 +566,7 @@ UiaTextRange::FindText(__RPC__in BSTR aText, BOOL aBackward, BOOL aIgnoreCase,
   const TextLeafPoint rangeEnd{foundTextEnd, offsetFromEndAccStart};
 
   TextLeafRange resultRange{rangeStart, rangeEnd};
-  RefPtr uiaRange = new UiaTextRange(resultRange);
+  auto uiaRange = MakeRefPtr<UiaTextRange>(resultRange);
   uiaRange.forget(aRetVal);
   return S_OK;
 }
@@ -720,45 +720,6 @@ UiaTextRange::GetBoundingRectangles(__RPC__deref_out_opt SAFEARRAY** aRetVal) {
 
   // Get the rectangles for each line.
   nsTArray<LayoutDeviceIntRect> lineRects = range.LineRects();
-  TextLeafPoint start = range.Start();
-  if (lineRects.IsEmpty() && start == range.End()) {
-    // The documentation for GetBoundingRectangles says that we should return
-    // "An empty array for a degenerate range.":
-    // https://learn.microsoft.com/en-us/windows/win32/api/uiautomationcore/nf-uiautomationcore-itextrangeprovider-getboundingrectangles#return-value
-    // This is exactly what range.LineRects() just did. However, contrary to
-    // this, some clients (including Microsoft Text Cursor Indicator) call
-    // GetBoundingRectangles on a degenerate range when querying the caret and
-    // expect rectangles to be returned. Therefore, use the character bounds.
-    LayoutDeviceIntRect charBounds;
-    bool maybeUseCaretRect;
-    if (mIsEndOfLineInsertionPoint) {
-      // We can't calculate bounds for the end of line insertion point, so use
-      // the caret rect instead if appropriate.
-      maybeUseCaretRect = true;
-    } else {
-      charBounds = start.CharBounds();
-      // charBounds can be empty when the caret is right at the end of a
-      // textarea which ends with a line feed. Even though
-      // mIsEndOfLineInsertionPoint is false in this case, this is still the
-      // same situation: we can't get bounds for this point.
-      maybeUseCaretRect = charBounds.IsEmpty();
-    }
-    if (maybeUseCaretRect && start == TextLeafPoint::GetCaret(start.mAcc)) {
-      // The caret is at this point, so we can use the caret rect.
-      HyperTextAccessibleBase* ht = start.mAcc->AsHyperTextBase();
-      if (!ht) {
-        Accessible* parent = start.mAcc->Parent();
-        if (parent) {
-          ht = parent->AsHyperTextBase();
-        }
-      }
-      if (ht) {
-        charBounds = ht->GetCaretRect().first;
-      }
-    }
-    lineRects.AppendElement(charBounds);
-  }
-
   // For UIA's purposes, the rectangles of this array are four doubles arranged
   // in order {left, top, width, height}.
   SAFEARRAY* rectsVec = SafeArrayCreateVector(VT_R8, 0, lineRects.Length() * 4);

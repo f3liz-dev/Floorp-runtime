@@ -37,7 +37,7 @@ fun ClickableSubstringLink(
     text: String,
     textColor: Color = colorResource(R.color.cfr_text_color),
     linkTextColor: Color = colorResource(R.color.cfr_text_color),
-    style: TextStyle = focusTypography.body1,
+    style: TextStyle = focusTypography.bodyLarge,
     linkTextDecoration: TextDecoration? = null,
     clickableStartIndex: Int,
     clickableEndIndex: Int,
@@ -86,11 +86,9 @@ fun ClickableSubstringLink(
         text = annotatedText,
         style = style,
         onClick = {
-            annotatedText
-                .getStringAnnotations("link", it, it)
-                .firstOrNull()?.let {
-                    onClick()
-                }
+            annotatedText.getStringAnnotations("link", it, it).firstOrNull()?.let {
+                onClick()
+            }
         },
     )
 }
@@ -107,7 +105,7 @@ private fun ClickableSubstringTextPreview() {
                 linkTextDecoration = TextDecoration.Underline,
                 clickableStartIndex = text.indexOf("link"),
                 clickableEndIndex = text.length,
-            ) { }
+            ) {}
         }
     }
 }

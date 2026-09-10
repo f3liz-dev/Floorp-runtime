@@ -50,6 +50,7 @@ const NETWORK_EVENT_TYPES = {
   REQUEST_POSTDATA: "requestPostData",
   RESPONSE_CACHE: "responseCache",
   RESPONSE_CONTENT: "responseContent",
+  RESPONSE_CONTENT_COMPLETE: "responseContentComplete",
   RESPONSE_COOKIES: "responseCookies",
   RESPONSE_HEADERS: "responseHeaders",
   RESPONSE_START: "responseStart",
@@ -75,6 +76,7 @@ const LOAD_CAUSE_STRINGS = {
   [Ci.nsIContentPolicy.TYPE_FONT]: "font",
   [Ci.nsIContentPolicy.TYPE_MEDIA]: "media",
   [Ci.nsIContentPolicy.TYPE_WEBSOCKET]: "websocket",
+  [Ci.nsIContentPolicy.TYPE_WEB_TRANSPORT]: "webtransport",
   [Ci.nsIContentPolicy.TYPE_CSP_REPORT]: "csp",
   [Ci.nsIContentPolicy.TYPE_XSLT]: "xslt",
   [Ci.nsIContentPolicy.TYPE_BEACON]: "beacon",
@@ -84,17 +86,32 @@ const LOAD_CAUSE_STRINGS = {
   [Ci.nsIContentPolicy.TYPE_WEB_IDENTITY]: "webidentity",
 };
 
-function causeTypeToString(causeType, loadFlags, internalContentPolicyType) {
+const REDIRECT_CODES = [
+  301, // HTTP Moved Permanently
+  302, // HTTP Found
+  303, // HTTP See Other
+  307, // HTTP Temporary Redirect
+  308, // HTTP Moved Permanently
+];
+
+function getChannelCauseType(channel) {
+  if (channel.loadInfo.isInDevToolsContext) {
+    return "devtools";
+  }
+
+  const { externalContentPolicyType, internalContentPolicyType } =
+    channel.loadInfo;
+
   let prefix = "";
   if (
-    (causeType == Ci.nsIContentPolicy.TYPE_IMAGESET ||
+    (externalContentPolicyType == Ci.nsIContentPolicy.TYPE_IMAGESET ||
       internalContentPolicyType == Ci.nsIContentPolicy.TYPE_INTERNAL_IMAGE) &&
-    loadFlags & Ci.nsIRequest.LOAD_BACKGROUND
+    channel.loadFlags & Ci.nsIRequest.LOAD_BACKGROUND
   ) {
     prefix = "lazy-";
   }
 
-  return prefix + LOAD_CAUSE_STRINGS[causeType] || "unknown";
+  return prefix + LOAD_CAUSE_STRINGS[externalContentPolicyType] || "unknown";
 }
 
 function stringToCauseType(value) {
@@ -105,8 +122,8 @@ function stringToCauseType(value) {
 
 function isChannelFromSystemPrincipal(channel) {
   let principal;
-
-  if (channel.isDocument) {
+  const channelURI = channel.originalURI || channel.URI;
+  if (channelURI?.spec.startsWith("view-source:") || channel.isDocument) {
     // The loadingPrincipal is the principal where the request will be used.
     principal = channel.loadInfo.loadingPrincipal;
   } else {
@@ -134,11 +151,7 @@ function isChromeFileChannel(channel) {
 }
 
 function isPrivilegedChannel(channel) {
-  return (
-    isChannelFromSystemPrincipal(channel) ||
-    isChromeFileChannel(channel) ||
-    channel.loadInfo.isInDevToolsContext
-  );
+  return isChannelFromSystemPrincipal(channel) || isChromeFileChannel(channel);
 }
 
 /**
@@ -158,6 +171,11 @@ function getChannelBrowsingContextID(channel) {
   if (channel.loadInfo.browsingContextID) {
     return channel.loadInfo.browsingContextID;
   }
+
+  if (channel.loadInfo.associatedBrowsingContextID) {
+    return channel.loadInfo.associatedBrowsingContextID;
+  }
+
   // At least WebSocket channel aren't having a browsingContextID set on their loadInfo
   // We fallback on top frame element, which works, but will be wrong for WebSocket
   // in same-process iframes...
@@ -204,7 +222,8 @@ function isPreloadRequest(channel) {
     type == Ci.nsIContentPolicy.TYPE_INTERNAL_IMAGE_PRELOAD ||
     type == Ci.nsIContentPolicy.TYPE_INTERNAL_STYLESHEET_PRELOAD ||
     type == Ci.nsIContentPolicy.TYPE_INTERNAL_FONT_PRELOAD ||
-    type == Ci.nsIContentPolicy.TYPE_INTERNAL_JSON_PRELOAD
+    type == Ci.nsIContentPolicy.TYPE_INTERNAL_JSON_PRELOAD ||
+    type == Ci.nsIContentPolicy.TYPE_INTERNAL_TEXT_PRELOAD
   );
 }
 
@@ -212,31 +231,17 @@ function isPreloadRequest(channel) {
  * Get the channel cause details.
  *
  * @param {nsIChannel} channel
- * @returns {Object}
+ * @returns {object}
  *          - loadingDocumentUri {string} uri of the document which created the
  *            channel
  *          - type {string} cause type as string
  */
 function getCauseDetails(channel) {
-  // Determine the cause and if this is an XHR request.
-  let causeType = Ci.nsIContentPolicy.TYPE_OTHER;
-  let causeUri = null;
-
-  if (channel.loadInfo) {
-    causeType = channel.loadInfo.externalContentPolicyType;
-    const { loadingPrincipal } = channel.loadInfo;
-    if (loadingPrincipal) {
-      causeUri = loadingPrincipal.spec;
-    }
-  }
-
   return {
-    loadingDocumentUri: causeUri,
-    type: causeTypeToString(
-      causeType,
-      channel.loadFlags,
-      channel.loadInfo.internalContentPolicyType
-    ),
+    loadingDocumentUri: channel.loadInfo.loadingPrincipal
+      ? channel.loadInfo.loadingPrincipal.spec
+      : null,
+    type: getChannelCauseType(channel),
   };
 }
 
@@ -297,7 +302,7 @@ const HTTP_PROTOCOL_STRINGS = ["http", "https"];
  * default and otherwise falls back on `httpVersion`. Ideally we should merge
  * the two properties.
  *
- * @param {Object} httpActivity
+ * @param {object} httpActivity
  *     The httpActivity object for which we need to get the protocol.
  *
  * @returns {string}
@@ -425,11 +430,11 @@ function getWebSocketChannel(channel) {
  * For a given channel, fetch the request's headers and cookies.
  *
  * @param {nsIChannel} channel
- * @return {Object}
+ * @return {object}
  *     An object with two properties:
- *     @property {Array<Object>} cookies
+ *     @property {Array<object>} cookies
  *         Array of { name, value } objects.
- *     @property {Array<Object>} headers
+ *     @property {Array<object>} headers
  *         Array of { name, value } objects.
  */
 function fetchRequestHeadersAndCookies(channel) {
@@ -464,7 +469,7 @@ function fetchRequestHeadersAndCookies(channel) {
  * Parse the early hint raw headers string to an
  * array of name/value object header pairs
  *
- * @param {String} rawHeaders
+ * @param {string} rawHeaders
  * @returns {Array}
  */
 function parseEarlyHintsResponseHeaders(rawHeaders) {
@@ -483,11 +488,11 @@ function parseEarlyHintsResponseHeaders(rawHeaders) {
  * For a given channel, fetch the response's headers and cookies.
  *
  * @param {nsIChannel} channel
- * @return {Object}
+ * @return {object}
  *     An object with two properties:
- *     @property {Array<Object>} cookies
+ *     @property {Array<object>} cookies
  *         Array of { name, value } objects.
- *     @property {Array<Object>} headers
+ *     @property {Array<object>} headers
  *         Array of { name, value } objects.
  */
 function fetchResponseHeadersAndCookies(channel) {
@@ -555,20 +560,19 @@ function matchRequest(channel, filters) {
     }
 
     if (type == "browser-element") {
-      if (!channel.loadInfo.browsingContext) {
+      let browsingContext =
+        channel.loadInfo.browsingContext ||
+        channel.loadInfo.associatedBrowsingContext;
+
+      if (!browsingContext) {
         const topFrame = lazy.NetworkHelper.getTopFrameForRequest(channel);
-        // `topFrame` is typically null for some chrome requests like favicons
-        // And its `browsingContext` attribute might be null if the request happened
+        // `topFrame` is typically null for some chrome requests like favicons,
+        // and its `browsingContext` attribute might be null if the request happened
         // while the tab is being closed.
-        return (
-          topFrame?.browsingContext?.browserId ==
-          filters.sessionContext.browserId
-        );
+        browsingContext = topFrame?.browsingContext;
       }
-      return (
-        channel.loadInfo.browsingContext.browserId ==
-        filters.sessionContext.browserId
-      );
+
+      return browsingContext?.browserId == filters.sessionContext.browserId;
     }
     if (type == "webextension") {
       return (
@@ -602,77 +606,14 @@ function matchRequest(channel, filters) {
     return windows.includes(win);
   }
 
-  // This is fallback code for the legacy WebConsole.startListeners codepath,
-  // which may still pass individual browserId/window/addonId attributes.
-  // This should be removable once we drop the WebConsole codepath for network events
-  // (bug 1721592 and followups)
-  return legacyMatchRequest(channel, filters);
-}
-
-function legacyMatchRequest(channel, filters) {
-  // Log everything if no filter is specified
-  if (!filters.browserId && !filters.window && !filters.addonId) {
-    return true;
-  }
-
-  // Ignore requests from chrome or add-on code when we are monitoring
-  // content.
-  if (
-    channel.loadInfo?.loadingDocument === null &&
-    (isChannelFromSystemPrincipal(channel) ||
-      channel.loadInfo.isInDevToolsContext)
-  ) {
-    return false;
-  }
-
-  if (filters.window) {
-    let win = lazy.NetworkHelper.getWindowForRequest(channel);
-    if (filters.matchExactWindow) {
-      return win == filters.window;
-    }
-
-    // Since frames support, this.window may not be the top level content
-    // frame, so that we can't only compare with win.top.
-    while (win) {
-      if (win == filters.window) {
-        return true;
-      }
-      if (win.parent == win) {
-        break;
-      }
-      win = win.parent;
-    }
-    return false;
-  }
-
-  if (filters.browserId) {
-    const topFrame = lazy.NetworkHelper.getTopFrameForRequest(channel);
-    // `topFrame` is typically null for some chrome requests like favicons
-    // And its `browsingContext` attribute might be null if the request happened
-    // while the tab is being closed.
-    if (topFrame?.browsingContext?.browserId == filters.browserId) {
-      return true;
-    }
-
-    // If we couldn't get the top frame BrowsingContext from the loadContext,
-    // look for it on channel.loadInfo instead.
-    if (channel.loadInfo?.browsingContext?.browserId == filters.browserId) {
-      return true;
-    }
-  }
-
-  if (
-    filters.addonId &&
-    channel.loadInfo?.loadingPrincipal?.addonId === filters.addonId
-  ) {
-    return true;
-  }
-
-  return false;
+  throw new Error(
+    "matchRequest expects either a 'targetActor' or a 'sessionContext' attribute"
+  );
 }
 
 function getBlockedReason(channel, fromCache = false) {
-  let blockingExtension, blockedReason;
+  let blockedReason;
+  const extension = {};
   const { status } = channel;
 
   try {
@@ -680,15 +621,27 @@ function getBlockedReason(channel, fromCache = false) {
     const properties = request.QueryInterface(Ci.nsIPropertyBag);
 
     blockedReason = request.loadInfo.requestBlockingReason;
-    blockingExtension = properties.getProperty("cancelledByExtension");
+    extension.blocking = properties.getProperty("cancelledByExtension");
 
     // WebExtensionPolicy is not available for workers
     if (typeof WebExtensionPolicy !== "undefined") {
-      blockingExtension = WebExtensionPolicy.getByID(blockingExtension).name;
+      extension.blocking = WebExtensionPolicy.getByID(extension.blocking).name;
     }
   } catch (err) {
     // "cancelledByExtension" doesn't have to be available.
   }
+
+  if (
+    blockedReason === Ci.nsILoadInfo.BLOCKING_REASON_CLASSIFY_HARMFULADDON_URI
+  ) {
+    try {
+      const properties = channel.QueryInterface(Ci.nsIPropertyBag);
+      extension.blocked = properties.getProperty("blockedExtension");
+    } catch (err) {
+      // "blockedExtension" doesn't have to be available.
+    }
+  }
+
   // These are platform errors which are not exposed to the users,
   // usually the requests (with these errors) might be displayed with various
   // other status codes.
@@ -724,7 +677,7 @@ function getBlockedReason(channel, fromCache = false) {
     blockedReason = ChromeUtils.getXPCOMErrorName(status);
   }
 
-  return { blockingExtension, blockedReason };
+  return { extension, blockedReason };
 }
 
 function getCharset(channel) {
@@ -796,7 +749,8 @@ function handleDataChannel(channel, networkEventActor) {
   // not be considered as insecure either. Set empty string as security
   // state.
   networkEventActor.addSecurityInfo({ state: "" });
-  networkEventActor.addResponseContent(response, {});
+  networkEventActor.addResponseContent(response);
+  networkEventActor.addResponseContentComplete({});
 }
 
 /**
@@ -804,7 +758,7 @@ function handleDataChannel(channel, networkEventActor) {
  * is available. The flag is used by the consumer of the resource (frontend)
  * to determine when to lazily fetch the data.
  *
- * @param {Object} resource - This could be a network resource object or a network resource
+ * @param {object} resource - This could be a network resource object or a network resource
  *                            updates object.
  * @param {Array} networkEvents
  */
@@ -822,7 +776,7 @@ function setEventAsAvailable(resource, networkEvents) {
  * Helper to decode the content of a response object built by a
  * NetworkResponseListener.
  *
- * @param {Array<TypedArray>}
+ * @param {Array<TypedArray>} chunks
  *     Array of response chunks read via NetUtil.readInputStream.
  * @param {object} options
  * @param {string} options.charset
@@ -875,6 +829,7 @@ async function decodeResponseChunks(chunks, options) {
     );
   }
 
+  decodedContent = lazy.NetworkHelper.convertToUnicode(decodedContent, charset);
   if (encoding === "base64") {
     try {
       decodedContent = btoa(decodedContent);
@@ -888,20 +843,7 @@ async function decodeResponseChunks(chunks, options) {
   return decodedContent;
 }
 
-function decodeUncompressedStream(stream, length, charset) {
-  if (charset) {
-    const cis = Cc["@mozilla.org/intl/converter-input-stream;1"].createInstance(
-      Ci.nsIConverterInputStream
-    );
-
-    cis.init(stream, charset, length, 0);
-    const str = {};
-    cis.readString(-1, str);
-    cis.close();
-
-    return str.value;
-  }
-
+function decodeUncompressedStream(stream, length) {
   const sis = Cc["@mozilla.org/scriptableinputstream;1"].createInstance(
     Ci.nsIScriptableInputStream
   );
@@ -909,7 +851,7 @@ function decodeUncompressedStream(stream, length, charset) {
   return sis.readBytes(length);
 }
 
-async function decodeCompressedStream(stream, length, encodings, charset) {
+async function decodeCompressedStream(stream, length, encodings) {
   const listener = Cc["@mozilla.org/network/stream-loader;1"].createInstance(
     Ci.nsIStreamLoader
   );
@@ -922,7 +864,15 @@ async function decodeCompressedStream(stream, length, encodings, charset) {
         _length,
         data
       ) {
-        resolve(String.fromCharCode.apply(this, data));
+        // `data`` might be a very large array, chunk calls to fromCharCode to
+        // avoid "RangeError: too many arguments provided for a function call".
+        const CHUNK_SIZE = 65536;
+        let result = "";
+        for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+          const chunk = data.slice(i, i + CHUNK_SIZE);
+          result += String.fromCharCode.apply(null, chunk);
+        }
+        resolve(result);
       },
     });
   });
@@ -948,13 +898,35 @@ async function decodeCompressedStream(stream, length, encodings, charset) {
   converter.onDataAvailable(null, stream, 0, length);
   converter.onStopRequest(null, null, null);
 
-  const result = await onDecodingComplete;
-  return lazy.NetworkHelper.convertToUnicode(result, charset);
+  return onDecodingComplete;
+}
+
+function isRedirect(responseStatus) {
+  return REDIRECT_CODES.includes(responseStatus);
+}
+
+/**
+ * Remove any frames in a stack that are related to chrome resource files.
+ *
+ * @param array stack
+ *        An array of frames, each of which has a
+ *        'filename' property.
+ * @return array
+ *         An array of stack frames with any chrome frames removed.
+ *         The original array is not modified.
+ */
+function removeChromeFrames(stacktrace) {
+  return stacktrace.filter(({ filename }) => {
+    return (
+      filename &&
+      !filename.startsWith("resource://") &&
+      !filename.startsWith("chrome://")
+    );
+  });
 }
 
 export const NetworkUtils = {
   ACCEPTED_COMPRESSION_ENCODINGS,
-  causeTypeToString,
   decodeResponseChunks,
   fetchRequestHeadersAndCookies,
   fetchResponseHeadersAndCookies,
@@ -974,10 +946,12 @@ export const NetworkUtils = {
   isFromCache,
   isNavigationRequest,
   isPreloadRequest,
+  isRedirect,
   isThirdPartyTrackingResource,
   matchRequest,
   NETWORK_EVENT_TYPES,
   parseEarlyHintsResponseHeaders,
+  removeChromeFrames,
   setEventAsAvailable,
   stringToCauseType,
 };

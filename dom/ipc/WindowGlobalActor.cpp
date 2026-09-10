@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -15,6 +13,7 @@
 #include "mozilla/dom/JSWindowActorChild.h"
 #include "mozilla/dom/JSWindowActorParent.h"
 #include "mozilla/dom/JSWindowActorProtocol.h"
+#include "mozilla/dom/ParentProcessChannelHandle.h"
 #include "mozilla/dom/PopupBlocker.h"
 #include "mozilla/dom/WindowContext.h"
 #include "mozilla/dom/WindowGlobalChild.h"
@@ -23,6 +22,7 @@
 #include "nsContentUtils.h"
 #include "nsGlobalWindowInner.h"
 #include "nsNetUtil.h"
+#include "nsPIDOMWindowInlines.h"
 
 namespace mozilla::dom {
 
@@ -59,19 +59,26 @@ WindowGlobalInit WindowGlobalActor::BaseInitializer(
   fields.Get<Indexes::IDX_AutoplayPermission>() =
       nsIPermissionManager::UNKNOWN_ACTION;
   fields.Get<Indexes::IDX_AllowJavascript>() = true;
+  fields.Get<Indexes::IDX_IsFramebustingAllowed>() = aBrowsingContext->IsTop();
   return init;
 }
 
 WindowGlobalInit WindowGlobalActor::AboutBlankInitializer(
     dom::BrowsingContext* aBrowsingContext, nsIPrincipal* aPrincipal) {
+  MOZ_DIAGNOSTIC_ASSERT(
+      aPrincipal && aPrincipal->GetIsNullPrincipal(),
+      "AboutBlankInitializer is a dummy that should not be web-exposed");
+
   WindowGlobalInit init =
       BaseInitializer(aBrowsingContext, nsContentUtils::GenerateWindowId(),
                       nsContentUtils::GenerateWindowId());
 
   init.principal() = aPrincipal;
-  init.storagePrincipal() = aPrincipal;
-  Unused << NS_NewURI(getter_AddRefs(init.documentURI()), "about:blank");
+  init.partitionedPrincipal() = aPrincipal;
+  (void)NS_NewURI(getter_AddRefs(init.documentURI()), "about:blank");
   init.isInitialDocument() = true;
+  init.isUncommittedInitialDocument() = true;
+  init.partitionStoragePrincipal() = false;
 
   return init;
 }
@@ -83,18 +90,37 @@ WindowGlobalInit WindowGlobalActor::WindowInitializer(
                       aWindow->GetOuterWindow()->WindowID());
 
   init.principal() = aWindow->GetPrincipal();
-  init.storagePrincipal() = aWindow->GetEffectiveStoragePrincipal();
+  init.partitionedPrincipal() = aWindow->PartitionedPrincipal();
   init.documentURI() = aWindow->GetDocumentURI();
+
+  MOZ_RELEASE_ASSERT(VerifyPartitionedPrincipalMatchesDocumentPrincipal(
+      init.principal(), init.partitionedPrincipal()));
 
   Document* doc = aWindow->GetDocument();
 
   init.isInitialDocument() = doc->IsInitialDocument();
+  if (Document* original = doc->GetOriginalDocument()) {
+    init.staticCloneOf() = original->GetWindowContext();
+  }
+  init.isUncommittedInitialDocument() = doc->IsUncommittedInitialDocument();
+  init.isVideoDocument() =
+      doc->MediaDocumentKind() == Document::MediaDocumentKind::Video;
   init.blockAllMixedContent() = doc->GetBlockAllMixedContent(false);
   init.upgradeInsecureRequests() = doc->GetUpgradeInsecureRequests(false);
+  init.partitionStoragePrincipal() = !doc->UseRegularPrincipal();
   init.sandboxFlags() = doc->GetSandboxFlags();
   net::CookieJarSettings::Cast(doc->CookieJarSettings())
       ->Serialize(init.cookieJarSettings());
   init.httpsOnlyStatus() = doc->HttpsOnlyStatus();
+
+  if (nsIChannel* chan = doc->GetChannel()) {
+    (void)chan->GetParentProcessChannelHandle(
+        getter_AddRefs(init.documentChannelHandle()));
+  }
+  if (nsIChannel* chan = doc->GetFailedChannel()) {
+    (void)chan->GetParentProcessChannelHandle(
+        getter_AddRefs(init.failedChannelHandle()));
+  }
 
   using Indexes = WindowContext::FieldIndexes;
 
@@ -111,6 +137,8 @@ WindowGlobalInit WindowGlobalActor::WindowInitializer(
   fields.Get<Indexes::IDX_OverriddenFingerprintingSettings>() =
       doc->GetOverriddenFingerprintingSettings();
   fields.Get<Indexes::IDX_IsSecureContext>() = aWindow->IsSecureContext();
+  fields.Get<Indexes::IDX_IsFramebustingAllowed>() =
+      aWindow->GetBrowsingContext()->ComputeIsFramebustingAllowed();
 
   // Initialze permission fields
   fields.Get<Indexes::IDX_AutoplayPermission>() =
@@ -133,17 +161,17 @@ WindowGlobalInit WindowGlobalActor::WindowInitializer(
   fields.Get<Indexes::IDX_IsSecure>() =
       innerDocURI && innerDocURI->SchemeIs("https");
 
-  nsCOMPtr<nsITransportSecurityInfo> securityInfo;
   if (nsCOMPtr<nsIChannel> channel = doc->GetChannel()) {
     nsCOMPtr<nsILoadInfo> loadInfo(channel->LoadInfo());
     fields.Get<Indexes::IDX_IsOriginalFrameSource>() =
         loadInfo->GetOriginalFrameSrcLoad();
-    fields.Get<Indexes::IDX_UsingStorageAccess>() =
-        loadInfo->GetStoragePermission() != nsILoadInfo::NoStoragePermission;
 
-    channel->GetSecurityInfo(getter_AddRefs(securityInfo));
+    nsILoadInfo::StoragePermissionState storageAccess =
+        loadInfo->GetStoragePermission();
+    fields.Get<Indexes::IDX_UsingStorageAccess>() =
+        storageAccess == nsILoadInfo::HasStoragePermission ||
+        storageAccess == nsILoadInfo::StoragePermissionAllowListed;
   }
-  init.securityInfo() = securityInfo;
 
   fields.Get<Indexes::IDX_IsLocalIP>() =
       init.principal()->GetIsLocalIpAddress();
@@ -153,6 +181,31 @@ WindowGlobalInit WindowGlobalActor::WindowInitializer(
   // description should also be synchronized in
   // WindowGlobalChild::OnNewDocument.
   return init;
+}
+
+bool WindowGlobalActor::VerifyPartitionedPrincipalMatchesDocumentPrincipal(
+    nsIPrincipal* aPrincipal, nsIPrincipal* aPartitionedPrincipal) {
+  if (!aPrincipal || !aPartitionedPrincipal) {
+    return false;
+  }
+
+  // OAs must match, with an exemption for the partition key.
+  if (!aPrincipal->OriginAttributesRef().EqualsIgnoringPartitionKey(
+          aPartitionedPrincipal->OriginAttributesRef())) {
+    return false;
+  }
+
+  // The document principal shouldn't have a partition key set.
+  if (!aPrincipal->OriginAttributesRef().mPartitionKey.IsEmpty()) {
+    return false;
+  }
+
+  // The rest of the origin must perfectly match.
+  nsCString noSuffix, partitionedNoSuffix;
+  MOZ_ALWAYS_SUCCEEDS(aPrincipal->GetOriginNoSuffix(noSuffix));
+  MOZ_ALWAYS_SUCCEEDS(
+      aPartitionedPrincipal->GetOriginNoSuffix(partitionedNoSuffix));
+  return noSuffix == partitionedNoSuffix;
 }
 
 already_AddRefed<JSActorProtocol> WindowGlobalActor::MatchingJSActorProtocol(

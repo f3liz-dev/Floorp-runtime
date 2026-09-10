@@ -12,6 +12,7 @@ use crate::color::AbsoluteColor;
 use crate::properties::{ComputedValues, PropertyId};
 use crate::values::computed::url::ComputedUrl;
 use crate::values::computed::{Angle, Image, Length};
+use crate::values::generics::{ClampToNonNegative, NonNegative};
 use crate::values::specified::SVGPathData;
 use crate::values::CSSFloat;
 use app_units::Au;
@@ -24,6 +25,7 @@ mod font;
 mod grid;
 pub mod lists;
 mod svg;
+pub mod text;
 pub mod transform;
 
 /// The category a property falls into for ordering purposes.
@@ -231,6 +233,20 @@ where
     }
 }
 
+impl<T: ToAnimatedValue + ClampToNonNegative> ToAnimatedValue for NonNegative<T> {
+    type AnimatedValue = NonNegative<<T as ToAnimatedValue>::AnimatedValue>;
+
+    #[inline]
+    fn to_animated_value(self, cx: &crate::values::animated::Context) -> Self::AnimatedValue {
+        NonNegative(self.0.to_animated_value(cx))
+    }
+
+    #[inline]
+    fn from_animated_value(animated: Self::AnimatedValue) -> Self {
+        Self(<T as ToAnimatedValue>::from_animated_value(animated.0).clamp_to_non_negative())
+    }
+}
+
 impl ToAnimatedValue for Au {
     type AnimatedValue = Length;
 
@@ -408,6 +424,8 @@ trivial_to_animated_value!(ComputedUrl);
 trivial_to_animated_value!(bool);
 trivial_to_animated_value!(f32);
 trivial_to_animated_value!(i32);
+trivial_to_animated_value!(u8);
+trivial_to_animated_value!(u16);
 trivial_to_animated_value!(u32);
 trivial_to_animated_value!(usize);
 trivial_to_animated_value!(AbsoluteColor);

@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -11,7 +9,6 @@
 
 #include "MediaBlockCacheBase.h"
 #include "mozilla/AbstractThread.h"
-#include "mozilla/Attributes.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/UniquePtr.h"
@@ -78,8 +75,7 @@ class FileBlockCache : public MediaBlockCacheBase {
   // Synchronously reads data from file. May read from file or memory
   // depending on whether written blocks have been flushed to file yet.
   // Not recommended to be called from the main thread, as can cause jank.
-  nsresult Read(int64_t aOffset, uint8_t* aData, int32_t aLength,
-                int32_t* aBytes) override;
+  nsresult Read(int64_t aOffset, uint8_t* aData, int32_t aLength) override;
 
   // Moves a block asynchronously. Can be called on any thread.
   // This defers file I/O to a non-main thread.

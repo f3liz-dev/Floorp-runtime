@@ -4,14 +4,15 @@
 
 package org.mozilla.fenix.home.topsites.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.tooling.preview.PreviewParameter
+import androidx.compose.ui.tooling.preview.PreviewParameterProvider
 import androidx.compose.ui.unit.dp
 import mozilla.components.compose.base.annotation.FlexibleWindowLightDarkPreview
 import mozilla.components.feature.top.sites.TopSite
@@ -22,13 +23,14 @@ import org.mozilla.fenix.home.topsites.TopSiteItem
 import org.mozilla.fenix.home.topsites.getMenuItems
 import org.mozilla.fenix.home.topsites.interactor.TopSiteInteractor
 import org.mozilla.fenix.theme.FirefoxTheme
-import kotlin.collections.forEachIndexed
 
 @Composable
 internal fun Shortcuts(
     topSites: List<TopSite>,
-    topSiteColors: TopSiteColors = TopSiteColors.colors(),
     interactor: TopSiteInteractor,
+    topSiteColors: TopSiteColors = TopSiteColors.colors(),
+    showAddShortcut: Boolean = false,
+    onAddShortcutClicked: () -> Unit,
 ) {
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = TOP_SITES_ITEM_SIZE.dp),
@@ -40,14 +42,15 @@ internal fun Shortcuts(
             item {
                 TopSiteItem(
                     topSite = topSite,
-                    menuItems = getMenuItems(
-                        topSite = topSite,
-                        onOpenInPrivateTabClicked = interactor::onOpenInPrivateTabClicked,
-                        onEditTopSiteClicked = interactor::onEditTopSiteClicked,
-                        onRemoveTopSiteClicked = interactor::onRemoveTopSiteClicked,
-                        onSettingsClicked = interactor::onSettingsClicked,
-                        onSponsorPrivacyClicked = interactor::onSponsorPrivacyClicked,
-                    ),
+                    menuItems =
+                        getMenuItems(
+                            topSite = topSite,
+                            onOpenInPrivateTabClicked = interactor::onOpenInPrivateTabClicked,
+                            onEditTopSiteClicked = interactor::onEditTopSiteClicked,
+                            onRemoveTopSiteClicked = interactor::onRemoveTopSiteClicked,
+                            onSettingsClicked = interactor::onSettingsClicked,
+                            onSponsorPrivacyClicked = interactor::onSponsorPrivacyClicked,
+                        ),
                     position = position,
                     topSiteColors = topSiteColors,
                     onTopSiteClick = { topSite ->
@@ -62,18 +65,33 @@ internal fun Shortcuts(
                 )
             }
         }
+
+        if (showAddShortcut) {
+            item {
+                AddShortcutItem(
+                    topSiteColors = topSiteColors,
+                    onClick = onAddShortcutClicked,
+                )
+            }
+        }
     }
 }
 
 @Composable
 @FlexibleWindowLightDarkPreview
-private fun ShortcutsPreview() {
+private fun ShortcutsPreview(@PreviewParameter(ShortcutsPreviewParameterProvider::class) showAddShortcut: Boolean) {
     FirefoxTheme {
-        Box(modifier = Modifier.background(color = FirefoxTheme.colors.layer1).padding(16.dp)) {
+        Surface {
             Shortcuts(
                 topSites = FakeHomepagePreview.topSites(),
                 interactor = FakeHomepagePreview.topSitesInteractor,
+                showAddShortcut = showAddShortcut,
+                onAddShortcutClicked = {},
             )
         }
     }
+}
+
+private class ShortcutsPreviewParameterProvider : PreviewParameterProvider<Boolean> {
+    override val values: Sequence<Boolean> = sequenceOf(false, true)
 }

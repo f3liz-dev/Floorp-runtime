@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -12,8 +10,6 @@
 #include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/ErrorNames.h"
 #include "mozilla/ModuleUtils.h"
-#include "mozilla/Result.h"
-#include "mozilla/ResultExtensions.h"
 #include "mozilla/Services.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPtr.h"
@@ -50,7 +46,7 @@ namespace mozilla::dom {
 namespace {
 
 static const uint32_t gSupportedRegistrarVersions[] = {
-    SERVICEWORKERREGISTRAR_VERSION, 8, 7, 6, 5, 4, 3, 2};
+    SERVICEWORKERREGISTRAR_VERSION, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2};
 
 static const uint32_t kInvalidGeneration = static_cast<uint32_t>(-1);
 
@@ -628,10 +624,15 @@ nsresult ServiceWorkerRegistrar::ReadData() {
     return NS_ERROR_FAILURE;                        \
   }
 
+    // baseSchemaVersion represents the version where major schema changes
+    // happened and requires a different reading strategy as done below in the
+    // switch statement. Version 9 is the latest major schema version, versions
+    // 10 and 11 are just extensions to version 9 and that's why gets processed
+    // under the same block.
+    auto baseSchemaVersion = version >= 9 ? 9 : version;
+
     nsAutoCString line;
-    switch (version) {
-      case SERVICEWORKERREGISTRAR_VERSION:
-        [[fallthrough]];
+    switch (baseSchemaVersion) {
       case 9: {
         rv = CreatePrincipalInfo(lineInputStream, entry->mRegistration);
         if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -701,7 +702,7 @@ nsresult ServiceWorkerRegistrar::ReadData() {
 
         GET_LINE(entry->mRegistration.navigationPreloadState().headerValue());
 
-        if (version == SERVICEWORKERREGISTRAR_VERSION) {
+        if (version >= 10) {
           nsAutoCString expandoCountStr;
           GET_LINE(expandoCountStr);
           uint32_t expandoCount = expandoCountStr.ToInteger(&rv, 16);
@@ -719,13 +720,54 @@ nsresult ServiceWorkerRegistrar::ReadData() {
             for (const ExpandoHandler& handler : mExpandoHandlers) {
               if (handler.mKey == key) {
                 entry->mExpandos.AppendElement(
-                    ExpandoData{key, value, &handler});
+                    ExpandoData{std::move(key), std::move(value), &handler});
                 break;
               }
             }
           }
         }
 
+        if (version >= 11) {
+          nsAutoCString numberOfAttemptedActivationsStr;
+          GET_LINE(numberOfAttemptedActivationsStr);
+          int64_t numberOfAttemptedActivations =
+              numberOfAttemptedActivationsStr.ToInteger64(&rv);
+          if (NS_WARN_IF(NS_FAILED(rv))) {
+            return rv;
+          }
+          entry->mRegistration.numberOfAttemptedActivations() =
+              numberOfAttemptedActivations;
+          nsAutoCString isRegistrationBrokenStr;
+          GET_LINE(isRegistrationBrokenStr);
+          int64_t isBroken = isRegistrationBrokenStr.ToInteger64(&rv);
+          if (NS_WARN_IF(NS_FAILED(rv))) {
+            return rv;
+          }
+          entry->mRegistration.isBroken() = (isBroken != 0);
+          nsAutoCString cacheAPIIdStr;
+          GET_LINE(cacheAPIIdStr);
+          int64_t cacheAPIId = cacheAPIIdStr.ToInteger64(&rv);
+          if (NS_WARN_IF(NS_FAILED(rv))) {
+            return rv;
+          }
+          entry->mRegistration.cacheAPIId() = cacheAPIId;
+        }
+
+        // if we are on latest version, get service worker type
+        if (version == SERVICEWORKERREGISTRAR_VERSION) {
+          nsAutoCString serviceWorkerTypeStr;
+          GET_LINE(serviceWorkerTypeStr);
+          uint32_t serviceWorkerType =
+              serviceWorkerTypeStr.ToUnsignedInteger(&rv);
+          if (NS_WARN_IF(NS_FAILED(rv))) {
+            return rv;
+          }
+          if (serviceWorkerType > static_cast<uint32_t>(WorkerType::Module)) {
+            return NS_ERROR_INVALID_ARG;
+          }
+          entry->mRegistration.type() =
+              static_cast<WorkerType>(serviceWorkerType);
+        }
         break;
       }
 
@@ -1409,6 +1451,7 @@ nsresult ServiceWorkerRegistrar::WriteData(
     cInfo.attrs().CreateSuffix(suffix);
 
     buffer.Truncate();
+
     buffer.Append(suffix.get());
     buffer.Append('\n');
 
@@ -1466,6 +1509,19 @@ nsresult ServiceWorkerRegistrar::WriteData(
       buffer.Append(expando.mValue);
       buffer.Append('\n');
     }
+
+    buffer.AppendInt(static_cast<int32_t>(
+        data.mRegistration.numberOfAttemptedActivations()));
+    buffer.Append('\n');
+
+    buffer.AppendInt(static_cast<int32_t>(data.mRegistration.isBroken()));
+    buffer.Append('\n');
+
+    buffer.AppendInt(static_cast<int32_t>(data.mRegistration.cacheAPIId()));
+    buffer.Append('\n');
+
+    buffer.AppendInt(static_cast<uint32_t>(data.mRegistration.type()));
+    buffer.Append('\n');
 
     buffer.AppendLiteral(SERVICEWORKERREGISTRAR_TERMINATOR);
     buffer.Append('\n');

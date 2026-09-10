@@ -12,6 +12,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 #include "rtc_base/buffer.h"
 #include "rtc_base/checks.h"
@@ -39,7 +40,7 @@ enum class NetEqDecoder {
 
 class SplitBySamplesTest : public ::testing::TestWithParam<NetEqDecoder> {
  protected:
-  virtual void SetUp() {
+  void SetUp() override {
     decoder_type_ = GetParam();
     switch (decoder_type_) {
       case NetEqDecoder::kDecoderPCMu:
@@ -118,21 +119,28 @@ TEST_P(SplitBySamplesTest, PayloadSizes) {
   // 40 ms -> 20 + 20 ms
   // 50 ms -> 25 + 25 ms
   // 60 ms -> 30 + 30 ms
-  ExpectedSplit expected_splits[] = {{10, 1, {10}},     {20, 1, {20}},
-                                     {30, 1, {30}},     {40, 2, {20, 20}},
-                                     {50, 2, {25, 25}}, {60, 2, {30, 30}}};
+  ExpectedSplit expected_splits[] = {
+      {.payload_size_ms = 10, .num_frames = 1, .frame_sizes = {10}},
+      {.payload_size_ms = 20, .num_frames = 1, .frame_sizes = {20}},
+      {.payload_size_ms = 30, .num_frames = 1, .frame_sizes = {30}},
+      {.payload_size_ms = 40, .num_frames = 2, .frame_sizes = {20, 20}},
+      {.payload_size_ms = 50, .num_frames = 2, .frame_sizes = {25, 25}},
+      {.payload_size_ms = 60, .num_frames = 2, .frame_sizes = {30, 30}}};
 
   for (const auto& expected_split : expected_splits) {
     // The payload values are set to steadily increase (modulo 256), so that the
     // resulting frames can be checked and we can be reasonably certain no
     // sample was missed or repeated.
     const auto generate_payload = [](size_t num_bytes) {
-      Buffer payload(num_bytes);
-      uint8_t value = 0;
-      // Allow wrap-around of value in counter below.
-      for (size_t i = 0; i != payload.size(); ++i, ++value) {
-        payload[i] = value;
-      }
+      Buffer payload = Buffer::CreateWithCapacity(num_bytes);
+      payload.AppendData(num_bytes, [](std::span<uint8_t> payload_view) {
+        uint8_t value = 0;
+        // Allow wrap-around of value in counter below.
+        for (size_t i = 0; i != payload_view.size(); ++i, ++value) {
+          payload_view[i] = value;
+        }
+        return payload_view.size();
+      });
       return payload;
     };
 

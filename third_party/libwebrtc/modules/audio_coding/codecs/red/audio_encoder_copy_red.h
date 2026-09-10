@@ -17,10 +17,12 @@
 #include <list>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 
-#include "api/array_view.h"
+#include "absl/strings/string_view.h"
 #include "api/audio_codecs/audio_encoder.h"
+#include "api/call/bitrate_allocation.h"
 #include "api/field_trials_view.h"
 #include "api/units/time_delta.h"
 #include "rtc_base/buffer.h"
@@ -65,13 +67,10 @@ class AudioEncoderCopyRed final : public AudioEncoder {
 
   bool SetApplication(Application application) override;
   void SetMaxPlaybackRate(int frequency_hz) override;
-  bool EnableAudioNetworkAdaptor(const std::string& config_string,
-                                 RtcEventLog* event_log) override;
+  bool EnableAudioNetworkAdaptor(absl::string_view config) override;
   void DisableAudioNetworkAdaptor() override;
   void OnReceivedUplinkPacketLossFraction(
       float uplink_packet_loss_fraction) override;
-  void OnReceivedUplinkBandwidth(int target_audio_bitrate_bps,
-                                 std::optional<int64_t> bwe_period_ms) override;
   void OnReceivedUplinkAllocation(BitrateAllocationUpdate update) override;
   void OnReceivedRtt(int rtt_ms) override;
   void OnReceivedOverhead(size_t overhead_bytes_per_packet) override;
@@ -80,11 +79,11 @@ class AudioEncoderCopyRed final : public AudioEncoder {
   ANAStats GetANAStats() const override;
   std::optional<std::pair<TimeDelta, TimeDelta>> GetFrameLengthRange()
       const override;
-  ArrayView<std::unique_ptr<AudioEncoder>> ReclaimContainedEncoders() override;
+  std::span<std::unique_ptr<AudioEncoder>> ReclaimContainedEncoders() override;
 
  protected:
   EncodedInfo EncodeImpl(uint32_t rtp_timestamp,
-                         ArrayView<const int16_t> audio,
+                         std::span<const int16_t> audio,
                          Buffer* encoded) override;
 
  private:

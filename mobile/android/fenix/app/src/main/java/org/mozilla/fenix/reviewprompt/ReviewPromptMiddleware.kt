@@ -5,11 +5,14 @@
 package org.mozilla.fenix.reviewprompt
 
 import androidx.annotation.VisibleForTesting
+import kotlinx.coroutines.CancellationException
 import mozilla.components.lib.state.Middleware
-import mozilla.components.lib.state.MiddlewareContext
+import mozilla.components.lib.state.Store
 import mozilla.components.service.nimbus.evalJexlSafe
 import mozilla.components.service.nimbus.messaging.use
+import org.mozilla.experiments.nimbus.NimbusEventStore
 import org.mozilla.experiments.nimbus.NimbusMessagingHelperInterface
+import org.mozilla.fenix.GleanMetrics.CustomReviewPrompt
 import org.mozilla.fenix.components.appstate.AppAction
 import org.mozilla.fenix.components.appstate.AppAction.ReviewPromptAction.CheckIfEligibleForReviewPrompt
 import org.mozilla.fenix.components.appstate.AppAction.ReviewPromptAction.DoNotShowReviewPrompt
@@ -18,50 +21,50 @@ import org.mozilla.fenix.components.appstate.AppAction.ReviewPromptAction.ShowCu
 import org.mozilla.fenix.components.appstate.AppAction.ReviewPromptAction.ShowPlayStorePrompt
 import org.mozilla.fenix.components.appstate.AppState
 import org.mozilla.fenix.messaging.CustomAttributeProvider
-import org.mozilla.fenix.utils.Settings
+
+private const val REVIEW_PROMPT_SHOWN_NIMBUS_EVENT_ID = "review_prompt_shown"
 
 /**
  * [Middleware] evaluating the triggers to show a review prompt.
  *
- * @param settings [Settings] used to check the application shared preferences.
+ * @param continuousOnboardingInProgress If true then the prompt should not be shown.
+ * @param shouldShowCustomPrompt If true enables showing custom prompt UI, if false falls back to Play Store prompt.
+ * @param disableCustomPrompt Update settings to disable the custom prompt UI.
  * @param createJexlHelper Returns a helper for evaluating JEXL expressions.
- * @param timeNowInMillis Returns the current time in milliseconds. See [System.currentTimeMillis].
  * @param buildTriggerMainCriteria Builds a sequence of trigger's main criteria that all need to be true.
- * @param buildTriggerSubCriteria Builds a sequence of trigger's sub-criteria.
- * Only one of them needs to be true (in addition to the main criteria).
+ * @param buildTriggerSubCriteria Builds a sequence of trigger's sub-criteria. Only one of these needs to be true (in
+ *   addition to the main criteria).
+ * @param nimbusEventStore [NimbusEventStore] used to record events evaluated in JEXL expressions.
  */
 class ReviewPromptMiddleware(
-    private val settings: Settings,
+    private val continuousOnboardingInProgress: () -> Boolean = { false },
+    private val shouldShowCustomPrompt: () -> Boolean,
+    private val disableCustomPrompt: () -> Unit,
     private val createJexlHelper: () -> NimbusMessagingHelperInterface,
-    private val timeNowInMillis: () -> Long = System::currentTimeMillis,
     private val buildTriggerMainCriteria: (NimbusMessagingHelperInterface) -> Sequence<Boolean> =
-        TiggerBuilder.mainCriteria(settings, timeNowInMillis),
+        TriggerBuilder::mainCriteria,
     private val buildTriggerSubCriteria: (NimbusMessagingHelperInterface) -> Sequence<Boolean> =
-        TiggerBuilder::subCriteria,
+        TriggerBuilder::subCriteria,
+    private val nimbusEventStore: NimbusEventStore,
 ) : Middleware<AppState, AppAction> {
 
-    private object TiggerBuilder {
-        fun mainCriteria(
-            settings: Settings,
-            timeNowInMillis: () -> Long,
-        ): (NimbusMessagingHelperInterface) -> Sequence<Boolean> = {
-            sequence {
-                yield(settings.customReviewPromptFeatureEnabled)
-                yield(hasNotBeenPromptedLastFourMonths(settings, timeNowInMillis))
-                yield(usedAppOnAtLeastFourOfLastSevenDaysTrigger(it))
+    private object TriggerBuilder {
+        fun mainCriteria(jexlHelper: NimbusMessagingHelperInterface): Sequence<Boolean> {
+            return sequence {
+                yield(hasNotBeenPromptedLastFourMonths(jexlHelper))
+                yield(hasBeenOpenedSeveralTimes(jexlHelper))
             }
         }
 
         fun subCriteria(jexlHelper: NimbusMessagingHelperInterface): Sequence<Boolean> {
             return sequence {
-                yield(createdAtLeastOneBookmark(jexlHelper))
-                yield(isDefaultBrowserTrigger(jexlHelper))
+                yield(isDefaultBrowser(jexlHelper))
             }
         }
     }
 
     override fun invoke(
-        context: MiddlewareContext<AppState, AppAction>,
+        store: Store<AppState, AppAction>,
         next: (AppAction) -> Unit,
         action: AppAction,
     ) {
@@ -71,8 +74,8 @@ class ReviewPromptMiddleware(
         }
 
         when (action) {
-            CheckIfEligibleForReviewPrompt -> handleReviewPromptCheck(context)
-            ReviewPromptShown -> settings.lastReviewPromptTimeInMillis = timeNowInMillis()
+            CheckIfEligibleForReviewPrompt -> handleReviewPromptCheck(store)
+            ReviewPromptShown -> handleReviewPromptShown()
             DoNotShowReviewPrompt -> Unit
             ShowCustomReviewPrompt -> Unit
             ShowPlayStorePrompt -> Unit
@@ -81,59 +84,73 @@ class ReviewPromptMiddleware(
         next(action)
     }
 
-    private fun handleReviewPromptCheck(context: MiddlewareContext<AppState, AppAction>) {
-        if (context.state.reviewPrompt != ReviewPromptState.Unknown) {
+    private fun handleReviewPromptCheck(store: Store<AppState, AppAction>) {
+        // We shouldn't show the review prompt if continuous onboarding is in progress.
+        if (continuousOnboardingInProgress()) {
+            return
+        }
+
+        if (store.state.reviewPrompt != ReviewPromptState.Unknown) {
             // We only want to try to show it once to avoid unnecessary disk reads.
             return
         }
 
-        createJexlHelper().use { jexlHelper ->
-            val allMainCriteriaSatisfied = buildTriggerMainCriteria(jexlHelper).all { it }
-            if (!allMainCriteriaSatisfied) {
-                context.dispatch(DoNotShowReviewPrompt)
-                return@use
+        val shouldShowPrompt: Boolean =
+            createJexlHelper().use { jexlHelper ->
+                val allMainCriteriaSatisfied = buildTriggerMainCriteria(jexlHelper).all { it }
+                if (!allMainCriteriaSatisfied) {
+                    return@use false
+                }
+
+                val atLeastOneOfSubCriteriaSatisfied = buildTriggerSubCriteria(jexlHelper).any { it }
+                return@use atLeastOneOfSubCriteriaSatisfied
             }
 
-            val atLeastOneOfSubCriteriaSatisfied = buildTriggerSubCriteria(jexlHelper).any { it }
-            if (atLeastOneOfSubCriteriaSatisfied) {
-                if (settings.isTelemetryEnabled) {
-                    context.dispatch(ShowCustomReviewPrompt)
-                } else {
-                    context.dispatch(ShowPlayStorePrompt)
-                }
+        if (shouldShowPrompt) {
+            if (shouldShowCustomPrompt()) {
+                store.dispatch(ShowCustomReviewPrompt)
             } else {
-                context.dispatch(DoNotShowReviewPrompt)
+                store.dispatch(ShowPlayStorePrompt)
+            }
+        } else {
+            store.dispatch(DoNotShowReviewPrompt)
+        }
+    }
+
+    private fun handleReviewPromptShown() {
+        nimbusEventStore.recordEventOrThrow(eventId = REVIEW_PROMPT_SHOWN_NIMBUS_EVENT_ID).invokeOnCompletion { cause ->
+            when (cause) {
+                null -> recordResult("success")
+                is CancellationException -> recordResult("cancelled")
+                else -> {
+                    // Failed.
+                    disableCustomPrompt()
+                    recordResult("error")
+                }
             }
         }
     }
-}
 
-private const val APPRX_MONTH_IN_MILLIS: Long = 1000L * 60L * 60L * 24L * 30L
-private const val NUMBER_OF_MONTHS_TO_PASS = 4
-
-/**
- * Checks that the prompt hasn't been shown in the last 4 months
- * to avoid hitting the Play In-App Review API quota.
- */
-fun hasNotBeenPromptedLastFourMonths(settings: Settings, timeNowInMillis: () -> Long): Boolean {
-    if (settings.lastReviewPromptTimeInMillis == 0L) {
-        // Has never been prompted.
-        return true
+    /** Send telemetry for a result of [NimbusEventStore.recordEventOrThrow]. */
+    private fun recordResult(result: String) {
+        CustomReviewPrompt.nimbusEventRecorded.record(CustomReviewPrompt.NimbusEventRecordedExtra(result))
+        CustomReviewPrompt.recordNimbusEventAttempts[result].add(1)
     }
-
-    val approximatelyFourMonthsAgo =
-        timeNowInMillis() - (APPRX_MONTH_IN_MILLIS * NUMBER_OF_MONTHS_TO_PASS)
-    return settings.lastReviewPromptTimeInMillis <= approximatelyFourMonthsAgo
 }
 
 /**
- * Evaluates whether the user has created at least one bookmark.
+ * Checks that the prompt hasn't been shown in the last 4 months to avoid hitting the Play In-App Review API quota.
  *
- * Note: Because Nimbus limits data to 4 calendar years, this will ignore bookmarks created before then.
+ * Implementation note: A month is tracked in Nimbus as a 28-day bucket, so converting it to 4 weeks doesn't change the
+ * semantics. Because of how buckets are advanced, using a monthly bucket can be almost an entire month off, so using
+ * weeks gives us better precision (means we might wait for 4 months and almost a week, instead of almost 5 months).
+ * This is why I opted for 16 weeks instead of 4 months.
+ *
+ * See:
+ * [Nimbus Bucket Advancement & Retention docs](https://experimenter.info/mobile-behavioral-targeting/#bucket-advancement--retention)
  */
-@VisibleForTesting
-internal fun createdAtLeastOneBookmark(jexlHelper: NimbusMessagingHelperInterface): Boolean {
-    return jexlHelper.evalJexlSafe("'bookmark_added'|eventSum('Years', 4) >= 1")
+fun hasNotBeenPromptedLastFourMonths(jexlHelper: NimbusMessagingHelperInterface): Boolean {
+    return jexlHelper.evalJexlSafe("'$REVIEW_PROMPT_SHOWN_NIMBUS_EVENT_ID'|eventLastSeen('Weeks') > 16")
 }
 
 /**
@@ -141,18 +158,15 @@ internal fun createdAtLeastOneBookmark(jexlHelper: NimbusMessagingHelperInterfac
  * [CustomAttributeProvider.getCustomAttributes].
  */
 @VisibleForTesting
-internal fun isDefaultBrowserTrigger(jexlHelper: NimbusMessagingHelperInterface) =
+internal fun isDefaultBrowser(jexlHelper: NimbusMessagingHelperInterface) =
     jexlHelper.evalJexlSafe("is_default_browser")
 
 /**
- * Evaluates whether the user has used the app on at least 4 distinct days
- * within the last 7 days. This does not require consecutive days.
+ * Evaluates whether the user has opened the app at least 5 times.
  *
- * @return true if the user has opened the app on 4 or more days in the last 7, false otherwise
+ * Note: Because Nimbus limits data to 4 calendar years, this will ignore app opens before then.
  */
 @VisibleForTesting
-internal fun usedAppOnAtLeastFourOfLastSevenDaysTrigger(
-    jexlHelper: NimbusMessagingHelperInterface,
-): Boolean {
-    return jexlHelper.evalJexlSafe("'app_opened'|eventCountNonZero('Days', 7) >= 4")
+internal fun hasBeenOpenedSeveralTimes(jexlHelper: NimbusMessagingHelperInterface): Boolean {
+    return jexlHelper.evalJexlSafe("'app_opened'|eventSum('Years', 4, 0) >= 5")
 }

@@ -12,8 +12,6 @@ ChromeUtils.defineESModuleGetters(lazy, {
   ContentTaskUtils: "resource://testing-common/ContentTaskUtils.sys.mjs",
   MockColorPicker: "resource://testing-common/MockColorPicker.sys.mjs",
   MockFilePicker: "resource://testing-common/MockFilePicker.sys.mjs",
-  MockPermissionPrompt:
-    "resource://testing-common/MockPermissionPrompt.sys.mjs",
   MockPromptCollection:
     "resource://testing-common/MockPromptCollection.sys.mjs",
   MockSound: "resource://testing-common/MockSound.sys.mjs",
@@ -251,11 +249,12 @@ export class SpecialPowersChild extends JSWindowActorChild {
         }
         break;
 
-      case "Spawn":
+      case "Spawn": {
         let { task, args, caller, taskId, imports } = message.data;
         return this._spawnTask(task, args, caller, taskId, imports);
+      }
 
-      case "EnsureFocus":
+      case "EnsureFocus": {
         // Ensure that the focus is in this child document. Returns a browsing
         // context of a child frame if a subframe should be focused or undefined
         // otherwise.
@@ -300,6 +299,7 @@ export class SpecialPowersChild extends JSWindowActorChild {
           });
         }
         break;
+      }
 
       case "Assert":
         {
@@ -447,10 +447,6 @@ export class SpecialPowersChild extends JSWindowActorChild {
     return lazy.MockPromptCollection;
   }
 
-  get MockPermissionPrompt() {
-    return lazy.MockPermissionPrompt;
-  }
-
   get MockSound() {
     return lazy.MockSound;
   }
@@ -529,7 +525,7 @@ export class SpecialPowersChild extends JSWindowActorChild {
       throw new Error(
         `Error while executing chrome script '${aUrl}':\n` +
           "The script doesn't exist. Ensure you have registered it in " +
-          "'support-files' in your mochitest.ini."
+          "'support-files' in your mochitest.toml."
       );
     }
 
@@ -736,6 +732,12 @@ export class SpecialPowersChild extends JSWindowActorChild {
     crashDumpFiles.forEach(function (aFilename) {
       self._unexpectedCrashDumpFiles[aFilename] = true;
     });
+    // The value is an Array of strings. Export into the scope of the window to
+    // allow the caller to read its value without wrapper. Callers of
+    // findUnexpectedCrashDumpFiles will automatically get a wrapper; call
+    // SpecialPowers.unwrap() on its return value to access the raw value that
+    // we are returning here (see bug 2007587 for context).
+    crashDumpFiles = Cu.cloneInto(crashDumpFiles, this.contentWindow);
     return crashDumpFiles;
   }
 
@@ -861,6 +863,13 @@ export class SpecialPowersChild extends JSWindowActorChild {
     if (requiresRefresh) {
       await this._promiseEarlyRefresh();
     }
+  }
+
+  async prefEnv(inPrefs) {
+    await this.pushPrefEnv(inPrefs);
+    return {
+      [Symbol.asyncDispose]: () => this.popPrefEnv(),
+    };
   }
 
   /*
@@ -1639,11 +1648,7 @@ export class SpecialPowersChild extends JSWindowActorChild {
   }
 
   async evictAllDocumentViewers() {
-    if (Services.appinfo.sessionHistoryInParent) {
-      await this.sendQuery("EvictAllDocumentViewers");
-    } else {
-      this.browsingContext.top.childSessionHistory.legacySHistory.evictAllDocumentViewers();
-    }
+    await this.sendQuery("EvictAllDocumentViewers");
   }
 
   /**
@@ -2122,25 +2127,6 @@ export class SpecialPowersChild extends JSWindowActorChild {
     return this._pu;
   }
 
-  createDOMWalker(node, showAnonymousContent) {
-    node = lazy.WrapPrivileged.unwrap(node);
-    let walker = Cc["@mozilla.org/inspector/deep-tree-walker;1"].createInstance(
-      Ci.inIDeepTreeWalker
-    );
-    walker.showAnonymousContent = showAnonymousContent;
-    walker.init(node.ownerDocument, NodeFilter.SHOW_ALL);
-    walker.currentNode = node;
-    let contentWindow = this.contentWindow;
-    return {
-      get firstChild() {
-        return lazy.WrapPrivileged.wrap(walker.firstChild(), contentWindow);
-      },
-      get lastChild() {
-        return lazy.WrapPrivileged.wrap(walker.lastChild(), contentWindow);
-      },
-    };
-  }
-
   /**
    * Which commands are available can be determined by checking which commands
    * are registered. See \ref
@@ -2153,12 +2139,19 @@ export class SpecialPowersChild extends JSWindowActorChild {
       case "cmd_fontColor":
       case "cmd_fontFace":
       case "cmd_fontSize":
+      case "cmd_formatBlock":
       case "cmd_highlight":
       case "cmd_insertImageNoUI":
       case "cmd_insertLinkNoUI":
       case "cmd_paragraphState": {
         const params = Cu.createCommandParams();
         params.setStringValue("state_attribute", param);
+        return window.docShell.doCommandWithParams(cmd, params);
+      }
+      case "cmd_insertHTML":
+      case "cmd_insertText": {
+        const params = Cu.createCommandParams();
+        params.setStringValue("state_data", param);
         return window.docShell.doCommandWithParams(cmd, params);
       }
       case "cmd_pasteTransferable": {
@@ -2263,6 +2256,21 @@ export class SpecialPowersChild extends JSWindowActorChild {
       win = win.parent;
     }
     return Promise.resolve();
+  }
+
+  /**
+   * Gets the privileged button inside an <input> element
+   * (clear / reveal / number spinner).
+   *
+   * @param {HTMLInputElement} input
+   * @returns {HTMLButtonElement?} the privileged button, if any.
+   */
+  getInputButton(input) {
+    if (ChromeUtils.getClassName(input) != "HTMLInputElement") {
+      throw new Error("Not an <input> element");
+    }
+    let children = InspectorUtils.getChildrenForNode(input, true, false);
+    return children.find(e => e.localName == "button");
   }
 }
 

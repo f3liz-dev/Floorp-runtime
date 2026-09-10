@@ -1,4 +1,3 @@
-/* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -95,7 +94,7 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(WebGPUParent, override)
 
  public:
-  explicit WebGPUParent();
+  explicit WebGPUParent(const dom::ContentParentId& aContentId);
 
   void PostAdapterRequestDevice(RawId aDeviceId);
   void BufferUnmap(RawId aDeviceId, RawId aBufferId, bool aFlush);
@@ -108,7 +107,8 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
       const ExternalTextureSourceDescriptor& aDesc);
   void QueueSubmit(RawId aQueueId, RawId aDeviceId,
                    Span<const RawId> aCommandBuffers,
-                   Span<const RawId> aTextureIds);
+                   Span<const RawId> aTextureIds,
+                   Span<const RawId> aExternalTextureSourceIds);
   void DeviceCreateSwapChain(RawId aDeviceId, RawId aQueueId,
                              const layers::RGBDescriptor& aDesc,
                              const nsTArray<RawId>& aBufferIds,
@@ -134,7 +134,7 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
   void ActorDestroy(ActorDestroyReason aWhy) override;
 
   struct BufferMapData {
-    ipc::SharedMemoryMapping mShmem;
+    std::shared_ptr<ipc::SharedMemoryMapping> mShmem;
     // True if buffer's usage has MAP_READ or MAP_WRITE set.
     bool mHasMapFlags;
     uint64_t mMappedOffset;
@@ -218,12 +218,14 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
 
   void ReportError(RawId aDeviceId, GPUErrorFilter, const nsCString& message);
 
-  nsTArray<Maybe<ipc::shared_memory::MutableMapping>> mTempMappings;
+  std::vector<std::shared_ptr<ipc::SharedMemoryMapping>> mTempMappings;
 
   /// A map from wgpu buffer ids to data about their shared memory segments.
   /// Includes entries about mappedAtCreation, MAP_READ and MAP_WRITE buffers,
   /// regardless of their state.
   std::unordered_map<RawId, BufferMapData> mSharedMemoryMap;
+
+  const dom::ContentParentId mContentId;
 
  private:
   static void DeviceLostCallback(uint8_t* aUserData, uint8_t aReason,
@@ -231,7 +233,7 @@ class WebGPUParent final : public PWebGPUParent, public SupportsWeakPtr {
 
   virtual ~WebGPUParent();
   void MaintainDevices();
-  void LoseDevice(const RawId aDeviceId, uint8_t aReason,
+  void LoseDevice(const RawId aDeviceId, dom::GPUDeviceLostReason aReason,
                   const nsACString& aMessage);
 
   UniquePtr<ffi::WGPUGlobal> mContext;

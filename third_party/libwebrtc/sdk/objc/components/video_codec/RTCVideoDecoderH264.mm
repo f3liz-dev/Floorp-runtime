@@ -11,7 +11,11 @@
 
 #import "RTCVideoDecoderH264.h"
 
+#import "RTCH264ProfileLevelId.h"
+
 #import <VideoToolbox/VideoToolbox.h>
+
+#include <span>
 
 #import "base/RTCVideoFrame.h"
 #import "base/RTCVideoFrameBuffer.h"
@@ -81,6 +85,30 @@ void decompressionOutputCallback(void *decoderRef,
   OSStatus _error;
 }
 
++ (NSArray<RTC_OBJC_TYPE(RTCVideoCodecInfo) *> *)supportedCodecs {
+  NSDictionary<NSString *, NSString *> *constrainedHighParams = @{
+    @"profile-level-id" : kRTCMaxSupportedH264ProfileLevelConstrainedHigh,
+    @"level-asymmetry-allowed" : @"1",
+    @"packetization-mode" : @"1",
+  };
+  RTC_OBJC_TYPE(RTCVideoCodecInfo) *constrainedHighInfo =
+      [[RTC_OBJC_TYPE(RTCVideoCodecInfo) alloc]
+          initWithName:kRTCVideoCodecH264Name
+            parameters:constrainedHighParams];
+
+  NSDictionary<NSString *, NSString *> *constrainedBaselineParams = @{
+    @"profile-level-id" : kRTCMaxSupportedH264ProfileLevelConstrainedBaseline,
+    @"level-asymmetry-allowed" : @"1",
+    @"packetization-mode" : @"1",
+  };
+  RTC_OBJC_TYPE(RTCVideoCodecInfo) *constrainedBaselineInfo =
+      [[RTC_OBJC_TYPE(RTCVideoCodecInfo) alloc]
+          initWithName:kRTCVideoCodecH264Name
+            parameters:constrainedBaselineParams];
+
+  return @[ constrainedHighInfo, constrainedBaselineInfo ];
+}
+
 - (instancetype)init {
   self = [super init];
   if (self) {
@@ -114,8 +142,9 @@ void decompressionOutputCallback(void *decoderRef,
   }
 
   webrtc::ScopedCFTypeRef<CMVideoFormatDescriptionRef> inputFormat =
-      webrtc::ScopedCF(webrtc::CreateVideoFormatDescription(
-          (uint8_t *)inputImage.buffer.bytes, inputImage.buffer.length));
+      webrtc::ScopedCF(
+          webrtc::CreateVideoFormatDescription(std::span<const uint8_t>(
+              (uint8_t *)inputImage.buffer.bytes, inputImage.buffer.length)));
   if (inputFormat) {
     // Check if the video format has changed, and reinitialize decoder if
     // needed.
@@ -138,8 +167,8 @@ void decompressionOutputCallback(void *decoderRef,
   }
   CMSampleBufferRef sampleBuffer = nullptr;
   if (!webrtc::H264AnnexBBufferToCMSampleBuffer(
-          (uint8_t *)inputImage.buffer.bytes,
-          inputImage.buffer.length,
+          std::span<const uint8_t>((uint8_t *)inputImage.buffer.bytes,
+                                   inputImage.buffer.length),
           _videoFormat,
           &sampleBuffer,
           _memoryPool)) {

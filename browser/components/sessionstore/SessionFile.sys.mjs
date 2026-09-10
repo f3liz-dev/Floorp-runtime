@@ -15,13 +15,16 @@
  * another attempts to copy that file.
  */
 
-const lazy = {};
+import { XPCOMUtils } from "resource://gre/modules/XPCOMUtils.sys.mjs";
 
-ChromeUtils.defineESModuleGetters(lazy, {
-  sessionStoreLogger: "resource:///modules/sessionstore/SessionLogger.sys.mjs",
-  RunState: "resource:///modules/sessionstore/RunState.sys.mjs",
-  SessionStore: "resource:///modules/sessionstore/SessionStore.sys.mjs",
-  SessionWriter: "resource:///modules/sessionstore/SessionWriter.sys.mjs",
+const lazy = XPCOMUtils.declareLazy({
+  sessionStoreLogger:
+    "moz-src:///browser/components/sessionstore/SessionLogger.sys.mjs",
+  RunState: "moz-src:///browser/components/sessionstore/RunState.sys.mjs",
+  SessionStore:
+    "moz-src:///browser/components/sessionstore/SessionStore.sys.mjs",
+  SessionWriter:
+    "moz-src:///browser/components/sessionstore/SessionWriter.sys.mjs",
 });
 
 const PREF_UPGRADE_BACKUP = "browser.sessionstore.upgradeBackup.latestBuildID";
@@ -40,6 +43,7 @@ export var SessionFile = {
   },
   /**
    * Write the contents of the session file, asynchronously.
+   *
    * @param aData - May get changed on shutdown.
    */
   write(aData) {
@@ -289,6 +293,22 @@ var SessionFileInternal = {
           lazy.sessionStoreLogger.debug(
             `Can't read session file which doesn't exist: ${key}`
           );
+        } else if (
+          DOMException.isInstance(ex) &&
+          ex.name == "NotReadableError"
+        ) {
+          // The file might incorrectly jsonlz4 encoded
+          // We'll count it as "corrupted".
+          lazy.sessionStoreLogger.error(
+            `NotReadableError when reading session file: ${key}`,
+            ex
+          );
+          corrupted = true;
+          Glean.sessionRestore.backupCanBeLoadedSessionFile.record({
+            can_load: "false",
+            path_key: key,
+            loadfail_reason: ` ${ex.name}: Could not read session file`,
+          });
         } else if (
           DOMException.isInstance(ex) &&
           ex.name == "NotAllowedError"

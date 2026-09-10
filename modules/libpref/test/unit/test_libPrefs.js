@@ -75,6 +75,9 @@ add_task(async function run_test() {
     ps.unlockPref(null);
   }, Cr.NS_ERROR_INVALID_ARG);
   do_check_throws(function () {
+    ps.clearUserBranch(null);
+  }, Cr.NS_ERROR_INVALID_ARG);
+  do_check_throws(function () {
     ps.deleteBranch(null);
   }, Cr.NS_ERROR_INVALID_ARG);
   do_check_throws(function () {
@@ -145,6 +148,19 @@ add_task(async function run_test() {
   Assert.ok(!ps.prefHasUserValue("UserPref.existing.int"));
   ps.clearUserPref("UserPref.existing.char");
   Assert.ok(!ps.prefHasUserValue("UserPref.existing.char"));
+
+  // clearUserBranch should remove all the prefs on the branch, but not other
+  // branches
+  ps.setBoolPref("UserPref.existing.bool", true);
+  ps.setIntPref("UserPref.existing.int", 23);
+  ps.setCharPref("UserPref.existing.char", "hey");
+  ps.setBoolPref("UserOtherPref.existing.bool", true);
+
+  ps.clearUserBranch("UserPref.");
+  Assert.ok(!ps.prefHasUserValue("UserPref.existing.bool"));
+  Assert.ok(!ps.prefHasUserValue("UserPref.existing.int"));
+  Assert.ok(!ps.prefHasUserValue("UserPref.existing.char"));
+  Assert.equal(ps.getBoolPref("UserOtherPref.existing.bool"), true);
 
   //* *************************************************************************//
   // Large value test
@@ -570,32 +586,33 @@ add_task(function test_deleteBranch_observers() {
   );
 
   // Verify the preferences were actually deleted
-  Assert.throws(
-    () => ps.getBoolPref("DeleteTest.branch1.bool"),
-    /NS_ERROR_UNEXPECTED/,
-    "Deleted boolean pref should throw when accessed"
+  assertPrefNotExists(
+    "DeleteTest.branch1.bool",
+    "Deleted boolean pref should throw when accessed",
+    "getBoolPref"
   );
-  Assert.throws(
-    () => ps.getIntPref("DeleteTest.branch1.int"),
-    /NS_ERROR_UNEXPECTED/,
+  assertPrefNotExists(
+    "DeleteTest.branch1.int",
     "Deleted integer pref should throw when accessed"
   );
-  Assert.throws(
-    () => ps.getCharPref("DeleteTest.branch1.char"),
-    /NS_ERROR_UNEXPECTED/,
-    "Deleted char pref should throw when accessed"
+  assertPrefNotExists(
+    "DeleteTest.branch1.char",
+    "Deleted char pref should throw when accessed",
+    "getCharPref"
   );
 
   // Verify other preferences were not affected
-  Assert.equal(
-    ps.getBoolPref("DeleteTest.branch2.bool"),
+  assertPrefExists(
+    "DeleteTest.branch2.bool",
     false,
-    "Unrelated preferences should not be affected"
+    "Unrelated preferences should not be affected",
+    "getBoolPref"
   );
-  Assert.equal(
-    ps.getCharPref("DeleteTest.other"),
+  assertPrefExists(
+    "DeleteTest.other",
     "other",
-    "Unrelated preferences should not be affected"
+    "Unrelated preferences should not be affected",
+    "getCharPref"
   );
 
   // Clean up observers
@@ -684,20 +701,19 @@ add_task(function test_deleteBranch_user_and_default_values() {
   );
 
   // Verify all preferences are actually deleted
-  Assert.throws(
-    () => ps.getBoolPref("MixedTest.pref1"),
-    /NS_ERROR_UNEXPECTED/,
+  assertPrefNotExists(
+    "MixedTest.pref1",
+    "Pref with default value should be completely deleted",
+    "getBoolPref"
+  );
+  assertPrefNotExists(
+    "MixedTest.pref2",
     "Pref with default value should be completely deleted"
   );
-  Assert.throws(
-    () => ps.getIntPref("MixedTest.pref2"),
-    /NS_ERROR_UNEXPECTED/,
-    "Pref with default value should be completely deleted"
-  );
-  Assert.throws(
-    () => ps.getCharPref("MixedTest.pref3"),
-    /NS_ERROR_UNEXPECTED/,
-    "User-only pref should be deleted"
+  assertPrefNotExists(
+    "MixedTest.pref3",
+    "User-only pref should be deleted",
+    "getCharPref"
   );
 
   ps.removeObserver("MixedTest.", observer);
@@ -742,4 +758,211 @@ add_task(function test_deleteBranch_weak_observers() {
   );
 
   ps.removeObserver("WeakTest.", observer);
+});
+
+/**
+ * Helper function to assert that a preference exists with the expected value.
+ *
+ * @param {string} prefName - The preference name
+ * @param {*} expectedValue - The expected value
+ * @param {string} message - The assertion message
+ * @param {Function} [getter=getIntPref] - The preference getter function (e.g., getIntPref, getBoolPref, getCharPref)
+ */
+function assertPrefExists(
+  prefName,
+  expectedValue,
+  message,
+  getter = "getIntPref"
+) {
+  Assert.equal(Services.prefs[getter](prefName), expectedValue, message);
+}
+
+/**
+ * Helper function to assert that a preference does not exist.
+ *
+ * @param {string} prefName - The preference name
+ * @param {string} message - The assertion message
+ * @param {Function} [getter=getIntPref] - The preference getter function (e.g., getIntPref, getBoolPref, getCharPref)
+ */
+function assertPrefNotExists(prefName, message, getter = "getIntPref") {
+  Assert.throws(
+    () => Services.prefs[getter](prefName),
+    /NS_ERROR_UNEXPECTED/,
+    message
+  );
+}
+
+/**
+ * Tests specific edge cases for deleteBranch behavior with consecutive dots
+ */
+add_task(function test_deleteBranch_edge_cases() {
+  const ps = Services.prefs;
+
+  // Test case 1: deleteBranch("foo") deletes all preferences
+  ps.setIntPref("EdgeTest.foo", 1);
+  ps.setIntPref("EdgeTest.foo.", 2);
+  ps.setIntPref("EdgeTest.foo.bar", 3);
+  ps.setIntPref("EdgeTest.foo..", 4);
+  ps.setIntPref("EdgeTest.foo..baz", 5);
+
+  ps.deleteBranch("EdgeTest.foo");
+
+  assertPrefNotExists(
+    "EdgeTest.foo",
+    "EdgeTest.foo should be deleted by deleteBranch('EdgeTest.foo')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo.",
+    "EdgeTest.foo. should be deleted by deleteBranch('EdgeTest.foo')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo.bar",
+    "EdgeTest.foo.bar should be deleted by deleteBranch('EdgeTest.foo')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo..",
+    "EdgeTest.foo.. should be deleted by deleteBranch('EdgeTest.foo')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo..baz",
+    "EdgeTest.foo..baz should be deleted by deleteBranch('EdgeTest.foo')"
+  );
+
+  // Test case 2: deleteBranch("foo.") also deletes all preferences
+  ps.setIntPref("EdgeTest.foo", 1);
+  ps.setIntPref("EdgeTest.foo.", 2);
+  ps.setIntPref("EdgeTest.foo.bar", 3);
+  ps.setIntPref("EdgeTest.foo..", 4);
+  ps.setIntPref("EdgeTest.foo..baz", 5);
+
+  ps.deleteBranch("EdgeTest.foo.");
+
+  assertPrefNotExists(
+    "EdgeTest.foo",
+    "EdgeTest.foo should be deleted by deleteBranch('EdgeTest.foo.')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo.",
+    "EdgeTest.foo. should be deleted by deleteBranch('EdgeTest.foo.')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo.bar",
+    "EdgeTest.foo.bar should be deleted by deleteBranch('EdgeTest.foo.')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo..",
+    "EdgeTest.foo.. should be deleted by deleteBranch('EdgeTest.foo.')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo..baz",
+    "EdgeTest.foo..baz should be deleted by deleteBranch('EdgeTest.foo.')"
+  );
+
+  // Test case 3: deleteBranch("foo..") deletes only "foo.", "foo..", and "foo..baz"
+  ps.setIntPref("EdgeTest.foo", 1);
+  ps.setIntPref("EdgeTest.foo.", 2);
+  ps.setIntPref("EdgeTest.foo.bar", 3);
+  ps.setIntPref("EdgeTest.foo..", 4);
+  ps.setIntPref("EdgeTest.foo..baz", 5);
+
+  ps.deleteBranch("EdgeTest.foo..");
+
+  assertPrefExists(
+    "EdgeTest.foo",
+    1,
+    "EdgeTest.foo should not be deleted by deleteBranch('EdgeTest.foo..')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo.",
+    "EdgeTest.foo. should be deleted by deleteBranch('EdgeTest.foo..')"
+  );
+  assertPrefExists(
+    "EdgeTest.foo.bar",
+    3,
+    "EdgeTest.foo.bar should not be deleted by deleteBranch('EdgeTest.foo..')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo..",
+    "EdgeTest.foo.. should be deleted by deleteBranch('EdgeTest.foo..')"
+  );
+  assertPrefNotExists(
+    "EdgeTest.foo..baz",
+    "EdgeTest.foo..baz should be deleted by deleteBranch('EdgeTest.foo..')"
+  );
+
+  // Clean up
+  ps.deleteBranch("EdgeTest");
+});
+
+/**
+ * Tests the reported bug where creating a preference value, clearing it,
+ * then creating it again as a different type raises an exception.
+ */
+add_task(function test_pref_type_change_after_clear() {
+  const ps = Services.prefs;
+  const prefName = "TypeChangeTest.pref";
+
+  // Test 1: Boolean -> Integer
+  ps.setBoolPref(prefName, true);
+  Assert.equal(ps.getBoolPref(prefName), true);
+  Assert.equal(ps.getPrefType(prefName), PREF_BOOL);
+
+  ps.clearUserPref(prefName);
+  Assert.ok(!ps.prefHasUserValue(prefName));
+
+  // This should work without throwing an exception
+  ps.setIntPref(prefName, 42);
+  Assert.equal(ps.getIntPref(prefName), 42);
+  Assert.equal(ps.getPrefType(prefName), PREF_INT);
+
+  // Test 2: Integer -> String
+  ps.clearUserPref(prefName);
+  Assert.ok(!ps.prefHasUserValue(prefName));
+
+  ps.setCharPref(prefName, "test_string");
+  Assert.equal(ps.getCharPref(prefName), "test_string");
+  Assert.equal(ps.getPrefType(prefName), PREF_STRING);
+
+  // Test 3: String -> Boolean
+  ps.clearUserPref(prefName);
+  Assert.ok(!ps.prefHasUserValue(prefName));
+
+  ps.setBoolPref(prefName, false);
+  Assert.equal(ps.getBoolPref(prefName), false);
+  Assert.equal(ps.getPrefType(prefName), PREF_BOOL);
+
+  // Test 4: Test all combinations with prefBranch interface
+  const pb = ps.getBranch("TypeChangeTest.");
+  const branchPrefName = "branch_pref";
+
+  // Boolean -> Integer via branch
+  pb.setBoolPref(branchPrefName, true);
+  Assert.equal(pb.getBoolPref(branchPrefName), true);
+  Assert.equal(pb.getPrefType(branchPrefName), PREF_BOOL);
+
+  pb.clearUserPref(branchPrefName);
+  Assert.ok(!pb.prefHasUserValue(branchPrefName));
+
+  pb.setIntPref(branchPrefName, 123);
+  Assert.equal(pb.getIntPref(branchPrefName), 123);
+  Assert.equal(pb.getPrefType(branchPrefName), PREF_INT);
+
+  // Integer -> String via branch
+  pb.clearUserPref(branchPrefName);
+  Assert.ok(!pb.prefHasUserValue(branchPrefName));
+
+  pb.setCharPref(branchPrefName, "branch_test");
+  Assert.equal(pb.getCharPref(branchPrefName), "branch_test");
+  Assert.equal(pb.getPrefType(branchPrefName), PREF_STRING);
+
+  // String -> Boolean via branch
+  pb.clearUserPref(branchPrefName);
+  Assert.ok(!pb.prefHasUserValue(branchPrefName));
+
+  pb.setBoolPref(branchPrefName, true);
+  Assert.equal(pb.getBoolPref(branchPrefName), true);
+  Assert.equal(pb.getPrefType(branchPrefName), PREF_BOOL);
+
+  // Clean up
+  ps.deleteBranch("TypeChangeTest");
 });

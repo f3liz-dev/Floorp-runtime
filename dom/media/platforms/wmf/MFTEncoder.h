@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim:set ts=2 sw=2 sts=2 et cindent: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,8 +8,6 @@
 #include <wrl.h>
 
 #include <deque>
-#include <functional>
-#include <queue>
 
 #include "EncoderConfig.h"
 #include "WMF.h"
@@ -21,6 +17,8 @@
 #include "mozilla/MozPromise.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/ResultVariant.h"
+#include "mozilla/StaticMutex.h"
+#include "mozilla/StaticPtr.h"
 #include "nsDeque.h"
 #include "nsISupportsImpl.h"
 #include "nsTArray.h"
@@ -62,8 +60,9 @@ class MFTEncoder final {
   HRESULT SetMediaTypes(IMFMediaType* aInputType, IMFMediaType* aOutputType);
   HRESULT SetModes(const EncoderConfig& aConfig);
   HRESULT SetBitrate(UINT32 aBitsPerSec);
+  bool IsHardwareAccelerated() const;
 
-  RefPtr<EncodePromise> Encode(InputSample&& aInput);
+  RefPtr<EncodePromise> Encode(nsTArray<InputSample>&& aInputs);
   RefPtr<EncodePromise> Drain();
 
   HRESULT CreateInputSample(RefPtr<IMFSample>* aSample, size_t aSize);
@@ -100,33 +99,38 @@ class MFTEncoder final {
 
   ~MFTEncoder() { Destroy(); };
 
-  static nsTArray<Info>& Infos();
+  static inline StaticMutex sInfoMutex;
+  static inline StaticAutoPtr<nsTArray<Info>> sInfos MOZ_GUARDED_BY(sInfoMutex);
+
+  static nsTArray<Info>* Infos() MOZ_REQUIRES(sInfoMutex);
   static nsTArray<Info> Enumerate();
   static Maybe<Info> GetInfo(const GUID& aSubtype);
 
   // APIs for synchronous processing model.
-  Result<EncodedData, MediaResult> EncodeSync(InputSample&& aInput);
+  Result<EncodedData, MediaResult> EncodeSync(nsTArray<InputSample>&& aInputs);
   Result<EncodedData, MediaResult> DrainSync();
   Result<EncodedData, HRESULT> PullOutputs();
 
   // APIs for asynchronous processing model for regular usage.
-  Result<EncodedData, MediaResult> EncodeAsync(InputSample&& aInput);
+  Result<EncodedData, MediaResult> EncodeAsync(nsTArray<InputSample>&& aInputs);
   Result<EncodedData, MediaResult> DrainAsync();
 
   MOZ_DEFINE_ENUM_CLASS_WITH_TOSTRING_AT_CLASS_SCOPE(
       ProcessedResult, (AllAvailableInputsProcessed, InputProcessed,
-                        OutputYielded, DrainComplete));
+                        OutputHeaderYielded, OutputDataYielded, DrainComplete));
   using ProcessedResults = EnumSet<ProcessedResult>;
   Result<ProcessedResults, HRESULT> ProcessPendingEvents();
   Result<MediaEventType, HRESULT> GetPendingEvent();
 
   // For realtime usage in asynchronous processing model only.
-  RefPtr<EncodePromise> EncodeWithAsyncCallback(InputSample&& aInput);
+  RefPtr<EncodePromise> EncodeWithAsyncCallback(
+      nsTArray<InputSample>&& aInputs);
   RefPtr<EncodePromise> DrainWithAsyncCallback();
   RefPtr<EncodePromise> PrepareForDrain();
   RefPtr<EncodePromise> StartDraining();
+  bool MaybeArmTimer();
   void EventHandler(MediaEventType aEventType, HRESULT aStatus);
-  void MaybeResolveOrRejectEncodePromise();
+  void MaybeResolveOrRejectEncodePromise(bool aResolveAll = false);
   void MaybeResolveOrRejectDrainPromise();
   void MaybeResolveOrRejectPreDrainPromise();
   void MaybeResolveOrRejectAnyPendingPromise(
@@ -137,6 +141,7 @@ class MFTEncoder final {
   Result<ProcessedResult, HRESULT> ProcessInput();
   Result<ProcessedResult, HRESULT> ProcessOutput();
   Result<ProcessedResult, HRESULT> ProcessDrainComplete();
+  Result<ProcessedResult, HRESULT> ProcessPendingInputs();
 
   // Utilities for both processing models.
   class OutputResult {
@@ -214,8 +219,8 @@ class MFTEncoder final {
 
   // The following members are used only for realtime asynchronous processing
   // model.
+  std::deque<RefPtr<EncodePromise::Private>> mEncodePromises;
   MediaResult mPendingError;
-  MozPromiseHolder<EncodePromise> mEncodePromise;
   MozPromiseHolder<EncodePromise> mDrainPromise;
   MozPromiseHolder<EncodePromise> mPreDrainPromise;
   // Use to resolve the encode promise if mAsyncEventSource doesn't response in

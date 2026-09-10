@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -134,11 +132,11 @@ void SharedWorkerManager::AddActor(SharedWorkerParent* aParent) {
   mActors.AppendElement(aParent);
 
   if (mLockCount) {
-    Unused << aParent->SendNotifyLock(true);
+    (void)aParent->SendNotifyLock(true);
   }
 
   if (mWebTransportCount) {
-    Unused << aParent->SendNotifyWebTransport(true);
+    (void)aParent->SendNotifyWebTransport(true);
   }
 
   // NB: We don't update our Suspended/Frozen state here, yet. The aParent is
@@ -238,13 +236,31 @@ void SharedWorkerManager::UpdateFrozen() {
   }
 }
 
+void SharedWorkerManager::SetLocaleOverride(
+    const nsACString& aLanguageOverride, const nsTArray<nsString>& aLanguages) {
+  ::mozilla::ipc::AssertIsOnBackgroundThread();
+
+  if (mRemoteWorkerController) {
+    mRemoteWorkerController->SetLocaleOverride(aLanguageOverride, aLanguages);
+  }
+}
+
+void SharedWorkerManager::UpdateTimezoneOverride(
+    const nsAString& aTimezoneOverride) {
+  ::mozilla::ipc::AssertIsOnBackgroundThread();
+
+  if (mRemoteWorkerController) {
+    mRemoteWorkerController->UpdateTimezoneOverride(aTimezoneOverride);
+  }
+}
+
 bool SharedWorkerManager::IsSecureContext() const { return mIsSecureContext; }
 
 void SharedWorkerManager::CreationFailed() {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
 
   for (SharedWorkerParent* actor : mActors) {
-    Unused << actor->SendError(NS_ERROR_FAILURE);
+    (void)actor->SendError(NS_ERROR_FAILURE);
   }
 }
 
@@ -257,7 +273,7 @@ void SharedWorkerManager::ErrorReceived(const ErrorValue& aValue) {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
 
   for (SharedWorkerParent* actor : mActors) {
-    Unused << actor->SendError(aValue);
+    (void)actor->SendError(aValue);
   }
 }
 
@@ -272,7 +288,7 @@ void SharedWorkerManager::LockNotified(bool aCreated) {
   // 2. Lost all locks
   if ((aCreated && mLockCount == 1) || !mLockCount) {
     for (SharedWorkerParent* actor : mActors) {
-      Unused << actor->SendNotifyLock(aCreated);
+      (void)actor->SendNotifyLock(aCreated);
     }
   }
 };
@@ -288,7 +304,7 @@ void SharedWorkerManager::WebTransportNotified(bool aCreated) {
   // 2. The last WebTransport goes away
   if ((aCreated && mWebTransportCount == 1) || mWebTransportCount == 0) {
     for (SharedWorkerParent* actor : mActors) {
-      Unused << actor->SendNotifyWebTransport(aCreated);
+      (void)actor->SendNotifyWebTransport(aCreated);
     }
   }
 };
@@ -297,7 +313,7 @@ void SharedWorkerManager::Terminated() {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
 
   for (SharedWorkerParent* actor : mActors) {
-    Unused << actor->SendTerminate();
+    (void)actor->SendTerminate();
   }
 }
 

@@ -11,11 +11,11 @@
 #ifndef RTC_BASE_TASK_UTILS_REPEATING_TASK_H_
 #define RTC_BASE_TASK_UTILS_REPEATING_TASK_H_
 
-#include <memory>
-#include <type_traits>
 #include <utility>
 
 #include "absl/functional/any_invocable.h"
+#include "api/location.h"
+#include "api/scoped_refptr.h"
 #include "api/task_queue/pending_task_safety_flag.h"
 #include "api/task_queue/task_queue_base.h"
 #include "api/units/time_delta.h"
@@ -57,7 +57,7 @@ class RepeatingTaskHandle {
       absl::AnyInvocable<TimeDelta()> closure,
       TaskQueueBase::DelayPrecision precision =
           TaskQueueBase::DelayPrecision::kLow,
-      Clock* clock = Clock::GetRealTimeClockRaw(),
+      Clock* clock = Clock::GetRealTimeClockOnlyUseForRelativeTime(),
       const Location& location = Location::Current());
 
   // DelayedStart is equivalent to Start except that the first invocation of the
@@ -68,7 +68,7 @@ class RepeatingTaskHandle {
       absl::AnyInvocable<TimeDelta()> closure,
       TaskQueueBase::DelayPrecision precision =
           TaskQueueBase::DelayPrecision::kLow,
-      Clock* clock = Clock::GetRealTimeClockRaw(),
+      Clock* clock = Clock::GetRealTimeClockOnlyUseForRelativeTime(),
       const Location& location = Location::Current());
 
   // Stops future invocations of the repeating task closure. Can only be called

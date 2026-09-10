@@ -1,6 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*-
- * vim: set ts=8 sts=2 et sw=2 tw=80:
- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -8,7 +5,6 @@
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/IntegerTypeTraits.h"
 
-#include <iterator>
 #include <type_traits>
 
 #include "jit/ABIFunctions.h"
@@ -20,7 +16,6 @@
 #include "jit/ValueNumbering.h"
 #include "jit/VMFunctions.h"
 #include "js/Value.h"
-
 #include "jsapi-tests/tests.h"
 #include "jsapi-tests/testsJit.h"
 
@@ -486,7 +481,7 @@ IntTypeOf_t<Type> ConvertToInt(Type v) {
 // Check if the raw values of arguments are equal to the numbers given in the
 // std::integer_sequence given as the first argument.
 template <typename... Args, typename Int, Int... Val>
-NO_ARGS_CHECKS bool CheckArgsEqual(JSAPIRuntimeTest* instance, int lineno,
+NO_ARGS_CHECKS bool CheckArgsEqual(jsapitest::RuntimeTest* instance, int lineno,
                                    std::integer_sequence<Int, Val...>,
                                    Args... args) {
   return (instance->checkEqual(ConvertToInt<Args>(args), IntTypeOf_t<Args>(Val),
@@ -530,7 +525,7 @@ struct DefineCheckArgs;
 
 template <typename Res, typename... Args>
 struct DefineCheckArgs<Res (*)(Args...)> {
-  void set_instance(JSAPIRuntimeTest* instance, bool* reportTo) {
+  void set_instance(jsapitest::RuntimeTest* instance, bool* reportTo) {
     MOZ_ASSERT((!instance_) != (!instance));
     instance_ = instance;
     MOZ_ASSERT((!reportTo_) != (!reportTo));
@@ -664,17 +659,17 @@ struct DefineCheckArgs<Res (*)(Args...)> {
   // As we are checking specific function signature, we cannot add extra
   // parameters, thus we rely on static variables to pass the value of the
   // instance that we are testing.
-  static JSAPIRuntimeTest* instance_;
+  static jsapitest::RuntimeTest* instance_;
   static bool* reportTo_;
 };
 
 template <typename Res, typename... Args>
-JSAPIRuntimeTest* DefineCheckArgs<Res (*)(Args...)>::instance_ = nullptr;
+jsapitest::RuntimeTest* DefineCheckArgs<Res (*)(Args...)>::instance_ = nullptr;
 
 template <typename Res, typename... Args>
 bool* DefineCheckArgs<Res (*)(Args...)>::reportTo_ = nullptr;
 
-// This is a child class of JSAPIRuntimeTest, which is used behind the scenes to
+// This is a child class of RuntimeTest, which is used behind the scenes to
 // register test cases in jsapi-tests. Each instance of it creates a new test
 // case. This class is specialized with the type of the function to check, and
 // initialized with the name of the function with the given signature.
@@ -683,11 +678,12 @@ bool* DefineCheckArgs<Res (*)(Args...)>::reportTo_ = nullptr;
 // signature and checks that the JIT interpretation of arguments location
 // matches the C++ interpretation. If it differs, the test case will fail.
 template <typename Sig>
-class JitABICall final : public JSAPIRuntimeTest, public DefineCheckArgs<Sig> {
+class JitABICall final : public jsapitest::RuntimeTest,
+                         public DefineCheckArgs<Sig> {
  public:
   explicit JitABICall(const char* name) : name_(name) { reuseGlobal = true; }
   virtual const char* name() override { return name_; }
-  virtual bool run(JS::HandleObject) override {
+  virtual bool run() override {
     bool result = true;
     this->set_instance(this, &result);
 
@@ -713,7 +709,7 @@ class JitABICall final : public JSAPIRuntimeTest, public DefineCheckArgs<Sig> {
     Register base = r8;
     regs.take(base);
 #elif defined(JS_CODEGEN_MIPS64)
-    Register base = t1;
+    Register base = t5;
     regs.take(base);
 #elif defined(JS_CODEGEN_LOONG64)
     Register base = t0;

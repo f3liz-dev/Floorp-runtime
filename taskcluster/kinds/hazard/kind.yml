@@ -15,12 +15,13 @@ transforms:
     - gecko_taskgraph.transforms.task:transforms
 
 task-defaults:
+    run-on-repo-type: [hg]
     attributes:
         retrigger: true
     treeherder:
         kind: build
         tier: 1
-    worker-type: b-linux-gcp
+    worker-type: b-linux
     worker:
         max-run-time: 10800
         docker-image: {in-tree: debian12-amd64-build}
@@ -36,6 +37,7 @@ tasks:
             platform: linux64/debug
             symbol: SM(H)
         run:
+            clone-with: hg
             using: hazard
             command: >
                 cd /builds/worker/checkouts/gecko/taskcluster/scripts/builder
@@ -64,6 +66,7 @@ tasks:
             platform: linux64/debug
             symbol: H
         run:
+            clone-with: hg
             using: hazard
             command: >
                 cd /builds/worker/checkouts/gecko/taskcluster/scripts/builder

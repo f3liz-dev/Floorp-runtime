@@ -2,26 +2,15 @@ const { TabGroupTestUtils } = ChromeUtils.importESModule(
   "resource://testing-common/TabGroupTestUtils.sys.mjs"
 );
 
-function promiseTabLoadEvent(tab, url) {
-  info("Wait tab event: load");
-
-  function handle(loadedUrl) {
-    if (loadedUrl === "about:blank" || (url && loadedUrl !== url)) {
-      info(`Skipping spurious load event for ${loadedUrl}`);
-      return false;
-    }
-
-    info("Tab event received: load");
-    return true;
-  }
-
-  let loaded = BrowserTestUtils.browserLoaded(tab.linkedBrowser, false, handle);
-
-  if (url) {
-    BrowserTestUtils.startLoadingURIString(tab.linkedBrowser, url);
-  }
-
-  return loaded;
+async function expectFocusAfterKey(expectedActiveElement, keyName, keyOptions) {
+  let focused = BrowserTestUtils.waitForEvent(expectedActiveElement, "focus");
+  EventUtils.synthesizeKey(keyName, keyOptions);
+  await focused;
+  Assert.equal(
+    document.activeElement,
+    expectedActiveElement,
+    `After ${keyName}${keyOptions?.shiftKey ? " (Shift)" : ""}, the expected element has focus`
+  );
 }
 
 function updateTabContextMenu(tab) {
@@ -38,6 +27,32 @@ function updateTabContextMenu(tab) {
     "TabContextMenu context is the expected tab"
   );
   menu.hidePopup();
+}
+
+// Open the tab context menu for `tab` and leave it open, resolving to the
+// #tabContextMenu element once shown. Pair with closeTabContextMenu().
+async function openTabContextMenu(tab = gBrowser.selectedTab) {
+  const tabContextMenu = document.getElementById("tabContextMenu");
+  const contextMenuShown = BrowserTestUtils.waitForPopupEvent(
+    tabContextMenu,
+    "shown"
+  );
+  tab.scrollIntoView({ behavior: "instant" });
+  EventUtils.synthesizeMouseAtCenter(
+    tab,
+    { type: "contextmenu", button: 2 },
+    window
+  );
+  await contextMenuShown;
+  return tabContextMenu;
+}
+
+async function closeTabContextMenu(
+  menu = document.getElementById("tabContextMenu")
+) {
+  const contextMenuHidden = BrowserTestUtils.waitForPopupEvent(menu, "hidden");
+  menu.hidePopup();
+  await contextMenuHidden;
 }
 
 function triggerClickOn(target, options) {
@@ -301,7 +316,7 @@ async function dragAndDrop(
 
   if (destWindow != origWindow) {
     // Make sure that both tab1 and tab2 are visible
-    origWindow.focus();
+    await SimpleTest.promiseFocus(origWindow);
     origWindow.moveTo(rect.left, rect.top + rect.height * 3);
   }
 
@@ -318,59 +333,15 @@ async function dragAndDrop(
   // Ensure dnd suppression is cleared.
   EventUtils.synthesizeMouseAtCenter(tab2, { type: "mouseup" }, destWindow);
   if (!copy && destWindow == origWindow) {
-    await BrowserTestUtils.waitForCondition(() => {
+    await TestUtils.waitForCondition(() => {
       return tab1.elementIndex != originalIndex;
     }, "Waiting for tab position to be updated");
   } else if (destWindow != origWindow) {
-    await BrowserTestUtils.waitForCondition(
+    await TestUtils.waitForCondition(
       () => tab1.closing,
       "Waiting for tab closing"
     );
   }
-}
-
-// The dragAndDrop function is specific to tabs.
-// This function allows us to customize the drop destination to interaction cue,
-// promo card, other containers, or tabs themselves. It also provides an option
-// to wait for a condition between initial drag and final drop.
-/**
- * @param {Element} src
- * @param {Element} dest
- * @param {Promise<void>} [dragCond]
- * @param {Promise<void>} [dropCond]
- * @param {object} [dragEvent={}]
- */
-async function customDragAndDrop(
-  src,
-  dest,
-  dragCond = null,
-  dropCond = null,
-  dragEvent = {}
-) {
-  EventUtils.startDragSession(window, "move");
-
-  info("Start drag");
-  let [result, dataTransfer] = EventUtils.synthesizeDragOver(
-    src,
-    // In some cases, the dest is hidden and we use coords instead.
-    // Default to src in this scenario.
-    BrowserTestUtils.isHidden(dest) && dragEvent?.clientX && dragEvent?.clientY
-      ? src
-      : dest,
-    null,
-    "move",
-    window,
-    window,
-    dragEvent
-  );
-  await dragCond;
-
-  info("Start drop");
-  EventUtils.synthesizeDropAfterDragOver(result, dataTransfer, dest);
-  let srcWindowUtils = EventUtils._getDOMWindowUtils(window);
-  const srcDragSession = srcWindowUtils.dragSession;
-  srcDragSession.endDragSession(true, EventUtils._parseModifiers(dragEvent));
-  await dropCond;
 }
 
 function getUrl(tab) {
@@ -421,192 +392,51 @@ function test_url_for_process_types({
   privilegedMozillaContentResult,
   extensionProcessResult,
 }) {
-  const CHROME_PROCESS = E10SUtils.NOT_REMOTE;
-  const WEB_CONTENT_PROCESS = E10SUtils.WEB_REMOTE_TYPE;
-  const PRIVILEGEDABOUT_CONTENT_PROCESS = E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE;
-  const PRIVILEGEDMOZILLA_CONTENT_PROCESS =
-    E10SUtils.PRIVILEGEDMOZILLA_REMOTE_TYPE;
-  const EXTENSION_PROCESS = E10SUtils.EXTENSION_REMOTE_TYPE;
+  const PROCESSES = [
+    [E10SUtils.NOT_REMOTE, chromeResult, "chrome process"],
+    [E10SUtils.WEB_REMOTE_TYPE, webContentResult, "web content process"],
+    [
+      E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE,
+      privilegedAboutContentResult,
+      "privileged about content process",
+    ],
+    [
+      E10SUtils.PRIVILEGEDMOZILLA_REMOTE_TYPE,
+      privilegedMozillaContentResult,
+      "privileged mozilla content process",
+    ],
+    [
+      E10SUtils.EXTENSION_REMOTE_TYPE,
+      extensionProcessResult,
+      "extension process",
+    ],
+  ];
+  const EXTRAS = [
+    ["", "URL"],
+    ["#foo", "URL with ref"],
+    ["?foo", "URL with query"],
+    ["?foo#bar", "URL with query and ref"],
+  ];
 
-  is(
-    E10SUtils.canLoadURIInRemoteType(url, /* fission */ false, CHROME_PROCESS),
-    chromeResult,
-    "Check URL in chrome process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url,
-      /* fission */ false,
-      WEB_CONTENT_PROCESS
-    ),
-    webContentResult,
-    "Check URL in web content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url,
-      /* fission */ false,
-      PRIVILEGEDABOUT_CONTENT_PROCESS
-    ),
-    privilegedAboutContentResult,
-    "Check URL in privileged about content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url,
-      /* fission */ false,
-      PRIVILEGEDMOZILLA_CONTENT_PROCESS
-    ),
-    privilegedMozillaContentResult,
-    "Check URL in privileged mozilla content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url,
-      /* fission */ false,
-      EXTENSION_PROCESS
-    ),
-    extensionProcessResult,
-    "Check URL in extension process."
-  );
+  for (let [extra, extraDesc] of EXTRAS) {
+    for (let [remoteType, canLoad, remoteTypeDesc] of PROCESSES) {
+      let description = `Check ${extraDesc} in ${remoteTypeDesc}.`;
 
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "#foo",
-      /* fission */ false,
-      CHROME_PROCESS
-    ),
-    chromeResult,
-    "Check URL with ref in chrome process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "#foo",
-      /* fission */ false,
-      WEB_CONTENT_PROCESS
-    ),
-    webContentResult,
-    "Check URL with ref in web content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "#foo",
-      /* fission */ false,
-      PRIVILEGEDABOUT_CONTENT_PROCESS
-    ),
-    privilegedAboutContentResult,
-    "Check URL with ref in privileged about content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "#foo",
-      /* fission */ false,
-      PRIVILEGEDMOZILLA_CONTENT_PROCESS
-    ),
-    privilegedMozillaContentResult,
-    "Check URL with ref in privileged mozilla content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "#foo",
-      /* fission */ false,
-      EXTENSION_PROCESS
-    ),
-    extensionProcessResult,
-    "Check URL with ref in extension process."
-  );
-
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "?foo",
-      /* fission */ false,
-      CHROME_PROCESS
-    ),
-    chromeResult,
-    "Check URL with query in chrome process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "?foo",
-      /* fission */ false,
-      WEB_CONTENT_PROCESS
-    ),
-    webContentResult,
-    "Check URL with query in web content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "?foo",
-      /* fission */ false,
-      PRIVILEGEDABOUT_CONTENT_PROCESS
-    ),
-    privilegedAboutContentResult,
-    "Check URL with query in privileged about content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "?foo",
-      /* fission */ false,
-      PRIVILEGEDMOZILLA_CONTENT_PROCESS
-    ),
-    privilegedMozillaContentResult,
-    "Check URL with query in privileged mozilla content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "?foo",
-      /* fission */ false,
-      EXTENSION_PROCESS
-    ),
-    extensionProcessResult,
-    "Check URL with query in extension process."
-  );
-
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "?foo#bar",
-      /* fission */ false,
-      CHROME_PROCESS
-    ),
-    chromeResult,
-    "Check URL with query and ref in chrome process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "?foo#bar",
-      /* fission */ false,
-      WEB_CONTENT_PROCESS
-    ),
-    webContentResult,
-    "Check URL with query and ref in web content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "?foo#bar",
-      /* fission */ false,
-      PRIVILEGEDABOUT_CONTENT_PROCESS
-    ),
-    privilegedAboutContentResult,
-    "Check URL with query and ref in privileged about content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "?foo#bar",
-      /* fission */ false,
-      PRIVILEGEDMOZILLA_CONTENT_PROCESS
-    ),
-    privilegedMozillaContentResult,
-    "Check URL with query and ref in privileged mozilla content process."
-  );
-  is(
-    E10SUtils.canLoadURIInRemoteType(
-      url + "?foo#bar",
-      /* fission */ false,
-      EXTENSION_PROCESS
-    ),
-    extensionProcessResult,
-    "Check URL with query and ref in extension process."
-  );
+      // Run the predictRemoteTypeForURI algorithm with preferredRemoteType set
+      // to each process type. This is a rough approximation of whether or not
+      // it is possible for a load started in that process to finish in that
+      // process according to the predictor.
+      let prediction = ChromeUtils.predictRemoteTypeForURI(url + extra, {
+        useRemoteSubframes: false,
+        preferredRemoteType: remoteType,
+      });
+      if (canLoad) {
+        is(prediction, remoteType, description);
+      } else {
+        isnot(prediction, remoteType, description);
+      }
+    }
+  }
 }
 
 /*
@@ -650,7 +480,7 @@ async function removeTabGroup(group) {
  * @returns {Promise<XULMenuElement|XULPopupElement>}
  */
 async function getContextMenu(triggerNode, contextMenuId) {
-  let win = triggerNode.ownerGlobal;
+  let win = triggerNode.documentGlobal;
   triggerNode.scrollIntoView({ behavior: "instant" });
   const contextMenu = win.document.getElementById(contextMenuId);
   const contextMenuShown = BrowserTestUtils.waitForPopupEvent(
@@ -675,4 +505,29 @@ async function closeContextMenu(contextMenu) {
   let menuHidden = BrowserTestUtils.waitForPopupEvent(contextMenu, "hidden");
   contextMenu.hidePopup();
   await menuHidden;
+}
+
+/**
+ * Loads two tabs in a split view, executes a task, then closes the split view.
+ *
+ * @param {MozTabbrowserTab} tab1
+ *   The first tab in the split view. It will be selected.
+ * @param {MozTabbrowserTab} tab2
+ *   The second tab in the split view.
+ * @param {Function} taskFn
+ */
+async function withSplitView(tab1, tab2, taskFn) {
+  await BrowserTestUtils.switchTab(gBrowser, tab1);
+  const splitView = gBrowser.addTabSplitView([tab1, tab2], {
+    insertBefore: tab1,
+  });
+  const splitter = gBrowser.tabpanels.splitViewSplitter;
+  await BrowserTestUtils.waitForMutationCondition(
+    splitter,
+    { attributes: true },
+    () => !splitter.hidden
+  );
+  await taskFn({ tab1, tab2, splitter, splitView });
+  // Closes both tabs.
+  splitView.close();
 }

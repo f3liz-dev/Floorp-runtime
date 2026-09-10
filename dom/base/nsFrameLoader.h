@@ -1,5 +1,3 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -136,7 +134,7 @@ class nsFrameLoader final : public nsStubMutationObserver,
 
   NS_INLINE_DECL_STATIC_IID(NS_FRAMELOADER_IID)
 
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS_FINAL
   NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(nsFrameLoader)
 
   NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTECHANGED
@@ -163,9 +161,9 @@ class nsFrameLoader final : public nsStubMutationObserver,
   // After the parent document has been fully cloned, a new frameloader will be
   // created for the cloned iframe, and `FinishStaticClone` will be called on
   // it, which will clone the inner document of the source nsFrameLoader.
-  nsresult FinishStaticClone(nsFrameLoader* aStaticCloneOf,
-                             nsIPrintSettings* aPrintSettings,
-                             bool* aOutHasInProcessPrintCallbacks);
+  MOZ_CAN_RUN_SCRIPT nsresult FinishStaticClone(
+      nsFrameLoader* aStaticCloneOf, nsIPrintSettings* aPrintSettings,
+      bool* aOutHasInProcessPrintCallbacks);
 
   nsresult DoRemoteStaticClone(nsFrameLoader* aStaticCloneOf,
                                nsIPrintSettings* aPrintSettings);
@@ -263,7 +261,7 @@ class nsFrameLoader final : public nsStubMutationObserver,
 
   bool IsNetworkCreated() const { return mNetworkCreated; }
 
-  nsIContent* GetParentObject() const;
+  nsISupports* GetParentObject() const;
 
   /**
    * MessageManagerCallback methods that we override.
@@ -272,7 +270,7 @@ class nsFrameLoader final : public nsStubMutationObserver,
                                           bool aRunInGlobalScope) override;
   virtual nsresult DoSendAsyncMessage(
       const nsAString& aMessage,
-      mozilla::dom::ipc::StructuredCloneData& aData) override;
+      mozilla::NotNull<mozilla::dom::ipc::StructuredCloneData*> aData) override;
 
   /**
    * Called from the layout frame associated with this frame loader;
@@ -302,9 +300,9 @@ class nsFrameLoader final : public nsStubMutationObserver,
   // The guts of an nsFrameLoaderOwner::SwapFrameLoader implementation.  A
   // frame loader owner needs to call this, and pass in the two references to
   // nsRefPtrs for frame loaders that need to be swapped.
-  nsresult SwapWithOtherLoader(nsFrameLoader* aOther,
-                               nsFrameLoaderOwner* aThisOwner,
-                               nsFrameLoaderOwner* aOtherOwner);
+  MOZ_CAN_RUN_SCRIPT nsresult
+  SwapWithOtherLoader(nsFrameLoader* aOther, nsFrameLoaderOwner* aThisOwner,
+                      nsFrameLoaderOwner* aOtherOwner);
 
   nsresult SwapWithOtherRemoteLoader(nsFrameLoader* aOther,
                                      nsFrameLoaderOwner* aThisOwner,
@@ -365,18 +363,17 @@ class nsFrameLoader final : public nsStubMutationObserver,
   mozilla::dom::Element* GetOwnerContent() { return mOwnerContent; }
 
   /**
-   * Stashes a detached nsIFrame on the frame loader. We do this when we're
-   * destroying the nsSubDocumentFrame. If the nsSubdocumentFrame is
-   * being reframed we'll restore the detached nsIFrame when it's recreated,
-   * otherwise we'll discard the old presentation and set the detached
-   * subdoc nsIFrame to null.
+   * Stashes a list of detached pres shells on the frame loader. We do this when
+   * we're destroying the nsSubDocumentFrame. If the nsSubdocumentFrame is being
+   * reframed we'll restore the detached shells when they're recreated,
+   * otherwise we'll discard the old presentation and clear these.
    */
-  void SetDetachedSubdocFrame(nsIFrame* aDetachedFrame);
-
-  /**
-   * Retrieves the detached nsIFrame as set by SetDetachedSubdocFrame().
-   */
-  nsIFrame* GetDetachedSubdocFrame(bool* aOutIsSet = nullptr) const;
+  using WeakPresShellArray = nsTArray<nsWeakPtr>;
+  void SetDetachedSubdocs(WeakPresShellArray&&);
+  WeakPresShellArray TakeDetachedSubdocs();
+  const WeakPresShellArray& GetDetachedSubdocs() const {
+    return mDetachedSubdocs;
+  }
 
   /**
    * Applies a new set of sandbox flags. These are merged with the sandbox
@@ -444,7 +441,7 @@ class nsFrameLoader final : public nsStubMutationObserver,
    * If we are an IPC frame, set mRemoteFrame. Otherwise, create and
    * initialize mDocShell.
    */
-  nsresult MaybeCreateDocShell();
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult MaybeCreateDocShell();
   nsresult EnsureMessageManager();
   nsresult ReallyLoadFrameScripts();
   nsDocShell* GetDocShell() const { return mDocShell; }
@@ -508,9 +505,9 @@ class nsFrameLoader final : public nsStubMutationObserver,
   // our <browser> element.
   RefPtr<mozilla::dom::Element> mOwnerContentStrong;
 
-  // Stores the root frame of the subdocument while the subdocument is being
-  // reframed. Used to restore the presentation after reframing.
-  WeakFrame mDetachedSubdocFrame;
+  // Stores the detached pres shells of subdocuments.
+  // Used to restore the presentation after reframing.
+  WeakPresShellArray mDetachedSubdocs;
 
   // When performing a process switch, this value is used rather than mURIToLoad
   // to identify the process-switching load which should be resumed in the

@@ -8,6 +8,8 @@ import android.content.Context
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import mozilla.components.browser.state.state.TabSessionState
@@ -23,8 +25,6 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
-import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 
 @Suppress("LargeClass") // Large test is large
 class TabCollectionStorageTest {
@@ -32,8 +32,7 @@ class TabCollectionStorageTest {
     private lateinit var storage: TabCollectionStorage
     private lateinit var executor: ExecutorService
 
-    @get:Rule
-    var instantTaskExecutorRule = InstantTaskExecutorRule()
+    @get:Rule var instantTaskExecutorRule = InstantTaskExecutorRule()
 
     @Before
     fun setUp() {
@@ -89,13 +88,14 @@ class TabCollectionStorageTest {
             assertEquals(1, collections.size)
             assertEquals(0, collections[0].tabs.size)
 
-            id = storage.addTabsToCollection(
-                collections[0],
-                listOf(
-                    createTab("https://www.mozilla.org", title = "Mozilla"),
-                    createTab("https://www.firefox.com", title = "Firefox"),
-                ),
-            )
+            id =
+                storage.addTabsToCollection(
+                    collections[0],
+                    listOf(
+                        createTab("https://www.mozilla.org", title = "Mozilla"),
+                        createTab("https://www.firefox.com", title = "Firefox"),
+                    ),
+                )
         }
 
         getAllCollections().let { collections ->
@@ -218,19 +218,14 @@ class TabCollectionStorageTest {
     }
 
     @Test
-    @Suppress("ComplexMethod")
     fun testGettingCollections() = runTest {
         storage.createCollection(
             "Articles",
-            listOf(
-                createTab("https://www.mozilla.org", title = "Mozilla"),
-            ),
+            listOf(createTab("https://www.mozilla.org", title = "Mozilla")),
         )
         storage.createCollection(
             "Recipes",
-            listOf(
-                createTab("https://www.firefox.com", title = "Firefox"),
-            ),
+            listOf(createTab("https://www.firefox.com", title = "Firefox")),
         )
         storage.createCollection(
             "Books",
@@ -248,9 +243,7 @@ class TabCollectionStorageTest {
         )
         storage.createCollection(
             "Blogs",
-            listOf(
-                createTab("https://www.wikipedia.org", title = "Wikipedia"),
-            ),
+            listOf(createTab("https://www.wikipedia.org", title = "Wikipedia")),
         )
 
         val collections = storage.getCollections().first()
@@ -300,19 +293,14 @@ class TabCollectionStorageTest {
     }
 
     @Test
-    @Suppress("ComplexMethod")
     fun testGettingCollectionsList() = runTest {
         storage.createCollection(
             "Articles",
-            listOf(
-                createTab("https://www.mozilla.org", title = "Mozilla"),
-            ),
+            listOf(createTab("https://www.mozilla.org", title = "Mozilla")),
         )
         storage.createCollection(
             "Recipes",
-            listOf(
-                createTab("https://www.firefox.com", title = "Firefox"),
-            ),
+            listOf(createTab("https://www.firefox.com", title = "Firefox")),
         )
         storage.createCollection(
             "Books",
@@ -330,9 +318,7 @@ class TabCollectionStorageTest {
         )
         storage.createCollection(
             "Blogs",
-            listOf(
-                createTab("https://www.wikipedia.org", title = "Wikipedia"),
-            ),
+            listOf(createTab("https://www.wikipedia.org", title = "Wikipedia")),
         )
 
         val collections = storage.getCollectionsList()
@@ -386,15 +372,11 @@ class TabCollectionStorageTest {
 
         storage.createCollection(
             "Articles",
-            listOf(
-                createTab("https://www.mozilla.org", title = "Mozilla"),
-            ),
+            listOf(createTab("https://www.mozilla.org", title = "Mozilla")),
         )
         storage.createCollection(
             "Recipes",
-            listOf(
-                createTab("https://www.firefox.com", title = "Firefox"),
-            ),
+            listOf(createTab("https://www.firefox.com", title = "Firefox")),
         )
 
         assertEquals(2, storage.getTabCollectionsCount())
@@ -411,15 +393,11 @@ class TabCollectionStorageTest {
     fun testRemovingAllCollections() {
         storage.createCollection(
             "Articles",
-            listOf(
-                createTab("https://www.mozilla.org", title = "Mozilla"),
-            ),
+            listOf(createTab("https://www.mozilla.org", title = "Mozilla")),
         )
         storage.createCollection(
             "Recipes",
-            listOf(
-                createTab("https://www.firefox.com", title = "Firefox"),
-            ),
+            listOf(createTab("https://www.firefox.com", title = "Firefox")),
         )
 
         assertEquals(2, storage.getTabCollectionsCount())

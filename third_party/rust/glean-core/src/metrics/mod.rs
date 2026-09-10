@@ -215,6 +215,28 @@ pub trait MetricType {
         // at worst we would see that metric enabled/disabled wrongly once.
         // But since everything is tunneled through the dispatcher, this should never ever happen.
 
+        /*
+        Session sampling gate: suppress in-session telemetry for sampled-out sessions.
+
+        This check applies to ALL metric types, not just events because the `in_session` property
+        is shared through CommonMetricData. We might want to add session metadata to non-event
+        metrics in the future, and if we do, they should be suppressed by session sampling just
+        like events are.
+
+        In-session metrics (`in_session = true`) are suppressed here when the active session is
+        sampled out.
+
+        Out-of-session metrics (`in_session = false`) bypass this gate entirely and always record.
+
+        EventMetric additionally uses `compute_event_context()` after this check to determine
+        which session metadata to attach — that function is purely about metadata, not suppression,
+        and it may be called from other metric types in future if they also need per-event session
+        context.
+        */
+        if self.meta().in_session() && !glean.session_manager().is_sampled_in() {
+            return false;
+        }
+
         // Get the current disabled field from the metric metadata, including
         // the encoded remote_settings epoch
         let disabled_field = self.meta().disabled.load(Ordering::Relaxed);
@@ -267,6 +289,28 @@ pub trait MetricType {
 pub trait MetricIdentifier<'a> {
     /// Retrieve the category, name and (maybe) label of the metric
     fn get_identifiers(&'a self) -> (&'a str, &'a str, Option<&'a str>);
+}
+
+/// [`TestGetValue`] describes an interface for retrieving the value for a given metric
+pub trait TestGetValue {
+    /// The output type of `test_get_value`
+    type Output;
+
+    /// **Test-only API (exported for FFI purposes).**
+    ///
+    /// Returns the currently stored value of the appropriate type for the given metric.
+    ///
+    /// This doesn't clear the stored value.
+    ///
+    /// # Arguments
+    ///
+    /// * `ping_name` - the optional name of the ping to retrieve the metric
+    ///                 for. Defaults to the first value in `send_in_pings`.
+    ///
+    /// # Returns
+    ///
+    /// The stored value or `None` if nothing stored.
+    fn test_get_value(&self, ping_name: Option<String>) -> Option<Self::Output>;
 }
 
 // Provide a blanket implementation for MetricIdentifier for all the types

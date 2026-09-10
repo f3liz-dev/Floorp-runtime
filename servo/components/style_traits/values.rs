@@ -6,9 +6,7 @@
 
 use app_units::Au;
 use cssparser::ToCss as CssparserToCss;
-use cssparser::{serialize_string, ParseError, Parser, Token, UnicodeRange};
-#[cfg(feature = "gecko")]
-use nsstring::nsCString;
+use cssparser::{serialize_string, ParseError, Parser, UnicodeRange};
 use servo_arc::Arc;
 use std::fmt::{self, Write};
 
@@ -31,9 +29,6 @@ use std::fmt::{self, Write};
 ///   iterable will be serialized as the arguments for the function;
 /// * an iterable field can also be annotated with `#[css(if_empty = "foo")]`
 ///   to print `"foo"` if the iterator is empty;
-/// * if `#[css(dimension)]` is found on a variant, that variant needs
-///   to have a single member. The variant would be serialized as a CSS
-///   dimension token, like: <member><identifier>;
 /// * if `#[css(skip)]` is found on a field, the `ToCss` call for that field
 ///   is skipped;
 /// * if `#[css(skip_if = "function")]` is found on a field, the `ToCss` call
@@ -96,13 +91,12 @@ pub trait ToCss {
         s
     }
 
-    /// Serialize `self` in CSS syntax and return a nsCString.
+    /// Serialize `self` in CSS syntax and return a CssString.
     ///
     /// (This is a convenience wrapper for `to_css` and probably should not be overridden.)
     #[inline]
-    #[cfg(feature = "gecko")]
-    fn to_css_nscstring(&self) -> nsCString {
-        let mut s = nsCString::new();
+    fn to_css_cssstring(&self) -> CssString {
+        let mut s = CssString::new();
         self.to_css(&mut CssWriter::new(&mut s)).unwrap();
         s
     }
@@ -227,6 +221,29 @@ where
     }
 }
 
+/// To avoid accidentally instantiating multiple monomorphizations of large
+/// serialization routines, we define explicit concrete types and require
+/// them in those routines. This avoids accidental mixing of String and
+/// nsACString arguments in Gecko, which would cause code size to blow up.
+#[cfg(feature = "gecko")]
+pub type CssStringWriter = ::nsstring::nsACString;
+
+/// String type that coerces to CssStringWriter, used when serialization code
+/// needs to allocate a temporary string. In Gecko, this is backed by
+/// nsCString, which allows the result to be passed directly to C++ without
+/// conversion or copying. This makes it suitable not only for temporary
+/// serialization but also for values that need to cross the Rust/C++ boundary.
+#[cfg(feature = "gecko")]
+pub type CssString = ::nsstring::nsCString;
+
+/// String. The comments for the Gecko types explain the need for this abstraction.
+#[cfg(feature = "servo")]
+pub type CssStringWriter = String;
+
+/// String. The comments for the Gecko types explain the need for this abstraction.
+#[cfg(feature = "servo")]
+pub type CssString = String;
+
 /// Convenience wrapper to serialise CSS values separated by a given string.
 pub struct SequenceWriter<'a, 'b: 'a, W: 'b> {
     inner: &'a mut CssWriter<'b, W>,
@@ -237,6 +254,12 @@ impl<'a, 'b, W> SequenceWriter<'a, 'b, W>
 where
     W: Write + 'b,
 {
+    /// Returns whether this writer has written any item.
+    pub fn has_written(&self) -> bool {
+        // See comment in item()
+        self.inner.prefix.is_none()
+    }
+
     /// Create a new sequence writer.
     #[inline]
     pub fn new(inner: &'a mut CssWriter<'b, W>, separator: &'static str) -> Self {
@@ -357,9 +380,9 @@ pub trait Separator {
     fn parse<'i, 't, F, T, E>(
         parser: &mut Parser<'i, 't>,
         parse_one: F,
-    ) -> Result<Vec<T>, ParseError<'i, E>>
+    ) -> Result<Vec<T>, ParseError<E>>
     where
-        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<'i, E>>;
+        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>;
 }
 
 impl Separator for Comma {
@@ -370,9 +393,9 @@ impl Separator for Comma {
     fn parse<'i, 't, F, T, E>(
         input: &mut Parser<'i, 't>,
         parse_one: F,
-    ) -> Result<Vec<T>, ParseError<'i, E>>
+    ) -> Result<Vec<T>, ParseError<E>>
     where
-        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<'i, E>>,
+        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
     {
         input.parse_comma_separated(parse_one)
     }
@@ -386,9 +409,9 @@ impl Separator for Space {
     fn parse<'i, 't, F, T, E>(
         input: &mut Parser<'i, 't>,
         mut parse_one: F,
-    ) -> Result<Vec<T>, ParseError<'i, E>>
+    ) -> Result<Vec<T>, ParseError<E>>
     where
-        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<'i, E>>,
+        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
     {
         input.skip_whitespace(); // Unnecessary for correctness, but may help try_parse() rewind less.
         let mut results = vec![parse_one(input)?];
@@ -411,21 +434,20 @@ impl Separator for CommaWithSpace {
     fn parse<'i, 't, F, T, E>(
         input: &mut Parser<'i, 't>,
         mut parse_one: F,
-    ) -> Result<Vec<T>, ParseError<'i, E>>
+    ) -> Result<Vec<T>, ParseError<E>>
     where
-        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<'i, E>>,
+        F: for<'tt> FnMut(&mut Parser<'i, 'tt>) -> Result<T, ParseError<E>>,
     {
         input.skip_whitespace(); // Unnecessary for correctness, but may help try_parse() rewind less.
         let mut results = vec![parse_one(input)?];
         loop {
             input.skip_whitespace(); // Unnecessary for correctness, but may help try_parse() rewind less.
-            let comma_location = input.current_source_location();
             let comma = input.try_parse(|i| i.expect_comma()).is_ok();
             input.skip_whitespace(); // Unnecessary for correctness, but may help try_parse() rewind less.
             if let Ok(item) = input.try_parse(&mut parse_one) {
                 results.push(item);
             } else if comma {
-                return Err(comma_location.new_unexpected_token_error(Token::Comma));
+                return Err(ParseError::unexpected_token());
             } else {
                 break;
             }

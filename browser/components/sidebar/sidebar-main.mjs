@@ -13,6 +13,9 @@ import {
 import { MozLitElement } from "chrome://global/content/lit-utils.mjs";
 
 // eslint-disable-next-line import/no-unassigned-import
+import "chrome://browser/content/sidebar/sidebar-opentabs-preview.mjs";
+
+// eslint-disable-next-line import/no-unassigned-import
 import "chrome://browser/content/sidebar/sidebar-pins-promo.mjs";
 
 const lazy = {};
@@ -40,15 +43,21 @@ export default class SidebarMain extends MozLitElement {
   static queries = {
     allButtons: { all: "moz-button" },
     extensionButtons: { all: ".tools-and-extensions > moz-button[extension]" },
-    toolButtons: { all: ".tools-and-extensions > moz-button:not([extension])" },
+    toolButtons: {
+      all: ".tools-and-extensions > moz-button[view]:not([extension])",
+    },
     customizeButton: ".bottom-actions > moz-button[view=viewCustomizeSidebar]",
     buttonGroup: ".actions-list:not(.bottom-actions):not(.overflow-button)",
     moreToolsButton: ".more-tools-button",
+    buttonsWrapper: ".buttons-wrapper",
   };
 
   get fluentStrings() {
     if (!this._fluentStrings) {
-      this._fluentStrings = new Localization(["browser/sidebar.ftl"], true);
+      this._fluentStrings = new Localization(
+        ["browser/sidebar.ftl", "preview/genai.ftl"],
+        true
+      );
     }
     return this._fluentStrings;
   }
@@ -91,9 +100,10 @@ export default class SidebarMain extends MozLitElement {
   connectedCallback() {
     super.connectedCallback();
     this._sidebarBox = document.getElementById("sidebar-box");
-    this._sidebarMain = document.getElementById("sidebar-main");
+    this._sidebarContainer = document.getElementById("sidebar-container");
     this._contextMenu = document.getElementById("sidebar-context-menu");
     this._toolsOverflowMenu = document.getElementById("sidebar-tools-overflow");
+    this._openTabsPreview = document.querySelector("sidebar-opentabs-preview");
     this._toolsOverflowButtonGroup =
       this._toolsOverflowMenu.querySelector("button-group");
     this._manageExtensionMenuItem = document.getElementById(
@@ -121,7 +131,7 @@ export default class SidebarMain extends MozLitElement {
 
     this._sidebarBox.addEventListener("sidebar-show", this);
     this._sidebarBox.addEventListener("sidebar-hide", this);
-    this._sidebarMain.addEventListener("contextmenu", this);
+    this._sidebarContainer.addEventListener("contextmenu", this);
     this._contextMenu.addEventListener("popuphidden", this);
     this._contextMenu.addEventListener("command", this);
     this._toolsOverflowMenu.addEventListener("popupshown", this);
@@ -140,7 +150,7 @@ export default class SidebarMain extends MozLitElement {
     super.disconnectedCallback();
     this._sidebarBox.removeEventListener("sidebar-show", this);
     this._sidebarBox.removeEventListener("sidebar-hide", this);
-    this._sidebarMain.removeEventListener("contextmenu", this);
+    this._sidebarContainer.removeEventListener("contextmenu", this);
     this._contextMenu.removeEventListener("popuphidden", this);
     this._contextMenu.removeEventListener("command", this);
     this._toolsOverflowMenu.removeEventListener("popupshown", this);
@@ -164,6 +174,13 @@ export default class SidebarMain extends MozLitElement {
   createToolsObservers() {
     this._toolsIntersectionObserver = new IntersectionObserver(
       entries => {
+        // In horizontal tabs mode while the launcher is collapsed or hidden, every
+        // button is considered non-intersecting by the intersection observer which
+        // can cause visibility issues once the sidebar is shown again. We should
+        // return early here if horizontal tabs are enabled to prevent this.
+        if (!window.SidebarController.sidebarVerticalTabsEnabled) {
+          return;
+        }
         this.shouldShowOverflowButton = entries.some(
           entry =>
             !entry.isIntersecting &&
@@ -180,6 +197,9 @@ export default class SidebarMain extends MozLitElement {
             // because Lit will lose the original references to them. We instead create copies of
             // these buttons to add to the overflow panel
             let newCopyButton = this.createCopyButton(view);
+            if (!newCopyButton) {
+              continue;
+            }
             panelButtonGroup.appendChild(newCopyButton);
 
             // Hide original button
@@ -233,6 +253,11 @@ export default class SidebarMain extends MozLitElement {
       newButtonAction = this.bottomActions[0];
     } else {
       newButtonAction = this.getToolsAndExtensions().get(view);
+    }
+    if (!newButtonAction) {
+      // We can't make a button without an action.
+      // This can happen if an extension or other tool was just removed
+      return null;
     }
     let newButtonValues = this.getEntrypointValues(newButtonAction);
     let newButton = document.createElement("moz-button");
@@ -393,7 +418,7 @@ export default class SidebarMain extends MozLitElement {
     this._manageExtensionMenuItem.hidden = true;
     this._removeExtensionMenuItem.hidden = true;
     this._reportExtensionMenuItem.hidden = true;
-    this._unpinExtensionMenuItem.hidden = false;
+    this._unpinExtensionMenuItem.hidden = true;
     this._customizeSidebarMenuItem.hidden = false;
     this._enableVerticalTabsMenuItem.hidden = false;
     this._hideSidebarMenuItem.hidden = false;
@@ -514,10 +539,11 @@ export default class SidebarMain extends MozLitElement {
               window.SidebarController._animationEnabled &&
               !window.gReduceMotion
             ) {
-              window.SidebarController._animateSidebarMain();
+              window.SidebarController._animateSidebarContainer();
             }
             window.SidebarController.hide({ dismissPanel: false });
             window.SidebarController._state.updateVisibility(false);
+            window.SidebarController.updateToolbarButton();
             break;
           case "sidebar-context-menu-enable-vertical-tabs":
             await window.SidebarController.toggleVerticalTabs();
@@ -533,7 +559,10 @@ export default class SidebarMain extends MozLitElement {
             e.target.id
           )
         ) {
-          this.onSidebarPopupShowing(e);
+          this.onSidebarPopupShowing(e).then(() => {
+            // populating the context menu can be async, so dispatch an event when ready
+            this.dispatchEvent(new CustomEvent("sidebar-contextmenu-ready"));
+          });
         }
         break;
       case "popuphidden":
@@ -597,6 +626,7 @@ export default class SidebarMain extends MozLitElement {
   }
 
   async showView(view) {
+    this._openTabsPreview?.hide();
     const { currentID, toolsAndExtensions } = window.SidebarController;
     let isToolOpening =
       (!currentID || (currentID && currentID !== view)) &&
@@ -631,26 +661,40 @@ export default class SidebarMain extends MozLitElement {
   }
 
   updated() {
+    const isExpandOnHover =
+      window.SidebarController.sidebarRevampVisibility === "expand-on-hover";
+
     if (
-      window.SidebarController.sidebarRevampVisibility !== "expand-on-hover"
+      !isExpandOnHover &&
+      window.SidebarController.sidebarVerticalTabsEnabled
     ) {
       for (const buttonEl of this.allButtons) {
         if (buttonEl.hasAttribute("view")) {
           this._toolsIntersectionObserver.observe(buttonEl);
         }
       }
-
       this._toolsResizeObserver.observe(this.buttonGroup);
-    } else {
-      this.shouldShowOverflowButton = !this.expanded;
-      for (const buttonEl of this.allButtons) {
-        if (buttonEl.style.visibility === "hidden") {
-          buttonEl.style.visibility = "visible";
-        }
-      }
-      this._toolsIntersectionObserver.disconnect();
-      this._toolsResizeObserver.disconnect();
+      return;
     }
+
+    // In expand-on-hover or horizontal tabs mode we don't track tool overflow,
+    // so restore any previously overflown/hidden tool buttons and stop
+    // observing. In horizontal tabs mode we also clear the overflow panel
+    // copies that were populated while in vertical tabs.
+    this.shouldShowOverflowButton = isExpandOnHover ? !this.expanded : false;
+    const overflowList = isExpandOnHover
+      ? null
+      : document.getElementById("tools-overflow-list");
+    for (const buttonEl of this.allButtons) {
+      if (buttonEl.style.visibility === "hidden") {
+        buttonEl.style.visibility = "visible";
+      }
+      overflowList
+        ?.querySelector(`[view='${buttonEl.getAttribute("view")}']`)
+        ?.remove();
+    }
+    this._toolsIntersectionObserver.disconnect();
+    this._toolsResizeObserver.disconnect();
   }
 
   getEntrypointValues(action) {
@@ -708,6 +752,26 @@ export default class SidebarMain extends MozLitElement {
     return { action, isActiveView, toolsOverflowing, tooltip, actionLabel };
   }
 
+  onEntrypointHover(e, view) {
+    if (view !== "viewOpenTabsSidebar") {
+      return;
+    }
+    if (e.currentTarget.contains(e.relatedTarget)) {
+      return;
+    }
+    this._openTabsPreview?.activate(e.currentTarget);
+  }
+
+  onEntrypointHoverEnd(e, view) {
+    if (view !== "viewOpenTabsSidebar") {
+      return;
+    }
+    if (e.currentTarget.contains(e.relatedTarget)) {
+      return;
+    }
+    this._openTabsPreview?.deactivate();
+  }
+
   entrypointTemplate(action) {
     let buttonValues = this.getEntrypointValues(action);
     return html`${when(
@@ -721,6 +785,9 @@ export default class SidebarMain extends MozLitElement {
           aria-pressed=${buttonValues.isActiveView}
           view=${buttonValues.action.view}
           @click=${async () => await this.showView(buttonValues.action.view)}
+          @mouseover=${e => this.onEntrypointHover(e, buttonValues.action.view)}
+          @mouseout=${e =>
+            this.onEntrypointHoverEnd(e, buttonValues.action.view)}
           title=${buttonValues.tooltip}
           .iconSrc=${buttonValues.action.iconUrl}
           ?extension=${buttonValues.action.view?.includes("-sidebar-action")}
@@ -767,6 +834,11 @@ export default class SidebarMain extends MozLitElement {
     );
   }
 
+  shouldUpdate() {
+    const container = window.SidebarController.sidebarContainer;
+    return container && !container.hidden;
+  }
+
   render() {
     /* Add 1 to tools and extensions count for "Customize sidebar" option */
     let enabledToolsAndExtensionsCount =
@@ -797,66 +869,68 @@ export default class SidebarMain extends MozLitElement {
             window.SidebarController.sidebarVerticalTabsEnabled,
           () => html`${this.toolsSplitter}`
         )}
-        <button-group
-          class="tools-and-extensions actions-list"
-          orientation=${this.isToolsOverflowing() ? "horizontal" : "vertical"}
-          overflowing=${ifDefined(this.shouldShowOverflowButton)}
+        <div
+          class="buttons-wrapper"
+          ?overflowing=${this.shouldShowOverflowButton}
         >
-          ${when(!this.isToolsOverflowing(), () =>
-            repeat(
-              this.getToolsAndExtensions().values(),
-              action => action.view,
-              action => this.entrypointTemplate(action)
-            )
-          )}
-          ${when(window.SidebarController.sidebarVerticalTabsEnabled, () =>
-            repeat(
-              this.bottomActions,
-              action => action.view,
-              action => this.entrypointTemplate(action)
-            )
-          )}
-          ${when(this.isToolsOverflowing(), () =>
-            repeat(
-              this.getToolsAndExtensions().values(),
-              action => action.view,
-              action => this.entrypointTemplate(action)
-            )
-          )}
-        </button-group>
-        ${when(
-          !window.SidebarController.sidebarVerticalTabsEnabled,
-          () =>
-            html` <div class="bottom-actions actions-list">
-              ${repeat(
+          <button-group
+            class="tools-and-extensions actions-list"
+            orientation=${this.isToolsOverflowing() ? "horizontal" : "vertical"}
+            overflowing=${ifDefined(this.shouldShowOverflowButton)}
+          >
+            ${when(!this.isToolsOverflowing(), () =>
+              repeat(
+                this.getToolsAndExtensions().values(),
+                action => action.view,
+                action => this.entrypointTemplate(action)
+              )
+            )}
+            ${when(window.SidebarController.sidebarVerticalTabsEnabled, () =>
+              repeat(
                 this.bottomActions,
                 action => action.view,
                 action => this.entrypointTemplate(action)
-              )}
-            </div>`
-        )}
-        ${when(
-          this.shouldShowOverflowButton,
-          () =>
-            html` <button-group
-              class="tools-and-extensions actions-list overflow-button"
-              orientation="vertical"
-              part="overflow-button"
+              )
+            )}
+            ${when(this.isToolsOverflowing(), () =>
+              repeat(
+                this.getToolsAndExtensions().values(),
+                action => action.view,
+                action => this.entrypointTemplate(action)
+              )
+            )}
+          </button-group>
+          ${when(
+            !window.SidebarController.sidebarVerticalTabsEnabled,
+            () =>
+              html` <div class="bottom-actions actions-list">
+                ${repeat(
+                  this.bottomActions,
+                  action => action.view,
+                  action => this.entrypointTemplate(action)
+                )}
+              </div>`
+          )}
+          <button-group
+            class="tools-and-extensions actions-list overflow-button"
+            orientation="vertical"
+            part="overflow-button"
+            ?hidden=${!this.shouldShowOverflowButton}
+          >
+            <moz-button
+              class="more-tools-button"
+              type=${this.isOverflowMenuOpen ? "icon" : "icon ghost"}
+              aria-pressed=${this.isOverflowMenuOpen}
+              @click=${window.SidebarController.sidebarRevampVisibility ===
+              "expand-on-hover"
+                ? nothing
+                : this.showOverflowMenu}
+              title=${moreToolsTooltip}
+              .iconSrc=${"chrome://global/skin/icons/chevron.svg"}
             >
-              <moz-button
-                class="more-tools-button"
-                type=${this.isOverflowMenuOpen ? "icon" : "icon ghost"}
-                aria-pressed=${this.isOverflowMenuOpen}
-                @click=${window.SidebarController.sidebarRevampVisibility ===
-                "expand-on-hover"
-                  ? nothing
-                  : this.showOverflowMenu}
-                title=${moreToolsTooltip}
-                .iconSrc=${"chrome://global/skin/icons/chevron.svg"}
-              >
-              </moz-button>
-            </button-group>`
-        )}
+            </moz-button>
+          </button-group>
+        </div>
       </div>
     `;
   }

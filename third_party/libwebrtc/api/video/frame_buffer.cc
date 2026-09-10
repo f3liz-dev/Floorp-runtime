@@ -16,11 +16,11 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <span>
 #include <utility>
 
 #include "absl/algorithm/container.h"
 #include "absl/container/inlined_vector.h"
-#include "api/array_view.h"
 #include "api/field_trials_view.h"
 #include "api/video/encoded_frame.h"
 #include "rtc_base/logging.h"
@@ -47,7 +47,7 @@ bool ValidReferences(const EncodedFrame& frame) {
 // Since FrameBuffer::FrameInfo is private it can't be used in the function
 // signature, hence the FrameIteratorT type.
 template <typename FrameIteratorT>
-ArrayView<const int64_t> GetReferences(const FrameIteratorT& it) {
+std::span<const int64_t> GetReferences(const FrameIteratorT& it) {
   return {it->second.encoded_frame->references,
           std::min<size_t>(it->second.encoded_frame->num_references,
                            EncodedFrame::kMaxFrameReferences)};
@@ -78,6 +78,8 @@ FrameBuffer::FrameBuffer(int max_size,
       decoded_frame_history_(max_decode_history) {}
 
 bool FrameBuffer::InsertFrame(std::unique_ptr<EncodedFrame> frame) {
+  new_continuous_temporal_units_.clear();
+
   const uint32_t ssrc =
       frame->PacketInfos().empty() ? 0 : frame->PacketInfos()[0].ssrc();
   if (!ValidReferences(*frame)) {
@@ -127,7 +129,8 @@ bool FrameBuffer::InsertFrame(std::unique_ptr<EncodedFrame> frame) {
   }
 
   const int64_t frame_id = frame->Id();
-  auto insert_res = frames_.emplace(frame_id, FrameInfo{std::move(frame)});
+  auto insert_res =
+      frames_.emplace(frame_id, FrameInfo{.encoded_frame = std::move(frame)});
   if (!insert_res.second) {
     // Frame has already been inserted.
     return false;
@@ -218,6 +221,10 @@ FrameBuffer::DecodableTemporalUnitsInfo() const {
   return decodable_temporal_units_info_;
 }
 
+std::span<const uint32_t> FrameBuffer::NewContinuousTemporalUnits() const {
+  return new_continuous_temporal_units_;
+}
+
 int FrameBuffer::GetTotalNumberOfContinuousTemporalUnits() const {
   return num_continuous_temporal_units_;
 }
@@ -260,6 +267,7 @@ void FrameBuffer::PropagateContinuity(const FrameIterator& frame_it) {
         }
         if (IsLastFrameInTemporalUnit(it)) {
           num_continuous_temporal_units_++;
+          new_continuous_temporal_units_.push_back(GetTimestamp(it));
           if (last_continuous_temporal_unit_frame_id_ < GetFrameId(it)) {
             last_continuous_temporal_unit_frame_id_ = GetFrameId(it);
           }
@@ -312,7 +320,8 @@ void FrameBuffer::FindNextAndLastDecodableTemporalUnit() {
 
       if (temporal_unit_decodable) {
         if (!next_decodable_temporal_unit_) {
-          next_decodable_temporal_unit_ = {first_frame_it, last_frame_it};
+          next_decodable_temporal_unit_ = {.first_frame = first_frame_it,
+                                           .last_frame = last_frame_it};
         }
 
         last_decodable_temporal_unit_timestamp = GetTimestamp(first_frame_it);
@@ -336,6 +345,7 @@ void FrameBuffer::Clear() {
   last_continuous_frame_id_.reset();
   last_continuous_temporal_unit_frame_id_.reset();
   decoded_frame_history_.Clear();
+  new_continuous_temporal_units_.clear();
 }
 
 }  // namespace webrtc

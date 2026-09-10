@@ -24,6 +24,10 @@
  * Adobe Author(s): Michiharu Ariza
  */
 
+#ifndef HB_OT_CFF1_TABLE_CC
+#define HB_OT_CFF1_TABLE_CC
+#ifdef HB_OT_CFF1_TABLE_CC /* Pacify -Wunused-macros. */
+
 #include "hb.hh"
 
 #ifndef HB_NO_CFF
@@ -360,7 +364,7 @@ struct cff1_path_procs_extents_t : path_procs_t<cff1_path_procs_extents_t, cff1_
   }
 };
 
-static bool _get_bounds (const OT::cff1::accelerator_t *cff, hb_codepoint_t glyph, bounds_t &bounds, bool in_seac=false);
+static bool _get_bounds (const OT::cff1::accelerator_t *cff, hb_codepoint_t glyph, bounds_t &bounds, bool in_seac=false, int64_t *budget = nullptr);
 
 struct cff1_cs_opset_extents_t : cff1_cs_opset_t<cff1_cs_opset_extents_t, cff1_extents_param_t, cff1_path_procs_extents_t>
 {
@@ -387,7 +391,7 @@ struct cff1_cs_opset_extents_t : cff1_cs_opset_t<cff1_cs_opset_extents_t, cff1_e
   }
 };
 
-bool _get_bounds (const OT::cff1::accelerator_t *cff, hb_codepoint_t glyph, bounds_t &bounds, bool in_seac)
+bool _get_bounds (const OT::cff1::accelerator_t *cff, hb_codepoint_t glyph, bounds_t &bounds, bool in_seac, int64_t *budget)
 {
   bounds.init ();
   if (unlikely (!cff->is_valid () || (glyph >= cff->num_glyphs))) return false;
@@ -398,12 +402,12 @@ bool _get_bounds (const OT::cff1::accelerator_t *cff, hb_codepoint_t glyph, boun
   env.set_in_seac (in_seac);
   cff1_cs_interpreter_t<cff1_cs_opset_extents_t, cff1_extents_param_t> interp (env);
   cff1_extents_param_t param (cff);
-  if (unlikely (!interp.interpret (param))) return false;
+  if (unlikely (!interp.interpret (param, budget))) return false;
   bounds = param.bounds;
   return true;
 }
 
-bool OT::cff1::accelerator_t::get_extents (hb_font_t *font, hb_codepoint_t glyph, hb_glyph_extents_t *extents) const
+bool OT::cff1::accelerator_t::get_extents (hb_font_t *font, hb_codepoint_t glyph, hb_glyph_extents_t *extents, int64_t *budget) const
 {
 #ifdef HB_NO_OT_FONT_CFF
   /* XXX Remove check when this code moves to .hh file. */
@@ -412,7 +416,7 @@ bool OT::cff1::accelerator_t::get_extents (hb_font_t *font, hb_codepoint_t glyph
 
   bounds_t bounds;
 
-  if (!_get_bounds (this, glyph, bounds))
+  if (!_get_bounds (this, glyph, bounds, false, budget))
     return false;
 
   if (bounds.min.x >= bounds.max.x)
@@ -511,7 +515,8 @@ struct cff1_path_procs_path_t : path_procs_t<cff1_path_procs_path_t, cff1_cs_int
 };
 
 static bool _get_path (const OT::cff1::accelerator_t *cff, hb_font_t *font, hb_codepoint_t glyph,
-		       hb_draw_session_t &draw_session, bool in_seac = false, point_t *delta = nullptr);
+		       hb_draw_session_t &draw_session, bool in_seac = false, point_t *delta = nullptr,
+		       int64_t *budget = nullptr);
 
 struct cff1_cs_opset_path_t : cff1_cs_opset_t<cff1_cs_opset_path_t, cff1_path_param_t, cff1_path_procs_path_t>
 {
@@ -535,7 +540,8 @@ struct cff1_cs_opset_path_t : cff1_cs_opset_t<cff1_cs_opset_path_t, cff1_path_pa
 };
 
 bool _get_path (const OT::cff1::accelerator_t *cff, hb_font_t *font, hb_codepoint_t glyph,
-		hb_draw_session_t &draw_session, bool in_seac, point_t *delta)
+		hb_draw_session_t &draw_session, bool in_seac, point_t *delta,
+		int64_t *budget)
 {
   if (unlikely (!cff->is_valid () || (glyph >= cff->num_glyphs))) return false;
 
@@ -545,7 +551,7 @@ bool _get_path (const OT::cff1::accelerator_t *cff, hb_font_t *font, hb_codepoin
   env.set_in_seac (in_seac);
   cff1_cs_interpreter_t<cff1_cs_opset_path_t, cff1_path_param_t> interp (env);
   cff1_path_param_t param (cff, font, draw_session, delta);
-  if (unlikely (!interp.interpret (param))) return false;
+  if (unlikely (!interp.interpret (param, budget))) return false;
 
   /* Let's end the path specially since it is called inside seac also */
   param.end_path ();
@@ -553,14 +559,14 @@ bool _get_path (const OT::cff1::accelerator_t *cff, hb_font_t *font, hb_codepoin
   return true;
 }
 
-bool OT::cff1::accelerator_t::get_path (hb_font_t *font, hb_codepoint_t glyph, hb_draw_session_t &draw_session) const
+bool OT::cff1::accelerator_t::get_path (hb_font_t *font, hb_codepoint_t glyph, hb_draw_session_t &draw_session, int64_t *budget) const
 {
 #ifdef HB_NO_OT_FONT_CFF
   /* XXX Remove check when this code moves to .hh file. */
   return true;
 #endif
 
-  return _get_path (this, font, glyph, draw_session);
+  return _get_path (this, font, glyph, draw_session, false, nullptr, budget);
 }
 
 struct get_seac_param_t
@@ -609,3 +615,6 @@ bool OT::cff1::accelerator_subset_t::get_seac_components (hb_codepoint_t glyph, 
 
 
 #endif
+
+#endif /* HB_OT_CFF1_TABLE_CC pacify */
+#endif /* HB_OT_CFF1_TABLE_CC guard */

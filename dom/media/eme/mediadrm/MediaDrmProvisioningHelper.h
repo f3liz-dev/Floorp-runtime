@@ -1,8 +1,9 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
-/* vim: set ts=8 sts=2 et sw=2 tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#ifndef DOM_MEDIA_EME_MEDIADRM_MEDIADRMPROVISIONINGHELPER_H_
+#define DOM_MEDIA_EME_MEDIADRM_MEDIADRMPROVISIONINGHELPER_H_
 
 #include "mozilla/PRemoteCDMChild.h"
 #include "mozilla/dom/PromiseNativeHandler.h"
@@ -45,7 +46,7 @@ class MediaDrmProvisioningHelper final : public dom::PromiseNativeHandler {
       return;
     }
 
-    Unused << mEventTarget->Dispatch(NS_NewRunnableFunction(
+    (void)mEventTarget->Dispatch(NS_NewRunnableFunction(
         __func__, [result = std::move(aResult),
                    resolver = std::move(mResolver)]() { resolver(result); }));
     mResolver = nullptr;
@@ -58,3 +59,5 @@ class MediaDrmProvisioningHelper final : public dom::PromiseNativeHandler {
 };
 
 }  // namespace mozilla
+
+#endif  // DOM_MEDIA_EME_MEDIADRM_MEDIADRMPROVISIONINGHELPER_H_

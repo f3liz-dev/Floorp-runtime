@@ -24,6 +24,10 @@
  * Adobe Author(s): Michiharu Ariza
  */
 
+#ifndef HB_OT_CFF2_TABLE_CC
+#define HB_OT_CFF2_TABLE_CC
+#ifdef HB_OT_CFF2_TABLE_CC /* Pacify -Wunused-macros. */
+
 #include "hb.hh"
 
 #ifndef HB_NO_OT_FONT_CFF
@@ -109,7 +113,8 @@ bool OT::cff2::accelerator_t::get_extents (hb_font_t *font,
 bool OT::cff2::accelerator_t::get_extents_at (hb_font_t *font,
 					      hb_codepoint_t glyph,
 					      hb_glyph_extents_t *extents,
-					      hb_array_t<const int> coords) const
+					      hb_array_t<const int> coords,
+					      int64_t *budget) const
 {
 #ifdef HB_NO_OT_FONT_CFF
   /* XXX Remove check when this code moves to .hh file. */
@@ -123,7 +128,7 @@ bool OT::cff2::accelerator_t::get_extents_at (hb_font_t *font,
   cff2_cs_interp_env_t<number_t> env (str, *this, fd, coords.arrayZ, coords.length);
   cff2_cs_interpreter_t<cff2_cs_opset_extents_t, cff2_extents_param_t, number_t> interp (env);
   cff2_extents_param_t  param;
-  if (unlikely (!interp.interpret (param))) return false;
+  if (unlikely (!interp.interpret (param, budget))) return false;
 
   if (param.min_x >= param.max_x)
   {
@@ -209,7 +214,7 @@ bool OT::cff2::accelerator_t::get_path (hb_font_t *font, hb_codepoint_t glyph, h
 				font->has_nonzero_coords ? font->num_coords : 0));
 }
 
-bool OT::cff2::accelerator_t::get_path_at (hb_font_t *font, hb_codepoint_t glyph, hb_draw_session_t &draw_session, hb_array_t<const int> coords) const
+bool OT::cff2::accelerator_t::get_path_at (hb_font_t *font, hb_codepoint_t glyph, hb_draw_session_t &draw_session, hb_array_t<const int> coords, int64_t *budget) const
 {
 #ifdef HB_NO_OT_FONT_CFF
   /* XXX Remove check when this code moves to .hh file. */
@@ -223,8 +228,11 @@ bool OT::cff2::accelerator_t::get_path_at (hb_font_t *font, hb_codepoint_t glyph
   cff2_cs_interp_env_t<number_t> env (str, *this, fd, coords.arrayZ, coords.length);
   cff2_cs_interpreter_t<cff2_cs_opset_path_t, cff2_path_param_t, number_t> interp (env);
   cff2_path_param_t param (font, draw_session);
-  if (unlikely (!interp.interpret (param))) return false;
+  if (unlikely (!interp.interpret (param, budget))) return false;
   return true;
 }
 
 #endif
+
+#endif /* HB_OT_CFF2_TABLE_CC pacify */
+#endif /* HB_OT_CFF2_TABLE_CC guard */

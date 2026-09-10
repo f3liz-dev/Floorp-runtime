@@ -6,14 +6,14 @@
 "use strict";
 
 add_task(async function autosettings() {
-  let result = new UrlbarResult(
-    UrlbarUtils.RESULT_TYPE.TIP,
-    UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
-    {
+  let result = new UrlbarResult({
+    type: UrlbarShared.RESULT_TYPE.TIP,
+    source: UrlbarShared.RESULT_SOURCE.OTHER_LOCAL,
+    payload: {
       type: "test",
       titleL10n: { id: "urlbar-search-tips-confirm" },
-    }
-  );
+    },
+  });
 
   info("Check the following properties are set automatically if TIP result");
   Assert.ok(result.isRichSuggestion);
@@ -21,10 +21,10 @@ add_task(async function autosettings() {
 });
 
 add_task(async function ui() {
-  let result = new UrlbarResult(
-    UrlbarUtils.RESULT_TYPE.TIP,
-    UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
-    {
+  let result = new UrlbarResult({
+    type: UrlbarShared.RESULT_TYPE.TIP,
+    source: UrlbarShared.RESULT_SOURCE.OTHER_LOCAL,
+    payload: {
       type: "test",
       icon: "chrome://global/skin/icons/search-glass.svg",
       titleL10n: { id: "urlbar-search-tips-confirm" },
@@ -41,16 +41,17 @@ add_task(async function ui() {
       ],
       helpUrl: "https://example.com/help",
       helpL10n: {
-        id: "urlbar-result-menu-tip-get-help",
+        id: "urlbar-result-menu-tip-get-help2",
       },
-    }
-  );
+    },
+  });
 
   let provider = new UrlbarTestUtils.TestProvider({
     results: [result],
     priority: 1,
   });
-  UrlbarProvidersManager.registerProvider(provider);
+  let providersManager = ProvidersManager.getInstanceForSap("urlbar");
+  providersManager.registerProvider(provider);
 
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
     value: "test",
@@ -60,7 +61,10 @@ add_task(async function ui() {
 
   info("Check the container");
   let row = await UrlbarTestUtils.waitForAutocompleteResultAt(window, 0);
-  Assert.ok(row.hasAttribute("rich-suggestion"));
+  Assert.equal(
+    row.hasAttribute("rich-suggestion"),
+    !Services.prefs.getBoolPref("browser.nova.enabled")
+  );
 
   info("Check the icon");
   let icon = row.querySelector(".urlbarView-favicon");
@@ -101,10 +105,10 @@ add_task(async function ui() {
   });
   Assert.ok(help);
   Assert.deepEqual(document.l10n.getAttributes(help), {
-    id: "urlbar-result-menu-tip-get-help",
+    id: "urlbar-result-menu-tip-get-help2",
     args: null,
   });
-  gURLBar.view.resultMenu.hidePopup(true);
+  gURLBar.view.resultMenu.hide();
 
   info("Check the hidden components");
   let url = row.querySelector(".urlbarView-url");
@@ -118,7 +122,7 @@ add_task(async function ui() {
   Assert.ok(BrowserTestUtils.isHidden(action));
 
   await UrlbarTestUtils.promisePopupClose(window);
-  UrlbarProvidersManager.unregisterProvider(provider);
+  providersManager.unregisterProvider(provider);
 });
 
 add_task(async function learn_more() {
@@ -126,22 +130,24 @@ add_task(async function learn_more() {
     info(`Setup learn more link for ${topic} topic`);
     let provider = new UrlbarTestUtils.TestProvider({
       results: [
-        new UrlbarResult(
-          UrlbarUtils.RESULT_TYPE.TIP,
-          UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL,
-          {
+        new UrlbarResult({
+          type: UrlbarShared.RESULT_TYPE.TIP,
+          source: UrlbarShared.RESULT_SOURCE.OTHER_LOCAL,
+          payload: {
             type: "test",
             titleL10n: { id: "urlbar-search-tips-confirm" },
             descriptionL10n: {
               id: "firefox-suggest-onboarding-main-accept-option-label",
+              parseMarkup: true,
             },
             descriptionLearnMoreTopic: topic,
-          }
-        ),
+          },
+        }),
       ],
       priority: 1,
     });
-    UrlbarProvidersManager.registerProvider(provider);
+    let providersManager = ProvidersManager.getInstanceForSap("urlbar");
+    providersManager.registerProvider(provider);
 
     info("Open urlbar view and find learn more link from 1st row");
     await UrlbarTestUtils.promiseAutocompleteResultPopup({
@@ -153,7 +159,10 @@ add_task(async function learn_more() {
     let learnMoreLink = row.querySelector(
       ".urlbarView-row-body-description > a"
     );
-    Assert.equal(!!learnMoreLink, !!topic);
+    Assert.ok(
+      learnMoreLink,
+      "The descriptionL10n contains a learn-more link, so the element should have a learn-more link"
+    );
 
     if (topic) {
       info("Activate learn more link and check");
@@ -182,6 +191,6 @@ add_task(async function learn_more() {
     }
 
     await UrlbarTestUtils.promisePopupClose(window);
-    UrlbarProvidersManager.unregisterProvider(provider);
+    providersManager.unregisterProvider(provider);
   }
 });

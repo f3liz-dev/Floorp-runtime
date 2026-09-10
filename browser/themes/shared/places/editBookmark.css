@@ -13,7 +13,7 @@
   height: 12.5em;
   flex: 1 auto;
   border: 1px solid ThreeDShadow;
-  border-radius: 4px;
+  border-radius: var(--border-radius-small);
 }
 
 #editBMPanel_folderTree {
@@ -27,12 +27,12 @@
 }
 
 menulist.folder-icon {
+  -moz-context-properties: fill;
+  fill: currentColor;
   list-style-image: url("chrome://global/skin/icons/folder.svg") !important;
 }
 
 .folder-icon {
-  -moz-context-properties: fill;
-  fill: currentColor;
   --menuitem-icon: url("chrome://global/skin/icons/folder.svg");
 }
 
@@ -53,7 +53,7 @@ menulist.folder-icon {
 }
 
 #bookmarkpropertiesdialog #editBMPanel_tagsSelector {
-  border-color: var(--in-content-border-color);
+  border-color: var(--border-color);
   padding: 12px;
 }
 
